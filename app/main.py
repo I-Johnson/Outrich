@@ -25,7 +25,8 @@ from app.core.ai_copywriter import generate_or_improve
 from app.core.auth import MIN_PASSWORD_LENGTH, hash_password, normalize_email as normalize_login_email, verify_password
 from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
-from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, seed_legacy_gmail_senders, sender_context
+from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
+from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
 from app.core.freight import evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, parse_destinations, poll_freight_replies, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
@@ -421,15 +422,21 @@ async def freight_sender_add(request: Request):
     db = freight_store(request)
     form = await request.form()
     email = normalize_email(str(form.get("email") or ""))
-    password = str(form.get("app_password") or "").replace(" ", "").strip()
+    password = clean_app_password(str(form.get("app_password") or ""))
     display_name = str(form.get("display_name") or "").strip()
     reply_to = normalize_email(str(form.get("reply_to") or ""))
     auto_select = form.get("auto_select", "on") in {"on", "true", "1", "yes"}
 
     if not valid_email(email):
-        return RedirectResponse("/freight/settings?notice=Valid+Gmail+address+is+required", 303)
+        return RedirectResponse("/freight/settings?error=Valid+Gmail+address+is+required", 303)
     if not password:
-        return RedirectResponse("/freight/settings?notice=Google+App+Password+is+required", 303)
+        return RedirectResponse("/freight/settings?error=Google+App+Password+is+required", 303)
+    if not looks_like_app_password(password):
+        return RedirectResponse("/freight/settings?error=" + quote("That doesn't look like a Google app password. It's 16 characters, shown once when you create it at myaccount.google.com/apppasswords."), 303)
+    check = check_gmail_login(email, password)
+    if not check.ok:
+        # Nothing is saved until Gmail accepts the login.
+        return RedirectResponse("/freight/settings?error=" + quote(check.message), 303)
 
     existing = [row for row in list_gmail_senders(storage=db) if str(row.get("email") or "").lower() == email]
     stamp = now_iso()
@@ -466,7 +473,24 @@ async def freight_sender_add(request: Request):
             "updated_at": stamp,
         })
 
-    return RedirectResponse("/freight/settings?notice=Email+account+connected+and+selected+for+Freight", 303)
+    return RedirectResponse("/freight/settings?notice=" + quote("Connection tested and saved. " + email + " is ready to send."), 303)
+
+
+@app.post("/freight/senders/test")
+async def freight_sender_test(request: Request):
+    db = freight_store(request)
+    form = await request.form()
+    sender_id = str(form.get("default_sender_account") or form.get("sender_id") or "")
+    sender = db.get("gmail_senders", sender_id) if sender_id else None
+    if not sender:
+        return RedirectResponse("/freight/settings?error=Choose+a+Gmail+account+to+test", 303)
+    password = sender_password(sender)
+    if not password:
+        return RedirectResponse("/freight/settings?error=" + quote(f"No app password saved for {sender['email']}. Add it again with + Add new email."), 303)
+    check = check_gmail_login(sender["email"], password)
+    if check.ok:
+        return RedirectResponse("/freight/settings?notice=" + quote(f"{sender['email']}: {check.message}"), 303)
+    return RedirectResponse("/freight/settings?error=" + quote(f"{sender['email']}: {check.message}"), 303)
 
 
 @app.post("/freight/profiles/save")
@@ -1162,7 +1186,7 @@ async def gmail_sender_add(request: Request):
     form = await request.form()
     provider = str(form.get("provider") or "pingram").strip().lower()
     email = normalize_email(str(form.get("email") or ""))
-    password = str(form.get("app_password") or "").replace(" ", "").strip()
+    password = clean_app_password(str(form.get("app_password") or ""))
     
     if not valid_email(email):
         return RedirectResponse("/settings?notice=Valid+email+is+required", 303)
@@ -1198,7 +1222,7 @@ async def gmail_sender_update(request: Request, sender_id: str):
     duplicate = [row for row in list_gmail_senders(storage=store) if str(row.get("id")) != sender_id and str(row.get("email") or "").lower() == email]
     if duplicate: return RedirectResponse("/settings?notice=That+Gmail+sender+already+exists", 303)
     values = {"email": email, "display_name": str(form.get("display_name") or "").strip() or "Outreach", "signature": str(form.get("signature") or "").strip(), "reply_to": normalize_email(str(form.get("reply_to") or "")) or email, "active": form.get("active") == "on", "updated_at": now_iso()}
-    password = str(form.get("app_password") or "").replace(" ", "").strip()
+    password = clean_app_password(str(form.get("app_password") or ""))
     if password: values["app_password_encrypted"] = encrypt_secret(password)
     admin_db.update("gmail_senders", sender_id, values)
     return RedirectResponse("/settings?notice=Gmail+sender+updated", 303)
