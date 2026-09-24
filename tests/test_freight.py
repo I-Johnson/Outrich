@@ -376,7 +376,7 @@ class FreightConversationTests(unittest.TestCase):
         from app import main
         with patch.object(main, "store", self.raw):
             client = TestClient(main.app)
-            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            client.post("/admin/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
 
             # Test missions page renders onboarding and tabs
             res_missions = client.get("/freight/missions")

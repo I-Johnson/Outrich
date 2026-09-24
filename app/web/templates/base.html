@@ -5,7 +5,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css?v=20260924-gmail">{% block head %}{% endblock %}</head>
 <body>{% set auth_page = request.url.path in ('/login', '/signup', '/admin/login') %}{% set signed_in = request.session.get('uid') or request.session.get('admin') %}{% if signed_in and not auth_page %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
-{% if request.session.get('admin') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
+{% if request.session.get('admin_workspace') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
 {% if workspace == 'freight' %}
 <a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}">Loads & conversations</a><a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}">Missions & fleet</a><a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}">Settings & templates</a>
 {% else %}

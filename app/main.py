@@ -104,7 +104,7 @@ SESSION_MAX_AGE = 60 * 60 * 24 * 30  # keep people signed in for 30 days
 
 
 def is_admin(request: Request) -> bool:
-    return bool(request.session.get("admin"))
+    return bool(request.session.get("admin") and request.session.get("admin_workspace"))
 
 
 def home_for(request: Request) -> str:
@@ -157,6 +157,11 @@ def _start_admin_session(request: Request):
     request.session.clear(); request.session["admin"] = env.ADMIN_EMAIL; request.session["uid"] = ADMIN_OWNER_ID; request.session["role"] = "admin"
 
 
+def _unlock_admin_workspace(request: Request):
+    """Mark the separately opened admin workspace as unlocked."""
+    request.session["admin_workspace"] = True
+
+
 def _start_user_session(request: Request, user: dict):
     request.session.clear(); request.session["uid"] = str(user["id"]); request.session["role"] = user.get("role") or "user"
     request.session["email"] = user.get("email") or ""
@@ -179,7 +184,9 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     key, attempts, limited = _rate_limited(request)
     if limited: return RedirectResponse("/login?error=Too+many+attempts.+Try+again+later.", 303)
     if _is_env_admin(email, password):
-        LOGIN_ATTEMPTS.pop(key, None); _start_admin_session(request); return RedirectResponse("/", 303)
+        # The shared login is Freight-only.  Admins explicitly unlock the
+        # Outreach workspace from Freight Settings → Admin login.
+        LOGIN_ATTEMPTS.pop(key, None); _start_admin_session(request); return RedirectResponse("/freight", 303)
     user = _find_user(email)
     if not user or not verify_password(password, user.get("password_hash") or ""):
         _record_failure(key, attempts); return RedirectResponse("/login?error=Invalid+email+or+password", 303)
@@ -197,7 +204,7 @@ def admin_login(request: Request, email: str = Form(...), password: str = Form(.
     if limited: return RedirectResponse("/admin/login?error=Too+many+attempts.+Try+again+later.", 303)
     if not _is_env_admin(email, password):
         _record_failure(key, attempts); return RedirectResponse("/admin/login?error=Invalid+email+or+password", 303)
-    LOGIN_ATTEMPTS.pop(key, None); _start_admin_session(request); return RedirectResponse("/", 303)
+    LOGIN_ATTEMPTS.pop(key, None); _start_admin_session(request); _unlock_admin_workspace(request); return RedirectResponse("/", 303)
 
 
 @app.get("/signup", response_class=HTMLResponse)
