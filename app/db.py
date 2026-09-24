@@ -24,6 +24,13 @@ JSON_FIELDS = {
     "freight_drafts": {"policy_snapshot"},
     "freight_negotiation_events": {"details"},
 }
+# Freight tables that carry owner_id + vertical (gmail_senders, freight_settings
+# and email_templates are handled separately).
+OWNED_FREIGHT_TABLES = (
+    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_threads",
+    "freight_messages", "freight_drafts", "freight_negotiation_events", "freight_alerts",
+    "freight_mail_cursors",
+)
 BOOL_FIELDS = {
     "email_templates": {"active"}, "gmail_senders": {"active"},
     "freight_truck_profiles": {"active"}, "freight_missions": {"active"},
@@ -74,8 +81,46 @@ class SQLiteStore:
         con.execute("PRAGMA foreign_keys=ON")
         return con
 
+    def _upgrade_before_schema(self, con):
+        """Reshape single-tenant tables that schema.sql can no longer create in place."""
+        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for table in ("gmail_senders", "freight_settings"):
+            if table in tables and "owner_id" not in {row[1] for row in con.execute(f"PRAGMA table_info({table})")}:
+                con.execute(f"DROP TABLE IF EXISTS _pre_owner_{table}")
+                con.execute(f"ALTER TABLE {table} RENAME TO _pre_owner_{table}")
+        con.execute("DROP INDEX IF EXISTS freight_messages_provider_unique")
+
+    def _upgrade_after_schema(self, con):
+        from app.core.tenancy import ADMIN_OWNER_ID
+        for table in ("gmail_senders", "freight_settings"):
+            legacy = f"_pre_owner_{table}"
+            if con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (legacy,)).fetchone():
+                new_cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+                cols = [row[1] for row in con.execute(f"PRAGMA table_info({legacy})") if row[1] in new_cols]
+                if table == "freight_settings":
+                    con.execute("DELETE FROM freight_settings")
+                col_sql = ",".join(cols)
+                con.execute(f"INSERT OR IGNORE INTO {table} ({col_sql}, owner_id) SELECT {col_sql}, ? FROM {legacy}", (ADMIN_OWNER_ID,))
+                con.execute(f"DROP TABLE {legacy}")
+        for table in OWNED_FREIGHT_TABLES:
+            columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+            if "owner_id" not in columns:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN owner_id TEXT")
+                con.execute(f"UPDATE {table} SET owner_id=? WHERE owner_id IS NULL", (ADMIN_OWNER_ID,))
+            if "vertical" not in columns:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN vertical TEXT NOT NULL DEFAULT 'freight'")
+        template_columns = {row[1] for row in con.execute("PRAGMA table_info(email_templates)")}
+        if "owner_id" not in template_columns:
+            con.execute("ALTER TABLE email_templates ADD COLUMN owner_id TEXT")
+            con.execute("UPDATE email_templates SET owner_id=? WHERE vertical='freight' AND owner_id IS NULL", (ADMIN_OWNER_ID,))
+        for table in (*OWNED_FREIGHT_TABLES, "gmail_senders", "email_templates", "freight_settings"):
+            con.execute(f"CREATE INDEX IF NOT EXISTS {table}_owner_idx ON {table}(owner_id)")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS gmail_senders_owner_email_unique ON gmail_senders(owner_id, lower(email))")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS freight_messages_owner_provider_unique ON freight_messages(owner_id, provider_message_id) WHERE provider_message_id IS NOT NULL AND provider_message_id <> ''")
+
     def init(self):
         with self.connect() as con:
+            self._upgrade_before_schema(con)
             # Preserve the pre-brief campaign table under a legacy name. Its
             # integer-id/steps model is incompatible with the new durable queue.
             exists = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='campaigns'").fetchone()
@@ -110,6 +155,7 @@ class SQLiteStore:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN schedule_verified INTEGER NOT NULL DEFAULT 0")
             if "weight_lbs" not in load_columns:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN weight_lbs REAL")
+            self._upgrade_after_schema(con)
 
     def list(self, table: str, filters: dict | None = None, order: str = "id desc", limit: int = 1000, select: str = "*"):
         filters = filters or {}; clauses, args = [], []
