@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 os.environ["SCHEDULER_ENABLED"] = "false"
 os.environ["DATABASE_BACKEND"] = "sqlite"
 os.environ["DB_PATH"] = "/tmp/outreach-test.db"
+os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 
 from app.core.importer import MAX_CSV_BYTES, _gemini_json, clean_row, confirm_import, decode_csv, gemini_cleanup_rows, gemini_mapping, heuristic_mapping, select_mapping, undo_import
 from app.core.campaign_reporting import campaign_performance
@@ -359,6 +360,11 @@ class CampaignSenderTests(unittest.TestCase):
             "clients": {f"client-{i}": {"id": f"client-{i}", "short_name": f"Lead {i}", "email": f"lead{i}@example.com", "domain": f"example{i}.com", "status": "new", "created_at": str(i)} for i in range(4)},
             "settings": {1: {"timezone": "UTC", "send_days": list(range(7)), "send_start": "00:00", "send_end": "23:59"}},
             "suppression": {}, "email_log": {},
+            # Explicit senders so the test does not depend on GMAIL_USER in the local .env.
+            "gmail_senders": {
+                "1": {"id": "1", "email": "one@example.com", "active": True, "provider": "gmail", "created_at": "1"},
+                "2": {"id": "2", "email": "two@example.com", "active": True, "provider": "gmail", "created_at": "2"},
+            },
         }
 
         class MemoryStore:

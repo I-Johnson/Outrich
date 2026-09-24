@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from app.config import settings as env
 from app.core.crypto import decrypt_secret, encrypt_secret
+from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import now_iso, store
+
+
+def _is_admin_view(storage) -> bool:
+    """Unscoped admin code and the admin's own scope see the admin's senders."""
+    return not isinstance(storage, OwnerStore) or storage.is_admin
 
 
 def _legacy_sender(sender_id: str, cfg: dict) -> dict | None:
@@ -51,9 +57,13 @@ def list_gmail_senders(*, active_only: bool = False, storage=None, cfg: dict | N
     storage = storage or store
     cfg = cfg if cfg is not None else (storage.get("settings", 1) or {})
     rows = storage.list("gmail_senders", order="created_at asc", limit=1000)
+    if not isinstance(storage, OwnerStore):
+        # Admin outreach code runs unscoped; never let it pick up a customer's inbox.
+        rows = [row for row in rows if str(row.get("owner_id") or ADMIN_OWNER_ID) == ADMIN_OWNER_ID]
     by_id = {str(row["id"]): row for row in rows}
     for sender_id in ("1", "2"):
-        if sender_id not in by_id:
+        # Env-configured legacy senders belong to the admin only.
+        if sender_id not in by_id and _is_admin_view(storage):
             legacy = _legacy_sender(sender_id, cfg)
             if legacy:
                 by_id[sender_id] = legacy

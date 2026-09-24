@@ -1,3 +1,12 @@
+CREATE TABLE IF NOT EXISTS app_users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'user',
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
@@ -70,7 +79,7 @@ CREATE TABLE IF NOT EXISTS settings (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS gmail_senders (
-  id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL DEFAULT '',
+  id TEXT PRIMARY KEY, owner_id TEXT, email TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
   signature TEXT NOT NULL DEFAULT '', reply_to TEXT NOT NULL DEFAULT '',
   app_password_encrypted TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
   provider TEXT NOT NULL DEFAULT 'gmail',
@@ -116,7 +125,8 @@ CREATE TABLE IF NOT EXISTS freight_truck_profiles (
 );
 
 CREATE TABLE IF NOT EXISTS freight_settings (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
+  id TEXT PRIMARY KEY,
+  owner_id TEXT UNIQUE,
   sender_name TEXT NOT NULL DEFAULT 'Freight Dispatch',
   email_signature TEXT NOT NULL DEFAULT 'Freight Dispatch',
   reply_to TEXT NOT NULL DEFAULT '',
@@ -125,7 +135,7 @@ CREATE TABLE IF NOT EXISTS freight_settings (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-INSERT OR IGNORE INTO freight_settings(id, created_at, updated_at) VALUES(1, datetime('now'), datetime('now'));
+INSERT OR IGNORE INTO freight_settings(id, owner_id, created_at, updated_at) VALUES('1', '00000000-0000-0000-0000-000000000001', datetime('now'), datetime('now'));
 
 CREATE TABLE IF NOT EXISTS freight_missions (
   id TEXT PRIMARY KEY,
@@ -217,7 +227,7 @@ CREATE TABLE IF NOT EXISTS freight_messages (
   status TEXT NOT NULL DEFAULT 'received',
   created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS freight_messages_provider_unique ON freight_messages(provider_message_id) WHERE provider_message_id IS NOT NULL AND provider_message_id <> '';
+-- freight_messages provider uniqueness is per owner; created in SQLiteStore.init after owner_id exists.
 
 CREATE TABLE IF NOT EXISTS freight_drafts (
   id TEXT PRIMARY KEY,

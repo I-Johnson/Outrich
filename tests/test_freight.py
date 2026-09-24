@@ -6,9 +6,11 @@ from unittest.mock import Mock, patch
 os.environ["SCHEDULER_ENABLED"] = "false"
 os.environ["DATABASE_BACKEND"] = "sqlite"
 os.environ["DB_PATH"] = "/tmp/outreach-freight-test.db"
+os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 
 from app.adapters.base import SendResult
 from app.core.freight import classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, parse_destinations, recover_uncertain_freight_sends, send_draft, set_thread_state, verify_load_facts
+from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import SQLiteStore, new_id, now_iso
 
 
@@ -127,8 +129,10 @@ class FreightConversationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.storage = SQLiteStore(os.path.join(self.temp.name, "freight.db"))
-        self.storage.init()
+        self.raw = SQLiteStore(os.path.join(self.temp.name, "freight.db"))
+        self.raw.init()
+        # Freight data always belongs to an owner; these fixtures belong to the admin.
+        self.storage = OwnerStore(self.raw, ADMIN_OWNER_ID)
         stamp = now_iso()
         self.profile_id, self.mission_id, self.load_id, self.thread_id = (new_id() for _ in range(4))
         self.storage.insert("freight_truck_profiles", {
@@ -349,7 +353,7 @@ class FreightConversationTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         from app import main
         from app.core import freight as freight_core
-        with patch.object(main, "store", self.storage), patch.object(freight_core, "store", self.storage):
+        with patch.object(main, "store", self.raw), patch.object(freight_core, "store", self.raw):
             client = TestClient(main.app)
             client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
             response = client.post(f"/freight/loads/{self.load_id}/facts", data={
@@ -370,7 +374,7 @@ class FreightConversationTests(unittest.TestCase):
     def test_freight_missions_and_settings_navigation(self):
         from fastapi.testclient import TestClient
         from app import main
-        with patch.object(main, "store", self.storage):
+        with patch.object(main, "store", self.raw):
             client = TestClient(main.app)
             client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
 
@@ -395,7 +399,7 @@ class FreightConversationTests(unittest.TestCase):
     def test_freight_sender_add_workflow(self):
         from fastapi.testclient import TestClient
         from app import main
-        with patch.object(main, "store", self.storage):
+        with patch.object(main, "store", self.raw):
             client = TestClient(main.app)
             client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
 
@@ -447,6 +451,75 @@ class FreightConversationTests(unittest.TestCase):
             self.assertIn("+ Add new email", res_page.text)
             self.assertIn("add-freight-email-dialog", res_page.text)
 
+
+
+class FreightIsolationTests(unittest.TestCase):
+    """User B must never see or act on user A's freight data."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.raw = SQLiteStore(os.path.join(self.temp.name, "iso.db"))
+        self.raw.init()
+        self.a = OwnerStore(self.raw, "user-a")
+        self.b = OwnerStore(self.raw, "user-b")
+        stamp = now_iso()
+        self.load_id, self.thread_id, self.draft_id, self.alert_id = (new_id() for _ in range(4))
+        self.a.insert("freight_loads", {"id": self.load_id, "broker_email": "broker@example.com", "origin_city": "Phoenix", "destination_city": "Dallas", "subject": "Load", "status": "waiting", "created_at": stamp, "updated_at": stamp})
+        self.a.insert("freight_threads", {"id": self.thread_id, "load_id": self.load_id, "sender_account": "s-a", "recipient_email": "broker@example.com", "subject": "Load", "state": "waiting", "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp})
+        self.a.insert("freight_drafts", {"id": self.draft_id, "thread_id": self.thread_id, "subject": "Re: Load", "body_text": "Can do 2500", "reason": "manual", "status": "pending", "created_at": stamp, "updated_at": stamp})
+        self.a.insert("freight_alerts", {"id": self.alert_id, "thread_id": self.thread_id, "kind": "verify_load_facts", "summary": "x", "status": "open", "created_at": stamp})
+        self.a.insert("gmail_senders", {"id": "s-a", "email": "same@gmail.com", "app_password_encrypted": "", "active": True, "provider": "gmail", "created_at": stamp, "updated_at": stamp})
+
+    def test_reads_are_scoped(self):
+        for table in ("freight_loads", "freight_threads", "freight_drafts", "freight_alerts", "gmail_senders"):
+            with self.subTest(table=table):
+                self.assertEqual(len(self.a.list(table)), 1)
+                self.assertEqual(self.b.list(table), [])
+        self.assertIsNone(self.b.get("freight_loads", self.load_id))
+        self.assertIsNone(self.b.get("freight_drafts", self.draft_id))
+
+    def test_writes_to_another_owner_are_refused(self):
+        with self.assertRaises(LookupError):
+            self.b.update("freight_loads", self.load_id, {"status": "booked"})
+        self.assertEqual(self.b.delete("freight_alerts", {"id": self.alert_id}), 0)
+        self.assertFalse(self.b.claim_status("freight_drafts", self.draft_id, "pending", "sending"))
+        self.assertEqual(self.raw.get("freight_loads", self.load_id)["status"], "waiting")
+        with self.assertRaises(ValueError):
+            send_draft(self.draft_id, storage=self.b)
+        with self.assertRaises(ValueError):
+            set_thread_state(self.thread_id, "booked", storage=self.b)
+
+    def test_same_gmail_address_is_separate_per_owner(self):
+        from app.core.gmail_senders import list_gmail_senders
+        self.b.insert("gmail_senders", {"id": "s-b", "email": "same@gmail.com", "app_password_encrypted": "", "active": True, "provider": "gmail", "created_at": now_iso(), "updated_at": now_iso()})
+        self.assertEqual([s["id"] for s in list_gmail_senders(storage=self.a, cfg={})], ["s-a"])
+        self.assertEqual([s["id"] for s in list_gmail_senders(storage=self.b, cfg={})], ["s-b"])
+        # Admin outreach code (unscoped) never sees customer inboxes.
+        self.assertNotIn("s-b", [s["id"] for s in list_gmail_senders(storage=self.raw, cfg={})])
+
+    def test_each_owner_gets_own_settings_and_template(self):
+        from app.core.freight import seed_freight_settings, seed_freight_template
+        for scoped in (self.a, self.b):
+            seed_freight_template(scoped); seed_freight_settings(scoped)
+        a_cfg, b_cfg = self.a.get("freight_settings", 1), self.b.get("freight_settings", 1)
+        self.assertNotEqual(a_cfg["id"], b_cfg["id"])
+        self.assertNotEqual(a_cfg["default_template_id"], b_cfg["default_template_id"])
+        self.b.update("freight_settings", 1, {"sender_name": "B Trucking"})
+        self.assertNotEqual(self.a.get("freight_settings", 1)["sender_name"], "B Trucking")
+
+    def test_http_routes_hide_other_owners_rows(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        with patch.object(main, "store", self.raw):
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            page = client.get(f"/freight?load_id={self.load_id}")
+            self.assertEqual(page.status_code, 200)
+            self.assertNotIn("broker@example.com", page.text)
+            self.assertEqual(client.post(f"/freight/drafts/{self.draft_id}/send", data={"body_text": "hi"}, follow_redirects=False).status_code, 404)
+            self.assertEqual(client.post(f"/freight/alerts/{self.alert_id}/resolve", follow_redirects=False).status_code, 404)
+            self.assertEqual(self.raw.get("freight_alerts", self.alert_id)["status"], "open")
 
 
 if __name__ == "__main__":
