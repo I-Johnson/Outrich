@@ -383,7 +383,10 @@
           <option value="{{ s.id }}" {% if freight_settings.default_sender_account|string == s.id|string %}selected{% endif %}>{{ s.email }}{% if s.display_name %} ({{ s.display_name }}){% endif %}</option>
           {% endfor %}
         </select>
-        <span class="field-hint">The connected Gmail account used to send inquiries and poll broker replies.</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px">
+          <span class="field-hint" style="margin:0">The connected Gmail account used to send inquiries and poll broker replies.</span>
+          {% if gmail_senders %}<button type="submit" class="button secondary" formaction="/freight/senders/test" formnovalidate style="font-size:12px;padding:4px 10px;white-space:nowrap">Test connection</button>{% endif %}
+        </div>
       </div>
 
       <label>
@@ -548,13 +551,17 @@
       <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
     </div>
 
-    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;font-size:12px;color:#0369a1;line-height:1.45">
-      <strong>How to get a Google App Password:</strong>
-      <ol style="margin:4px 0 0 16px;padding:0">
-        <li>Enable 2-Step Verification in your Google Account.</li>
-        <li>Go to <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:#0284c7;font-weight:600;text-decoration:underline">myaccount.google.com/apppasswords</a>.</li>
-        <li>Create an app named "Freight Dispatch" and paste the 16-character code below.</li>
+    <div class="app-password-guide">
+      <strong>Get your Google app password (about 2 minutes)</strong>
+      <ol>
+        <li><span>Turn on <b>2-Step Verification</b> for this Google account, if it isn't on yet.</span> <a href="https://myaccount.google.com/security" target="_blank" rel="noopener">Security settings ↗</a></li>
+        <li><span>Open <b>App passwords</b>, type the name <b>Outrich</b>, and click Create.</span> <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App passwords ↗</a></li>
+        <li><span>Copy the 16-character code Google shows and paste it below. Google only shows it once.</span></li>
       </ol>
+      <details>
+        <summary>Don't see App passwords?</summary>
+        <p>Work or school accounts need their Google Workspace admin to allow it. It's also hidden if the account only uses security keys for 2-Step Verification or has Advanced Protection. Changing your Google password cancels old app passwords, so make a new one after a password change.</p>
+      </details>
     </div>
 
     <label>
@@ -564,9 +571,9 @@
     </label>
 
     <label>
-      Google App Password (16 characters)
+      Google app password (16 characters)
       <input type="password" name="app_password" placeholder="xxxx xxxx xxxx xxxx" required autocomplete="off" style="font-size:13px;letter-spacing:1px">
-      <span class="field-hint">Spaces are automatically stripped. Passwords are encrypted securely at rest.</span>
+      <span class="field-hint">Not your normal Gmail password. Spaces are fine. We test it with Gmail before saving, and store it encrypted.</span>
     </label>
 
     <div class="field-grid" style="grid-template-columns:1fr 1fr;gap:12px">
@@ -590,7 +597,7 @@
 
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;padding-top:12px;border-top:1px solid #f1f5f9">
       <button type="button" class="button secondary" onclick="this.closest('dialog').close()">Cancel</button>
-      <button type="submit" class="primary-btn" style="padding:8px 18px;font-size:13px">Connect & Use in Freight</button>
+      <button type="submit" class="primary-btn" style="padding:8px 18px;font-size:13px" onclick="if(this.form.checkValidity()){this.textContent='Testing connection…';}">Test & connect</button>
     </div>
   </form>
 </dialog>
