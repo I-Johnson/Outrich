@@ -113,9 +113,11 @@ def home_for(request: Request) -> str:
 @app.middleware("http")
 async def admin_auth(request: Request, call_next):
     path = request.url.path
-    public = path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
+    signed_in = bool(request.session.get("uid") or request.session.get("admin"))
+    # Signed-out visitors to "/" get the marketing landing page.
+    public = path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES) or (path == "/" and not signed_in)
     if not public:
-        if not (request.session.get("uid") or request.session.get("admin")):
+        if not signed_in:
             return RedirectResponse(f"/login?next={quote(path)}", 303)
         if not is_admin(request) and not (path in USER_PATHS or path == "/freight" or path.startswith("/freight/")):
             # Signed-in customers only see Freight; the outreach engine stays admin-only.
@@ -223,6 +225,8 @@ def logout(request: Request): request.session.clear(); return RedirectResponse("
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
+    if not (request.session.get("uid") or request.session.get("admin")):
+        return templates.TemplateResponse(request=request, name="landing.html", context={"request": request})
     campaigns = store.list("campaigns", limit=100)
     logs = store.list("email_log", order="", limit=20000)
     recent = store.list("email_log", limit=10)
