@@ -364,13 +364,13 @@
     </summary>
     <div class="section-body">
       <div class="form-grid">
-        <label>Time zone<input name="timezone" value="{{app_settings.timezone or 'America/New_York'}}"></label>
-        <label>Daily cap per Gmail sender<input type="number" min="1" name="daily_cap" value="{{app_settings.daily_cap or 20}}"><small>Four enabled senders at 20 each can send up to 80/day.</small></label>
-        <label>Window starts<input type="time" name="send_start" value="{{app_settings.send_start or '09:00'}}"></label>
-        <label>Window ends<input type="time" name="send_end" value="{{app_settings.send_end or '17:00'}}"></label>
-        <label>Min delay (minutes)<input type="number" min="1" name="min_delay_minutes" value="{{app_settings.min_delay_minutes or 3}}"></label>
-        <label>Max delay (minutes)<input type="number" min="1" name="max_delay_minutes" value="{{app_settings.max_delay_minutes or 15}}"></label>
-        <label>Resend block days<input type="number" min="1" name="resend_block_days" value="{{app_settings.resend_block_days or 90}}"></label>
+        <label>Time zone<input name="timezone" required value="{{app_settings.timezone or 'America/New_York'}}"></label>
+        <label>Daily cap per Gmail sender<input type="number" min="1" name="daily_cap" required value="{{app_settings.daily_cap or 20}}"><small>Four enabled senders at 20 each can send up to 80/day.</small></label>
+        <label>Window starts<input type="time" name="send_start" required value="{{app_settings.send_start or '09:00'}}"></label>
+        <label>Window ends<input type="time" name="send_end" required value="{{app_settings.send_end or '17:00'}}"></label>
+        <label>Min delay (minutes)<input type="number" min="1" name="min_delay_minutes" required value="{{app_settings.min_delay_minutes or 3}}"></label>
+        <label>Max delay (minutes)<input type="number" min="1" name="max_delay_minutes" required value="{{app_settings.max_delay_minutes or 15}}"></label>
+        <label>Resend block days<input type="number" min="1" name="resend_block_days" required value="{{app_settings.resend_block_days or 90}}"></label>
       </div>
       <div class="checks" style="margin-top:14px;">{% for n,d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}<label><input type="checkbox" name="send_days" value="{{n}}" {% if n in app_settings.send_days %}checked{% endif %}>{{d}}</label>{% endfor %}</div>
     </div>
@@ -587,7 +587,7 @@
 
     <div class="form-grid" style="margin-top:18px;">
       <label class="wide">Provider
-        <select name="provider" id="add_sender_provider" onchange="toggleSenderProvider(this.value)">
+        <select name="provider" id="add_sender_provider" required onchange="toggleSenderProvider(this.value)">
           <option value="pingram">Pingram (contractorops.ai &mdash; 24/7 domain conveyor belt)</option>
           <option value="gmail">Gmail / Google Workspace (business hours &mdash; app password required)</option>
         </select>
@@ -732,4 +732,3 @@
   }
 </script>
 {% endblock %}
-

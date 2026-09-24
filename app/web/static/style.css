@@ -66,6 +66,87 @@ body {
 a { color: #0284c7; text-decoration: none; transition: color 0.15s ease; }
 a:hover { color: #0369a1; }
 
+/* Accessible one-sentence explanations beside data-entry fields. */
+.field-info {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 5px;
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  color: #64748b;
+  background: #fff;
+  font: 700 10px/1 'Plus Jakarta Sans', sans-serif;
+  vertical-align: text-bottom;
+  cursor: help;
+  z-index: 4;
+}
+.field-info:hover,
+.field-info:focus {
+  color: #0369a1;
+  border-color: #0284c7;
+  outline: 2px solid rgba(2, 132, 199, .16);
+  outline-offset: 1px;
+}
+.field-info::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #0f172a;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .18);
+  font: 500 11.5px/1.4 'Plus Jakarta Sans', sans-serif;
+  letter-spacing: 0;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 3px);
+  transition: opacity .12s ease, transform .12s ease, visibility .12s ease;
+}
+.field-info:hover::after,
+.field-info:focus::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+.field-required-mark {
+  position: absolute;
+  top: -1px;
+  right: 22px;
+  color: #dc2626;
+  font-weight: 800;
+}
+.field-control-anchor {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.field-control-anchor > input,
+.field-control-anchor > select,
+.field-control-anchor > textarea {
+  padding-right: 34px;
+}
+.field-control-anchor > .field-info {
+  top: 50%;
+  right: 9px;
+  transform: translateY(-50%);
+}
+.field-control-anchor > .field-required-mark {
+  top: 50%;
+  right: 29px;
+  transform: translateY(-50%);
+}
+
 /* Sidebar Navigation */
 aside {
   position: fixed;
@@ -597,6 +678,7 @@ tr:hover td { background: #f8fafc; }
 .wide, .dialog-head, .actions { grid-column: 1/-1; }
 
 label {
+  position: relative;
   display: grid;
   gap: 5px;
   font-size: 12px;

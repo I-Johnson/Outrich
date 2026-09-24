@@ -55,7 +55,7 @@
       </div>
 
       <label>Results per city
-        <input id="discovery-limit" type="number" name="result_limit" value="30" min="1" max="100">
+        <input id="discovery-limit" type="number" name="result_limit" value="30" min="1" max="100" required>
       </label>
       <div class="estimate" id="serp-estimate">Choose at least one category and location to see the estimated SERP usage.</div>
       <button>Queue jobs</button>
@@ -69,7 +69,7 @@
       <label>Name<input name="name" placeholder="Texas metros" required></label>
       <label>Categories<input name="categories" placeholder="HVAC contractors" required></label>
       <label>Locations<input name="locations" placeholder="Austin, TX; Dallas, TX" required></label>
-      <label>Limit<input type="number" name="result_limit" value="30"></label>
+      <label>Limit<input type="number" name="result_limit" value="30" min="1" max="100" required></label>
       <button class="secondary">Save preset</button>
     </form>
     {% if presets %}

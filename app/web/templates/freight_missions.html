@@ -739,7 +739,7 @@
       {% endif %}
     </div>
 
-    <form action="/freight/missions/save" method="post" class="stack">
+    <form action="/freight/missions/save" method="post" class="stack" id="mission-form">
       <input type="hidden" name="id" value="{{ edit_mission.id if edit_mission else '' }}">
 
       <!-- SECTION 1: TRUCK & ROUTE BASICS -->
@@ -776,7 +776,7 @@
 
         <label>
           Origin deadhead allowance (miles)
-          <input type="number" name="origin_deadhead_miles" value="{{ edit_mission.origin_deadhead_miles if edit_mission else 0 }}">
+          <input type="number" name="origin_deadhead_miles" min="0" step="1" required value="{{ edit_mission.origin_deadhead_miles if edit_mission else 0 }}">
         </label>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -825,14 +825,14 @@
           {% for d in destinations %}
           <div class="destination-row">
             <input name="destination_label" value="{{ d.label }}" placeholder="e.g. Dallas, TX or Southeast" required>
-            <select name="destination_kind">
+            <select name="destination_kind" required>
               <option value="city" {% if d.kind=='city' %}selected{% endif %}>City</option>
               <option value="state" {% if d.kind=='state' %}selected{% endif %}>State</option>
               <option value="region" {% if d.kind=='region' %}selected{% endif %}>Region</option>
               <option value="anywhere" {% if d.kind=='anywhere' %}selected{% endif %}>Anywhere</option>
             </select>
             <div class="input-with-unit">
-              <input type="number" name="destination_radius" value="{{ d.radius_miles or 0 }}" placeholder="0" title="Radius in miles">
+              <input type="number" name="destination_radius" min="0" step="1" required value="{{ d.radius_miles or 0 }}" placeholder="0" title="Radius in miles">
             </div>
             <button type="button" class="remove-btn remove-destination" title="Remove destination">×</button>
           </div>
@@ -845,6 +845,7 @@
       <div class="form-section-title">
         <span>💵 4. Rate Envelope & Negotiation Bounds</span>
       </div>
+      <p style="font-size:12px;color:var(--muted);margin:-4px 0 10px">Active missions require at least one minimum rate: total, loaded RPM, or all-in RPM.</p>
       <div class="form-grid-4">
         <label>
           Minimum floor total ($)
@@ -879,7 +880,7 @@
         </label>
 
         <label>
-          Fixed counter step ($)
+          Counter offer total ($)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
             <input type="number" step=".01" name="counter_amount" value="{{ edit_mission.counter_amount if edit_mission else '' }}" placeholder="150">
@@ -888,7 +889,7 @@
 
         <label>
           Maximum counter rounds
-          <input type="number" min="1" max="10" name="maximum_counter_rounds" value="{{ edit_mission.maximum_counter_rounds if edit_mission else 3 }}">
+          <input type="number" min="1" max="10" name="maximum_counter_rounds" required value="{{ edit_mission.maximum_counter_rounds if edit_mission else 3 }}">
         </label>
 
         <label>
@@ -912,7 +913,7 @@
       <div class="mode-grid">
         <!-- AUTO MODE -->
         <label id="mode-card-auto" class="mode-card {{ 'is-selected-auto' if is_auto_mode else '' }}" onclick="selectExecutionMode('auto')">
-          <input type="radio" name="execution_mode" value="auto" {{ 'checked' if is_auto_mode else '' }}>
+          <input type="radio" name="execution_mode" value="auto" required {{ 'checked' if is_auto_mode else '' }}>
           <div class="mode-icon auto">⚡</div>
           <div class="mode-content">
             <div class="mode-header">
@@ -926,7 +927,7 @@
 
         <!-- APPROVE MODE -->
         <label id="mode-card-approve" class="mode-card {{ 'is-selected-approve' if not is_auto_mode else '' }}" onclick="selectExecutionMode('approve')">
-          <input type="radio" name="execution_mode" value="approve" {{ 'checked' if not is_auto_mode else '' }}>
+          <input type="radio" name="execution_mode" value="approve" required {{ 'checked' if not is_auto_mode else '' }}>
           <div class="mode-icon approve">✋</div>
           <div class="mode-content">
             <div class="mode-header">
@@ -1073,7 +1074,7 @@
 
         <label>
           Max weight (lb)
-          <input type="number" name="max_weight_lbs" value="{{ edit_profile.max_weight_lbs if edit_profile else 45000 }}">
+          <input type="number" name="max_weight_lbs" min="1" step="1" value="{{ edit_profile.max_weight_lbs if edit_profile else 45000 }}">
         </label>
 
         <label>
@@ -1187,6 +1188,18 @@ function selectExecutionMode(mode) {
   }
 }
 
+document.getElementById('mission-form')?.addEventListener('submit', function(event) {
+  const floorInputs = ['floor_total', 'floor_loaded_rpm', 'floor_all_in_rpm']
+    .map(name => this.elements[name]).filter(Boolean);
+  floorInputs.forEach(input => input.setCustomValidity(''));
+  const isActive = this.elements.active?.checked;
+  if (isActive && !floorInputs.some(input => Number(input.value) > 0)) {
+    event.preventDefault();
+    floorInputs[0].setCustomValidity('Set at least one minimum rate: total, loaded RPM, or all-in RPM.');
+    floorInputs[0].reportValidity();
+  }
+});
+
 function openMissionForm() {
   document.getElementById('mission-form-panel').style.display = 'block';
   document.getElementById('mission-form-panel').scrollIntoView({ behavior: 'smooth' });
@@ -1237,14 +1250,14 @@ document.getElementById('add-destination')?.addEventListener('click', () => {
   const rowHtml = `
     <div class="destination-row">
       <input name="destination_label" placeholder="e.g. Dallas, TX or Southeast" required>
-      <select name="destination_kind">
+      <select name="destination_kind" required>
         <option value="city">City</option>
         <option value="state">State</option>
         <option value="region">Region</option>
         <option value="anywhere">Anywhere</option>
       </select>
       <div class="input-with-unit">
-        <input type="number" name="destination_radius" value="0" placeholder="0" title="Radius in miles">
+        <input type="number" name="destination_radius" min="0" step="1" required value="0" placeholder="0" title="Radius in miles">
       </div>
       <button type="button" class="remove-btn remove-destination" title="Remove destination">×</button>
     </div>

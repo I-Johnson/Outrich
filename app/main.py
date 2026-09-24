@@ -412,6 +412,17 @@ async def freight_mission_save(request: Request):
     }
     if not data["name"] or not destinations:
         return RedirectResponse("/freight/missions?tab=missions&notice=Mission+name+and+at+least+one+destination+are+required", 303)
+    floors = [data["floor_total"], data["floor_loaded_rpm"], data["floor_all_in_rpm"]]
+    if data["active"] and not any(value is not None and value > 0 for value in floors):
+        return RedirectResponse("/freight/missions?tab=missions&notice=Set+at+least+one+minimum+rate+before+activating+the+mission", 303)
+    if data["pickup_start"] and data["pickup_end"] and data["pickup_end"] < data["pickup_start"]:
+        return RedirectResponse("/freight/missions?tab=missions&notice=Available-through+date+must+be+on+or+after+the+start+date", 303)
+    if data["floor_total"] and data["target_total"] and data["target_total"] < data["floor_total"]:
+        return RedirectResponse("/freight/missions?tab=missions&notice=Target+total+cannot+be+below+the+minimum+total", 303)
+    if data["floor_all_in_rpm"] and data["target_all_in_rpm"] and data["target_all_in_rpm"] < data["floor_all_in_rpm"]:
+        return RedirectResponse("/freight/missions?tab=missions&notice=Target+all-in+RPM+cannot+be+below+the+minimum+all-in+RPM", 303)
+    if data["floor_total"] and data["counter_amount"] and data["counter_amount"] < data["floor_total"]:
+        return RedirectResponse("/freight/missions?tab=missions&notice=Counter+offer+cannot+be+below+the+minimum+total", 303)
     if row_id:
         store.update("freight_missions", row_id, data)
     else:
@@ -630,6 +641,7 @@ async def lead_save(request: Request):
             "zip": str(form.get("zip") or "").strip(), "website": website, "domain": domain, "email": normalize_email(str(form.get("email") or "")),
             "phone": normalize_phone(str(form.get("phone") or "")), "outreach_angle": str(form.get("outreach_angle") or "").strip(), "notes": str(form.get("notes") or "").strip()}
     data["short_name"] = str(form.get("short_name") or "").strip() or short_name(data["business_name"]); data["updated_at"] = now_iso()
+    if not data["business_name"]: raise HTTPException(422, "Business name is required")
     if data["email"] and not valid_email(data["email"]): raise HTTPException(422, "Invalid email address")
     others = [x for x in store.list("clients", order="", limit=10000) if x["id"] != row_id]; reason = duplicate_reason(data, others)
     if reason: raise HTTPException(409, reason)
@@ -800,6 +812,9 @@ async def template_save(request: Request):
     form = await request.form(); row_id = str(form.get("id") or "")
     vertical = "freight" if form.get("vertical") == "freight" else "outreach"
     data = {"name": str(form.get("name") or ""), "subject": str(form.get("subject") or ""), "body": str(form.get("body") or ""), "type": str(form.get("type") or "plain"), "angle_tag": str(form.get("angle_tag") or ""), "active": bool(form.get("active")), "vertical": vertical, "updated_at": now_iso()}
+    if not all(str(data[field]).strip() for field in ("name", "subject", "body")):
+        destination = "/freight/settings?tab=templates" if vertical == "freight" else "/templates?vertical=outreach"
+        return RedirectResponse(f"{destination}&notice=Template+name,+subject,+and+body+are+required", 303)
     unknown = unknown_variables(data["subject"] + data["body"])
     if unknown:
         if vertical == "freight":
@@ -873,7 +888,11 @@ async def campaign_save(request: Request):
     if not gmail_accounts:
         return RedirectResponse("/settings?notice=Select+at+least+one+sender+identity", 303)
             
-    data = {"name": str(form.get("name") or "Untitled campaign"), "target_filter": target, "template_ids": form.getlist("template_ids"), "provider": provider, "gmail_accounts": gmail_accounts, "daily_cap": int(cfg.get("daily_cap") or 20), "send_window": {"timezone": cfg.get("timezone"), "send_days": cfg.get("send_days"), "send_start": cfg.get("send_start"), "send_end": cfg.get("send_end")}, "min_delay_minutes": int(cfg.get("min_delay_minutes") or 3), "max_delay_minutes": int(cfg.get("max_delay_minutes") or 15), "resend_block_days": int(cfg.get("resend_block_days") or 90), "state": "draft", "created_at": stamp, "updated_at": stamp}
+    available_templates = {str(row["id"]) for row in store.list("email_templates", {"active": True, "vertical": "outreach"}, order="", limit=500)}
+    template_ids = [value for value in form.getlist("template_ids") if value in available_templates]
+    if not template_ids:
+        return RedirectResponse("/campaigns?notice=Select+at+least+one+active+email+template", 303)
+    data = {"name": str(form.get("name") or "Untitled campaign"), "target_filter": target, "template_ids": template_ids, "provider": provider, "gmail_accounts": gmail_accounts, "daily_cap": int(cfg.get("daily_cap") or 20), "send_window": {"timezone": cfg.get("timezone"), "send_days": cfg.get("send_days"), "send_start": cfg.get("send_start"), "send_end": cfg.get("send_end")}, "min_delay_minutes": int(cfg.get("min_delay_minutes") or 3), "max_delay_minutes": int(cfg.get("max_delay_minutes") or 15), "resend_block_days": int(cfg.get("resend_block_days") or 90), "state": "draft", "created_at": stamp, "updated_at": stamp}
     campaign = store.insert("campaigns", {"id": new_id(), **data}); return RedirectResponse(f"/campaigns/{campaign['id']}", 303)
 
 

@@ -3,7 +3,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=20260922-campaign-builder">{% block head %}{% endblock %}</head>
+<link rel="stylesheet" href="/static/style.css?v=20260923-field-help">{% block head %}{% endblock %}</head>
 <body>{% if request.session.get('admin') %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
 <div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div><nav>
 {% if workspace == 'freight' %}
@@ -13,4 +13,4 @@
 {% endif %}</nav>
 <div class="aside-foot"><span class="dot {{'live' if not env.DRY_RUN else ''}}"></span>{{'Live sending' if not env.DRY_RUN else 'Dry run'}}<form action="/logout" method="post"><button class="link">Sign out</button></form></div></aside>{% endif %}
 <main class="{{'auth' if not request.session.get('admin') else ''}}">{% if request.query_params.get('notice') %}<div class="notice">{{request.query_params.get('notice')}}</div>{% endif %}{% block content %}{% endblock %}</main>
-<script>document.querySelectorAll('[data-confirm]').forEach(x=>x.addEventListener('click',e=>{if(!confirm(x.dataset.confirm))e.preventDefault()}));</script>{% block scripts %}{% endblock %}</body></html>
+<script src="/static/field-help.js?v=20260923"></script><script>document.querySelectorAll('[data-confirm]').forEach(x=>x.addEventListener('click',e=>{if(!confirm(x.dataset.confirm))e.preventDefault()}));</script>{% block scripts %}{% endblock %}</body></html>
