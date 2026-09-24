@@ -544,19 +544,10 @@
 {% set step3_done = missions|length > 0 %}
 {% set all_done = step1_done and step2_done and step3_done %}
 
-<header style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
-  <div>
-    <span class="eyebrow">Freight Fleet & Routing</span>
-    <h1 style="margin:2px 0 4px">Missions & truck profiles</h1>
-    <p style="margin:0;color:var(--muted)">Manage your truck fleet specs and dispatch missions that dictate autonomous broker negotiations.</p>
-  </div>
-  <div style="display:flex;gap:8px">
-    <a class="button ghost" href="/freight/settings">Settings & templates</a>
-    <a class="button" href="/freight">Open loads workspace →</a>
-  </div>
-</header>
+<header class="fx-pagehead"><div><h1>Missions &amp; fleet</h1><p>Your trucks, and the lanes and rate floors Outrich negotiates for.</p></div></header>
 
 <!-- ONBOARDING PROGRESS ROADMAP -->
+{% if not all_done %}
 <div class="freight-onboarding">
   <div class="onboarding-head">
     <div class="onboarding-title-wrap">
@@ -566,7 +557,7 @@
       </span>
     </div>
     {% if all_done %}
-    <span style="font-size:12px;color:#16a34a;font-weight:600">✓ All requirements complete · Inbound & outbound automation active</span>
+    <span style="font-size:12px;color:#16a34a;font-weight:600">All requirements complete · Inbound & outbound automation active</span>
     {% else %}
     <span style="font-size:12px;color:var(--muted)">Follow this 4-step sequence to start sending load inquiries</span>
     {% endif %}
@@ -575,63 +566,65 @@
   <div class="stepper-steps">
     <!-- Step 1 -->
     <a href="/freight/settings" class="step-card {{ 'done' if step1_done else 'active' }}">
-      <div class="step-num">{{ '✓' if step1_done else '1' }}</div>
+      <div class="step-num">{% if step1_done %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}1{% endif %}</div>
       <div class="step-meta">
         <h4>1. Email & Identity</h4>
         <p>Sender name, Gmail & signature</p>
         <span class="step-status {{ 'done-text' if step1_done else 'active-text' }}">
-          {{ 'Configured ✓' if step1_done else 'Setup required →' }}
+          {{ 'Configured' if step1_done else 'Setup required' }}
         </span>
       </div>
     </a>
 
     <!-- Step 2 -->
     <div onclick="switchFreightTab('trucks')" class="step-card {{ 'done' if step2_done else ('active' if step1_done and not step2_done else '') }}" style="cursor:pointer">
-      <div class="step-num">{{ '✓' if step2_done else '2' }}</div>
+      <div class="step-num">{% if step2_done %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}2{% endif %}</div>
       <div class="step-meta">
         <h4>2. Truck Profile</h4>
         <p>Specs, dimensions, MC/DOT</p>
         <span class="step-status {{ 'done-text' if step2_done else ('active-text' if step1_done else 'pending-text') }}">
-          {{ profiles|length ~ ' trucks on file ✓' if step2_done else ('Add truck now →' if step1_done else 'Pending step 1') }}
+          {{ profiles|length ~ ' trucks on file' if step2_done else ('Add truck now' if step1_done else 'Pending step 1') }}
         </span>
       </div>
     </div>
 
     <!-- Step 3 -->
     <div onclick="switchFreightTab('missions')" class="step-card {{ 'done' if step3_done else ('active' if step2_done and not step3_done else '') }}" style="cursor:pointer">
-      <div class="step-num">{{ '✓' if step3_done else '3' }}</div>
+      <div class="step-num">{% if step3_done %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}3{% endif %}</div>
       <div class="step-meta">
         <h4>3. Freight Mission</h4>
         <p>Origin, destinations & rate floor</p>
         <span class="step-status {{ 'done-text' if step3_done else ('active-text' if step2_done else 'pending-text') }}">
-          {{ missions|length ~ ' active missions ✓' if step3_done else ('Create mission now →' if step2_done else 'Pending step 2') }}
+          {{ missions|length ~ ' active missions' if step3_done else ('Create mission now' if step2_done else 'Pending step 2') }}
         </span>
       </div>
     </div>
 
     <!-- Step 4 -->
     <a href="/freight" class="step-card {{ 'done' if all_done else '' }}">
-      <div class="step-num">{{ '✓' if all_done else '4' }}</div>
+      <div class="step-num">{% if all_done %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}4{% endif %}</div>
       <div class="step-meta">
         <h4>4. Find Loads</h4>
         <p>Inquire & AI automated counter</p>
         <span class="step-status {{ 'done-text' if all_done else 'pending-text' }}">
-          {{ 'Ready to dispatch →' if all_done else 'Requires steps 1-3' }}
+          {{ 'Ready to dispatch' if all_done else 'Requires steps 1-3' }}
         </span>
       </div>
     </a>
   </div>
 </div>
 
+{% endif %}
+
 <!-- SEGMENTED TABS: MISSIONS vs TRUCKS -->
 <div class="freight-tabs-bar">
   <div class="tabs-segmented">
     <button type="button" id="tab-btn-missions" class="tab-segment {{ 'active' if active_tab != 'trucks' else '' }}" onclick="switchFreightTab('missions')">
-      <span>🎯 Freight Missions</span>
+      <span>Freight Missions</span>
       <span class="tab-count">{{ missions|length }}</span>
     </button>
     <button type="button" id="tab-btn-trucks" class="tab-segment {{ 'active' if active_tab == 'trucks' else '' }}" onclick="switchFreightTab('trucks')">
-      <span>🚛 Truck Fleet</span>
+      <span>Truck Fleet</span>
       <span class="tab-count">{{ profiles|length }}</span>
     </button>
   </div>
@@ -663,8 +656,8 @@
           <div>
             <h3 class="entity-title">{{ m.name }}</h3>
             <div class="route-badge">
-              <span>📍 {{ m.origin_city }}, {{ m.origin_state }}</span>
-              <span style="color:#94a3b8">➔</span>
+              <span>{{ m.origin_city }}, {{ m.origin_state }}</span>
+              <span style="color:#94a3b8">to</span>
               <span>Open Destinations</span>
             </div>
           </div>
@@ -686,9 +679,9 @@
           <span class="spec-pill highlight">Floor: {{ '$%.0f'|format(m.floor_total) if m.floor_total else 'No floor' }}</span>
           {% if m.floor_loaded_rpm %}<span class="spec-pill highlight">Min ${{ '%.2f'|format(m.floor_loaded_rpm) }}/mi</span>{% endif %}
           {% if m.permissions and (m.permissions.auto_counter or m.permissions.auto_profile_reply or m.permissions.auto_pass) %}
-          <span class="spec-pill" style="background:#dcfce7;color:#15803d;font-weight:700;border:1px solid #bbf7d0">⚡ Auto Mode</span>
+          <span class="spec-pill" style="background:#dcfce7;color:#15803d;font-weight:700;border:1px solid #bbf7d0">Auto Mode</span>
           {% else %}
-          <span class="spec-pill" style="background:#eff6ff;color:#1d4ed8;font-weight:700;border:1px solid #bfdbfe">✋ Approve Mode</span>
+          <span class="spec-pill" style="background:#eff6ff;color:#1d4ed8;font-weight:700;border:1px solid #bfdbfe">Approve Mode</span>
           {% endif %}
         </div>
       </div>
@@ -697,9 +690,9 @@
         <span style="font-size:11.5px;color:var(--muted)">
           {% set assigned_truck = profiles|selectattr('id', 'equalto', m.truck_profile_id)|first %}
           {% if assigned_truck %}
-          🚛 Assigned: <strong>{{ assigned_truck.name }}</strong>
+          Assigned: <strong>{{ assigned_truck.name }}</strong>
           {% else %}
-          <span style="color:#f59e0b">⚠ No truck profile linked</span>
+          <span style="color:#f59e0b">No truck profile linked</span>
           {% endif %}
         </span>
         <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=missions&mission_id={{ m.id }}">Edit mission</a>
@@ -709,18 +702,17 @@
   </div>
   {% else %}
   <div class="panel" style="text-align:center;padding:36px 20px;border-radius:14px;margin-bottom:20px">
-    <div style="font-size:32px;margin-bottom:8px">🎯</div>
     <h3 style="font-size:16px;margin:0 0 6px">No dispatch missions created yet</h3>
     <p style="color:var(--muted);max-width:480px;margin:0 auto 16px;font-size:13px">
       A mission specifies which origin city your truck is departing from, where you want to go, and the negotiation rate floor.
     </p>
     {% if not profiles %}
     <p style="color:#d97706;font-size:12.5px;margin-bottom:14px">
-      💡 Tip: Add at least one truck profile first so you can assign it to your mission.
+      Add at least one truck profile first so you can assign it to your mission.
     </p>
-    <button class="primary-btn" onclick="switchFreightTab('trucks')">Add your first truck profile →</button>
+    <button class="primary-btn" onclick="switchFreightTab('trucks')">Add your first truck profile</button>
     {% else %}
-    <button class="primary-btn" onclick="openMissionForm()">Create your first mission →</button>
+    <button class="primary-btn" onclick="openMissionForm()">Create your first mission</button>
     {% endif %}
   </div>
   {% endif %}
@@ -744,7 +736,7 @@
 
       <!-- SECTION 1: TRUCK & ROUTE BASICS -->
       <div class="form-section-title">
-        <span>📍 1. Truck & Route Assignment</span>
+        <span>1. Truck & Route Assignment</span>
       </div>
       <div class="form-grid-2">
         <label>
@@ -793,7 +785,7 @@
 
       <!-- SECTION 2: EQUIPMENT SPECS -->
       <div class="form-section-title">
-        <span>🚛 2. Equipment Specifications</span>
+        <span>2. Equipment Specifications</span>
       </div>
       <div class="form-grid-3">
         <label>
@@ -814,7 +806,7 @@
 
       <!-- SECTION 3: DESIRED DESTINATIONS -->
       <div class="form-section-title">
-        <span>🎯 3. Target Destinations</span>
+        <span>3. Target Destinations</span>
       </div>
       <div>
         <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
@@ -843,7 +835,7 @@
 
       <!-- SECTION 4: NEGOTIATION ENVELOPE -->
       <div class="form-section-title">
-        <span>💵 4. Rate Envelope & Negotiation Bounds</span>
+        <span>4. Rate Envelope & Negotiation Bounds</span>
       </div>
       <p style="font-size:12px;color:var(--muted);margin:-4px 0 10px">Active missions require at least one minimum rate: total, loaded RPM, or all-in RPM.</p>
       <div class="form-grid-4">
@@ -904,7 +896,7 @@
       <!-- SECTION 5: AI NEGOTIATION MODE -->
       {% set is_auto_mode = not edit_mission or not edit_mission.permissions or edit_mission.permissions.auto_counter or edit_mission.permissions.auto_profile_reply or edit_mission.permissions.auto_pass %}
       <div class="form-section-title">
-        <span>🤖 5. Agent Negotiation Mode</span>
+        <span>5. Agent Negotiation Mode</span>
       </div>
       <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
         Choose whether the AI agent communicates autonomously within your boundaries, or generates drafts for your approval.
@@ -914,34 +906,34 @@
         <!-- AUTO MODE -->
         <label id="mode-card-auto" class="mode-card {{ 'is-selected-auto' if is_auto_mode else '' }}" onclick="selectExecutionMode('auto')">
           <input type="radio" name="execution_mode" value="auto" required {{ 'checked' if is_auto_mode else '' }}>
-          <div class="mode-icon auto">⚡</div>
+          <div class="mode-icon auto"><svg class="i"><use href="#i-bolt"/></svg></div>
           <div class="mode-content">
             <div class="mode-header">
               <span class="mode-title">Auto Mode</span>
               <span class="mode-badge auto">Hands-Off</span>
             </div>
             <p class="mode-desc">The agent autonomously replies to broker emails—answering saved truck specs, negotiating counters within your envelope, and passing when below floor.</p>
-            <span class="mode-sub">⚡ Fastest broker response time</span>
+            <span class="mode-sub">Fastest broker response time</span>
           </div>
         </label>
 
         <!-- APPROVE MODE -->
         <label id="mode-card-approve" class="mode-card {{ 'is-selected-approve' if not is_auto_mode else '' }}" onclick="selectExecutionMode('approve')">
           <input type="radio" name="execution_mode" value="approve" required {{ 'checked' if not is_auto_mode else '' }}>
-          <div class="mode-icon approve">✋</div>
+          <div class="mode-icon approve"><svg class="i"><use href="#i-hand"/></svg></div>
           <div class="mode-content">
             <div class="mode-header">
               <span class="mode-title">Approve Mode</span>
               <span class="mode-badge approve">Review First</span>
             </div>
             <p class="mode-desc">The agent generates drafts for every reply and counter-offer in <code>Draft Ready</code>. Zero emails are sent without you clicking "Send".</p>
-            <span class="mode-sub">🛡️ Full dispatcher oversight</span>
+            <span class="mode-sub">Full dispatcher oversight</span>
           </div>
         </label>
       </div>
 
       <div class="safety-guardrail-note">
-        <span style="font-size:18px">🛡️</span>
+        <svg class="i"><use href="#i-shield"/></svg>
         <div>
           <strong>Safety Protection Always Active:</strong> Sensitive broker events (Rate Confirmations, driver PII requests, and phone calls) <em>always pause for review</em> in both modes.
         </div>
@@ -980,7 +972,7 @@
           <div>
             <h3 class="entity-title">{{ p.name }}</h3>
             <div class="route-badge">
-              <span>📍 Base: {{ p.current_city or 'Unset' }}, {{ p.current_state or 'Unset' }}</span>
+              <span>Base: {{ p.current_city or 'Unset' }}, {{ p.current_state or 'Unset' }}</span>
             </div>
           </div>
           <span class="badge {{ 'running' if p.active else 'paused' }}">{{ 'Active' if p.active else 'Inactive' }}</span>
@@ -1012,12 +1004,11 @@
   </div>
   {% else %}
   <div class="panel" style="text-align:center;padding:36px 20px;border-radius:14px;margin-bottom:20px">
-    <div style="font-size:32px;margin-bottom:8px">🚛</div>
     <h3 style="font-size:16px;margin:0 0 6px">No truck profiles created yet</h3>
     <p style="color:var(--muted);max-width:480px;margin:0 auto 16px;font-size:13px">
       Add your vehicle dimensions, equipment type, and authority credentials so the AI can represent your fleet accurately to brokers.
     </p>
-    <button class="primary-btn" onclick="openTruckForm()">Add your first truck profile →</button>
+    <button class="primary-btn" onclick="openTruckForm()">Add your first truck profile</button>
   </div>
   {% endif %}
 
@@ -1039,7 +1030,7 @@
       <input type="hidden" name="id" value="{{ edit_profile.id if edit_profile else '' }}">
 
       <div class="form-section-title">
-        <span>🚛 1. Vehicle Identity & Base Location</span>
+        <span>1. Vehicle Identity & Base Location</span>
       </div>
       <div class="form-grid-3">
         <label>
@@ -1059,7 +1050,7 @@
       </div>
 
       <div class="form-section-title">
-        <span>📐 2. Trailer & Capacity Specifications</span>
+        <span>2. Trailer & Capacity Specifications</span>
       </div>
       <div class="form-grid-4">
         <label>
@@ -1088,7 +1079,7 @@
       </div>
 
       <div class="form-section-title">
-        <span>📋 3. Motor Carrier Authority & Dispatch</span>
+        <span>3. Motor Carrier Authority & Dispatch</span>
       </div>
       <div class="form-grid-4">
         <label>
@@ -1113,7 +1104,7 @@
       </div>
 
       <div class="form-section-title">
-        <span>🔒 4. Facts Agent May Disclose to Brokers</span>
+        <span>4. Facts Agent May Disclose to Brokers</span>
       </div>
       <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
         Check only the facts that the AI agent is allowed to quote in email replies without asking you.

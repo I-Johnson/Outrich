@@ -139,6 +139,66 @@ def page(request: Request, name: str, **context):
     return templates.TemplateResponse(request=request, name=name, context=context)
 
 
+FREIGHT_NEEDS_YOU = {"draft_ready", "needs_attention", "offer_review", "protected_review", "accepted_pending_review", "mismatch", "send_uncertain"}
+FREIGHT_DONE = {"booked", "closed", "passed"}
+
+
+def freight_group(load: dict) -> str:
+    """Which queue a load sits in on the Loads page: needs (you), waiting, or done."""
+    status = str(load.get("status") or "")
+    if status in FREIGHT_DONE:
+        return "done"
+    if status in FREIGHT_NEEDS_YOU or load.get("alerts") or load.get("draft"):
+        return "needs"
+    return "waiting"
+
+
+def _ago(value) -> str:
+    if not value:
+        return ""
+    try:
+        then = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        seconds = max(0, int((datetime.now(timezone.utc) - then).total_seconds()))
+    except Exception:
+        return ""
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60} min ago"
+    if seconds < 86400:
+        return f"{seconds // 3600} hr ago"
+    return f"{seconds // 86400} d ago"
+
+
+def freight_nav(db, *, loads: list[dict] | None = None, senders: list[dict] | None = None, cursors: list[dict] | None = None) -> dict:
+    """Sidebar data for the Freight workspace: 'needs you' count and Gmail status."""
+    if loads is None:
+        loads = db.list("freight_loads", order="updated_at desc", limit=500)
+        threads = {str(r["load_id"]): r for r in db.list("freight_threads", order="updated_at desc", limit=1000)}
+        open_alert_threads = {str(a.get("thread_id")) for a in db.list("freight_alerts", {"status": "open"}, limit=200)}
+        draft_threads = {str(d.get("thread_id")) for d in db.list("freight_drafts", {"status": "pending"}, limit=500)}
+        loads = [{**row, "alerts": str((threads.get(str(row["id"])) or {}).get("id")) in open_alert_threads,
+                  "draft": str((threads.get(str(row["id"])) or {}).get("id")) in draft_threads} for row in loads]
+    needs_you = sum(1 for row in loads if freight_group(row) == "needs")
+    if senders is None:
+        cfg = db.get("settings", 1) or {}
+        senders = [row for row in list_gmail_senders(active_only=True, storage=db, cfg=cfg) if row.get("provider", "gmail") == "gmail"]
+    if cursors is None:
+        cursors = db.list("freight_mail_cursors", order="updated_at desc", limit=100)
+    fsettings = db.get("freight_settings", 1) or {}
+    gmail = None
+    if senders:
+        default_id = str(fsettings.get("default_sender_account") or senders[0]["id"])
+        sender = next((s for s in senders if str(s["id"]) == default_id), senders[0])
+        cursor = next((c for c in cursors if str(c.get("sender_account")) == str(sender["id"])), None)
+        error = (cursor or {}).get("error") or ""
+        gmail = {"email": sender.get("email"), "state": "error" if error else "ok", "error": error,
+                 "checked": _ago((cursor or {}).get("last_checked_at")), "cursor": cursor}
+    return {"needs_you": needs_you, "gmail": gmail}
+
+
 def _rate_limited(request: Request) -> tuple[str, list[float], bool]:
     key = request.client.host if request.client else "unknown"; now = time.time()
     attempts = [x for x in LOGIN_ATTEMPTS.get(key, []) if now - x < 900]
@@ -348,6 +408,7 @@ def freight_dashboard(request: Request, load_id: str = ""):
         load["economics"] = load_economics(load)
         load["alerts"] = alerts_by_thread.get(str(thread.get("id")), [])
         load["draft"] = drafts_by_thread.get(str(thread.get("id")))
+        load["group"] = freight_group(load)
     selected = next((row for row in loads if str(row["id"]) == str(load_id)), None) or (loads[0] if loads else None)
     messages = []
     if selected and selected.get("thread"):
@@ -360,7 +421,7 @@ def freight_dashboard(request: Request, load_id: str = ""):
     default_template = next((t for t in freight_templates if str(t["id"]) == str(freight_settings.get("default_template_id"))), None) or (freight_templates[0] if freight_templates else None)
     cursors = db.list("freight_mail_cursors", order="updated_at desc", limit=100)
     return page(
-        request, "freight.html", workspace="freight", loads=loads, selected_load=selected,
+        request, "freight.html", workspace="freight", fx_nav=freight_nav(db, loads=loads, senders=gmail_senders, cursors=cursors), loads=loads, selected_load=selected,
         messages=messages, missions=missions, profiles=profiles, freight_templates=freight_templates,
         default_template=default_template,
         gmail_senders=gmail_senders, freight_settings=freight_settings, open_alerts=open_alerts, mail_cursors=cursors,
@@ -375,7 +436,8 @@ def freight_missions(request: Request, mission_id: str = "", profile_id: str = "
     fsettings = db.get("freight_settings", 1) or {}
     active_tab = tab or ("trucks" if profile_id else "missions")
     return page(
-        request, "freight_missions.html", workspace="freight", missions=missions, profiles=profiles,
+        request, "freight_missions.html", workspace="freight", missions=missions, profiles=profiles, fx_nav=freight_nav(db),
+        loads=db.list("freight_loads", order="updated_at desc", limit=500),
         freight_settings=fsettings, active_tab=active_tab,
         edit_mission=db.get("freight_missions", mission_id) if mission_id else None,
         edit_profile=db.get("freight_truck_profiles", profile_id) if profile_id else None,
@@ -394,7 +456,8 @@ def freight_settings_page(request: Request, tab: str = "identity", edit_template
     missions = db.list("freight_missions", order="created_at desc", limit=500)
     profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     return page(
-        request, "freight_settings.html", workspace="freight",
+        request, "freight_settings.html", workspace="freight", fx_nav=freight_nav(db, senders=senders),
+        mail_cursors=db.list("freight_mail_cursors", order="updated_at desc", limit=100),
         freight_settings=fsettings, gmail_senders=senders,
         freight_templates=freight_templates, default_template=default_template,
         active_tab=tab, edit_template=edit_tpl,

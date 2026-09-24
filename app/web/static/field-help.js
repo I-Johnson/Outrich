@@ -122,7 +122,13 @@
     return pathHelp[`${formPath}|${name}`] || help[normalized] || "This value is saved with the form and used where this label appears.";
   }
 
+  // Freight pages keep info icons only on fields that are hard to guess.
+  // Anything else can opt in with a data-help attribute.
+  const freightHelpFields = new Set(["origin_deadhead_miles", "deadhead_miles", "floor_loaded_rpm", "floor_all_in_rpm", "target_all_in_rpm", "maximum_counter_rounds", "app_password", "shareable_fields"]);
+  const freightPage = document.body?.classList.contains("ws-freight");
+
   function decorate(control) {
+    if (freightPage && !control.dataset.help && !freightHelpFields.has(control.name || "")) return;
     if (control.dataset.helpDecorated || control.type === "hidden" || control.type === "submit" || control.type === "button") return;
     if (control.matches("[type=checkbox], [type=radio]") && !control.closest("label.check")) return;
     const label = control.closest("label") || (control.id && document.querySelector(`label[for="${CSS.escape(control.id)}"]`));

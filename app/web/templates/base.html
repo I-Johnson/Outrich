@@ -3,14 +3,37 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=20260924-gmail">{% block head %}{% endblock %}</head>
-<body>{% set auth_page = request.url.path in ('/login', '/signup', '/admin/login') %}{% set signed_in = request.session.get('uid') or request.session.get('admin') %}{% if signed_in and not auth_page %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
+<link rel="stylesheet" href="/static/style.css?v=20260924-gmail">{% if workspace == 'freight' %}<link rel="stylesheet" href="/static/freight.css?v=20260924-ui"><script>try{if(localStorage.getItem('fx-side')==='collapsed')document.documentElement.classList.add('fx-collapsed')}catch(e){}</script>{% endif %}{% block head %}{% endblock %}</head>
+<body class="ws-{{ workspace }} {% block body_class %}{% endblock %}">{% set auth_page = request.url.path in ('/login', '/signup', '/admin/login') %}{% set signed_in = request.session.get('uid') or request.session.get('admin') %}{% if signed_in and not auth_page %}{% if workspace == 'freight' %}{% include "_fx_icons.html" %}
+<aside class="fx-side">
+  <div class="fx-brand-row"><a class="brand" href="/freight"><span>F</span><span class="fx-nav-t">Freight</span></a><button type="button" class="fx-collapse" id="fx-collapse" aria-label="Collapse sidebar" title="Collapse sidebar"><svg class="i"><use href="#i-chevleft"/></svg></button></div>
+  {% if request.session.get('admin_workspace') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="active">Freight</a></div>{% endif %}
+  <nav>
+    <a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}" title="Loads"><svg class="i"><use href="#i-inbox"/></svg><span class="fx-nav-t">Loads</span>{% if fx_nav and fx_nav.needs_you %}<span class="fx-count num" title="{{ fx_nav.needs_you }} need you">{{ fx_nav.needs_you }}</span>{% endif %}</a>
+    <a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}" title="Missions &amp; fleet"><svg class="i"><use href="#i-route"/></svg><span class="fx-nav-t">Missions &amp; fleet</span></a>
+    <a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}" title="Settings"><svg class="i"><use href="#i-settings"/></svg><span class="fx-nav-t">Settings</span></a>
+  </nav>
+  <div class="fx-foot">
+    {% set g = fx_nav.gmail if fx_nav else None %}
+    {% if g and g.state == 'ok' %}
+    <div class="fx-conn" title="Gmail connected: {{ g.email }}"><span class="fx-dot"></span><a class="fx-text" href="/freight/settings#gmail"><strong>Gmail connected</strong><span class="fx-email">{{ g.email }}</span>{% if g.checked %}Checked {{ g.checked }}{% endif %}</a></div>
+    {% elif g and g.state == 'error' %}
+    <div class="fx-conn" title="Gmail problem: {{ g.error }}"><span class="fx-dot red"></span><a class="fx-text" href="/freight/settings#gmail"><strong>Gmail needs attention</strong><span class="fx-email">{{ g.email }}</span>Replies aren't being read</a></div>
+    {% else %}
+    <div class="fx-conn" title="No Gmail connected"><span class="fx-dot gray"></span><a class="fx-text" href="/freight/settings#gmail"><strong>No Gmail connected</strong>Connect one to send</a></div>
+    {% endif %}
+    <div class="fx-conn" title="{{ 'Live sending' if not env.DRY_RUN else 'Dry run' }}"><span class="fx-dot {{ '' if not env.DRY_RUN else 'amber' }}"></span><span class="fx-text"><strong>{{ 'Live sending' if not env.DRY_RUN else 'Dry run' }}</strong>{{ 'Emails go to real brokers' if not env.DRY_RUN else 'Nothing is actually sent' }}</span></div>
+    <div class="fx-acct"><span>{{ request.session.get('email') or request.session.get('admin') or '' }}</span><form action="/logout" method="post"><button class="link">Sign out</button></form></div>
+  </div>
+</aside>
+<script>document.getElementById('fx-collapse').addEventListener('click',function(){var c=document.documentElement.classList.toggle('fx-collapsed');try{localStorage.setItem('fx-side',c?'collapsed':'open')}catch(e){}this.setAttribute('aria-label',c?'Expand sidebar':'Collapse sidebar');this.title=c?'Expand sidebar':'Collapse sidebar'});</script>
+{% else %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
 {% if request.session.get('admin_workspace') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
 {% if workspace == 'freight' %}
 <a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}">Loads & conversations</a><a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}">Missions & fleet</a><a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}">Settings & templates</a>
 {% else %}
 <a href="/" class="{{'active' if request.url.path == '/' else ''}}">Overview</a><a href="/leads" class="{{'active' if request.url.path.startswith('/leads') else ''}}">Leads</a><a href="/scraper" class="{{'active' if request.url.path.startswith('/scraper') else ''}}">Discovery</a><a href="/templates" class="{{'active' if request.url.path.startswith('/templates') else ''}}">Templates</a><a href="/campaigns" class="{{'active' if request.url.path.startswith('/campaigns') else ''}}">Campaigns</a><a href="/pingram-inbox" class="{{'active' if request.url.path.startswith('/pingram-inbox') else ''}}">Pingram Inbox</a><a href="/settings" class="{{'active' if request.url.path.startswith('/settings') else ''}}">Settings</a>
 {% endif %}</nav>
-<div class="aside-foot"><span class="dot {{'live' if not env.DRY_RUN else ''}}"></span>{{'Live sending' if not env.DRY_RUN else 'Dry run'}}<form action="/logout" method="post"><button class="link">Sign out</button></form></div></aside>{% endif %}
+<div class="aside-foot"><span class="dot {{'live' if not env.DRY_RUN else ''}}"></span>{{'Live sending' if not env.DRY_RUN else 'Dry run'}}<form action="/logout" method="post"><button class="link">Sign out</button></form></div></aside>{% endif %}{% endif %}
 <main class="{{'auth' if not signed_in or auth_page else ''}}">{% if request.query_params.get('notice') %}<div class="notice">{{request.query_params.get('notice')}}</div>{% endif %}{% if request.query_params.get('error') and not auth_page %}<div class="error">{{request.query_params.get('error')}}</div>{% endif %}{% block content %}{% endblock %}</main>
-<script src="/static/field-help.js?v=20260923"></script><script>document.querySelectorAll('[data-confirm]').forEach(x=>x.addEventListener('click',e=>{if(!confirm(x.dataset.confirm))e.preventDefault()}));</script>{% block scripts %}{% endblock %}</body></html>
+<script src="/static/field-help.js?v=20260924"></script><script>document.querySelectorAll('[data-confirm]').forEach(x=>x.addEventListener('click',e=>{if(!confirm(x.dataset.confirm))e.preventDefault()}));</script>{% block scripts %}{% endblock %}</body></html>
