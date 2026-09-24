@@ -6,10 +6,11 @@ from unittest.mock import Mock, patch
 os.environ["SCHEDULER_ENABLED"] = "false"
 os.environ["DATABASE_BACKEND"] = "sqlite"
 os.environ["DB_PATH"] = "/tmp/outreach-freight-test.db"
+os.environ["FREIGHT_AGENT_MODE"] = "rules"
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 
 from app.adapters.base import SendResult
-from app.core.freight import SensitiveOutboundConfirmationRequired, classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, mission_price_comparison, parse_destinations, recover_uncertain_freight_sends, reevaluate_verified_load, seed_freight_template, send_draft, sensitive_outbound_fields, set_thread_state, verify_load_facts
+from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, mission_price_comparison, parse_destinations, recover_uncertain_freight_sends, reevaluate_verified_load, seed_freight_template, send_draft, sensitive_outbound_fields, set_thread_state, verify_load_facts
 from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import SQLiteStore, new_id, now_iso
 
@@ -104,6 +105,18 @@ class FreightPolicyTests(unittest.TestCase):
             {"label": "Dallas, TX", "kind": "city", "radius_miles": 75},
             {"label": "Southeast", "kind": "region", "radius_miles": 0},
         ])
+
+    def test_auto_mode_requires_one_priced_lane(self):
+        mission = {"origin_state": "FL", "destinations": [{"kind": "state", "label": "NJ"}], "target_total": 5000}
+        self.assertIsNone(auto_lane_issue(mission))
+        mission["destinations"].append({"kind": "city", "label": "Dallas, TX"})
+        self.assertIn("one destination", auto_lane_issue(mission))
+        mission["destinations"] = [{"kind": "state", "label": "NJ"}]
+        mission["target_total"] = None
+        self.assertIn("target", auto_lane_issue(mission))
+        mission["target_total"] = 5000
+        mission["destinations"] = [{"kind": "anywhere", "label": "Open"}]
+        self.assertIn("exact city", auto_lane_issue(mission))
 
 
 
@@ -233,10 +246,10 @@ class FreightConversationTests(unittest.TestCase):
         self.assertFalse(first["draft"]["policy_snapshot"]["safe_to_auto_send"])
         self.send(first["draft"])
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 1)
+        self.storage.update("freight_missions", self.mission_id, {"target_total": 4300})
         second = self.inbound("Maybe I can squeeze it to 4200")
         self.assertEqual(second["action"], "draft")
-        self.storage.update("freight_drafts", second["draft"]["id"], {"body_text": "Can you do $4,300?"})
-        self.send(self.storage.get("freight_drafts", second["draft"]["id"]))
+        self.send(second["draft"])
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 2)
         final = self.inbound("Max is 4300. That works if you can cover it.")
         self.assertEqual(final["action"], "alert")
@@ -246,6 +259,7 @@ class FreightConversationTests(unittest.TestCase):
 
     def test_total_floor_does_not_bypass_unresolved_per_mile_floor(self):
         self.storage.update("freight_missions", self.mission_id, {"floor_loaded_rpm": 2.5})
+        verify_load_facts(self.load_id, {"destination_city": "Dallas", "destination_state": "TX"}, self.storage)
         result = self.inbound("Rate is $4,000")
         self.assertEqual(result["action"], "alert")
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_offer"], 4000)
@@ -310,19 +324,19 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
         self.assertIsNone(self.storage.get("freight_loads", self.load_id)["current_offer"])
 
-    def test_mismatch_pass_reoffer_and_close_states(self):
+    def test_mismatch_target_gate_reoffer_and_close_states(self):
         mismatch = self.inbound("Need reefer, dry vans will not work. Rate is $4,000")
         self.assertEqual(mismatch["action"], "alert")
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "mismatch")
         self.assertFalse(self.storage.list("freight_drafts", {"thread_id": self.thread_id}, order="", limit=1))
         set_thread_state(self.thread_id, "negotiating", self.storage)
         self.storage.update("freight_missions", self.mission_id, {"target_total": None, "counter_amount": None})
-        passed = self.inbound("Dry van works. Pickup 09/23, delivery to Dallas, TX. Weight 40,000 lbs. Rate- 3,500")
-        self.assertEqual(passed["action"], "draft")
-        self.assertEqual(passed["draft"]["reason"], "pass_below_floor")
-        self.send(passed["draft"])
-        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "passed")
+        no_target = self.inbound("Dry van works. Pickup 09/23, delivery to Dallas, TX. Weight 40,000 lbs. Rate- 3,500")
+        self.assertEqual(no_target["action"], "alert")
+        self.assertIn("price target", no_target["summary"])
+        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "needs_attention")
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
+        self.storage.update("freight_missions", self.mission_id, {"target_total": 4000})
         reoffer = self.inbound("Can do $4,000")
         self.assertEqual(reoffer["action"], "alert")
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "offer_review")
@@ -346,6 +360,7 @@ class FreightConversationTests(unittest.TestCase):
             result = self.inbound(f"Can do ${offer}")
             self.assertEqual(result["action"], "draft")
             self.send(result["draft"])
+            self.storage.update("freight_missions", self.mission_id, {"target_total": 4400})
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 2)
         result = self.inbound("Max is 4200")
         self.assertEqual(result["action"], "alert")
@@ -363,7 +378,8 @@ class FreightConversationTests(unittest.TestCase):
         self.storage.update("freight_missions", self.mission_id, {"permissions": {**mission["permissions"], "auto_counter": True}})
         result = self.inbound("Rate- 4,000")
         self.assertEqual(result["action"], "draft")
-        self.assertIn("broker destination", result["draft"]["policy_snapshot"]["auto_send_blockers"])
+        self.assertEqual(result["draft"]["reason"], "clarify_destination")
+        self.assertIn("delivery city", result["draft"]["body_text"])
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
 
     def test_verified_fit_allows_one_permitted_auto_counter(self):

@@ -810,7 +810,7 @@
       </div>
       <div>
         <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
-          Add the specific cities, states, or regions this truck is willing to deliver to.
+          Add where this truck is willing to deliver. For Auto Mode, use one exact city/state or state code per mission. Create separate missions for Florida → NJ and Florida → Dallas.
         </p>
         <div id="destination-list">
           {% set destinations = edit_mission.destinations if edit_mission and edit_mission.destinations else [{'label':'','kind':'city','radius_miles':0}] %}
@@ -819,7 +819,7 @@
             <input name="destination_label" value="{{ d.label }}" placeholder="e.g. Dallas, TX or Southeast" required>
             <select name="destination_kind" required>
               <option value="city" {% if d.kind=='city' %}selected{% endif %}>City</option>
-              <option value="state" {% if d.kind=='state' %}selected{% endif %}>State</option>
+              <option value="state" {% if d.kind=='state' %}selected{% endif %}>State code (NJ)</option>
               <option value="region" {% if d.kind=='region' %}selected{% endif %}>Region</option>
               <option value="anywhere" {% if d.kind=='anywhere' %}selected{% endif %}>Anywhere</option>
             </select>
@@ -912,7 +912,7 @@
               <span class="mode-title">Auto Mode</span>
               <span class="mode-badge auto">Hands-Off</span>
             </div>
-            <p class="mode-desc">The agent autonomously replies to broker emails—answering saved truck specs, negotiating counters within your envelope, and passing when below floor.</p>
+            <p class="mode-desc">One destination lane and a price target are required. The agent can negotiate within that lane's saved boundaries.</p>
             <span class="mode-sub">Fastest broker response time</span>
           </div>
         </label>
@@ -926,7 +926,7 @@
               <span class="mode-title">Approve Mode</span>
               <span class="mode-badge approve">Review First</span>
             </div>
-            <p class="mode-desc">The agent generates drafts for every reply and counter-offer in <code>Draft Ready</code>. Zero emails are sent without you clicking "Send".</p>
+            <p class="mode-desc">You can leave a target open and define it during review. The agent will pause on an offer until the lane target is set.</p>
             <span class="mode-sub">Full dispatcher oversight</span>
           </div>
         </label>
@@ -1183,11 +1183,21 @@ document.getElementById('mission-form')?.addEventListener('submit', function(eve
   const floorInputs = ['floor_total', 'floor_loaded_rpm', 'floor_all_in_rpm']
     .map(name => this.elements[name]).filter(Boolean);
   floorInputs.forEach(input => input.setCustomValidity(''));
+  this.elements.target_total?.setCustomValidity('');
   const isActive = this.elements.active?.checked;
   if (isActive && !floorInputs.some(input => Number(input.value) > 0)) {
     event.preventDefault();
     floorInputs[0].setCustomValidity('Set at least one minimum rate: total, loaded RPM, or all-in RPM.');
     floorInputs[0].reportValidity();
+  }
+  if (this.querySelector('input[name="execution_mode"]:checked')?.value === 'auto') {
+    const target = this.elements.target_total;
+    const rpm = this.elements.target_all_in_rpm;
+    if (!(Number(target.value) > 0 || Number(rpm.value) > 0)) {
+      event.preventDefault();
+      target.setCustomValidity('Auto Mode needs a target total or target all-in RPM for this lane.');
+      target.reportValidity();
+    }
   }
 });
 
@@ -1243,7 +1253,7 @@ document.getElementById('add-destination')?.addEventListener('click', () => {
       <input name="destination_label" placeholder="e.g. Dallas, TX or Southeast" required>
       <select name="destination_kind" required>
         <option value="city">City</option>
-        <option value="state">State</option>
+        <option value="state">State code (NJ)</option>
         <option value="region">Region</option>
         <option value="anywhere">Anywhere</option>
       </select>

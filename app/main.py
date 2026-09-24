@@ -23,12 +23,13 @@ from app.adapters.mapbox_geocoding import search_locations
 from app.adapters.public_records import label_for_state
 from app.config import settings as env
 from app.core.ai_copywriter import generate_or_improve
+from app.core.agent_test import agent_test_state, approve_test_draft, confirm_test_facts, create_local_test_session, inject_broker_reply, scenario_catalog
 from app.core.auth import MIN_PASSWORD_LENGTH, hash_password, normalize_email as normalize_login_email, verify_password
 from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
-from app.core.freight import SensitiveOutboundConfirmationRequired, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts
+from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
@@ -99,7 +100,7 @@ async def not_found(request: Request, exc: LookupError):
 PUBLIC_PATHS = {"/login", "/signup", "/admin/login", "/health"}
 PUBLIC_PREFIXES = ("/static/", "/webhooks/")
 # Paths a regular (non-admin) user may reach. Everything else is the admin's outreach engine.
-USER_PREFIXES = ("/freight",)
+USER_PREFIXES = ("/freight", "/api/agent-test", "/api/freight/agent-test")
 USER_PATHS = {"/logout", "/templates/save"}
 SESSION_MAX_AGE = 60 * 60 * 24 * 30  # keep people signed in for 30 days
 
@@ -121,7 +122,7 @@ async def admin_auth(request: Request, call_next):
     if not public:
         if not signed_in:
             return RedirectResponse(f"/login?next={quote(path)}", 303)
-        if not is_admin(request) and not (path in USER_PATHS or path == "/freight" or path.startswith("/freight/")):
+        if not is_admin(request) and not (path in USER_PATHS or path == "/freight" or path.startswith("/freight/") or path.startswith("/api/agent-test") or path.startswith("/api/freight/agent-test")):
             # Signed-in customers only see Freight; the outreach engine stays admin-only.
             return RedirectResponse("/freight", 303)
     response = await call_next(request)
@@ -176,7 +177,7 @@ def _ago(value) -> str:
 def freight_nav(db, *, loads: list[dict] | None = None, senders: list[dict] | None = None, cursors: list[dict] | None = None) -> dict:
     """Sidebar data for the Freight workspace: 'needs you' count and Gmail status."""
     if loads is None:
-        loads = db.list("freight_loads", order="updated_at desc", limit=500)
+        loads = [row for row in db.list("freight_loads", order="updated_at desc", limit=500) if row.get("dat_reference") != "agent-test"]
         threads = {str(r["load_id"]): r for r in db.list("freight_threads", order="updated_at desc", limit=1000)}
         open_alert_threads = {str(a.get("thread_id")) for a in db.list("freight_alerts", {"status": "open"}, limit=200)}
         draft_threads = {str(d.get("thread_id")) for d in db.list("freight_drafts", {"status": "pending"}, limit=500)}
@@ -390,7 +391,7 @@ def _first_touch_fingerprint(preview: dict) -> str:
 @app.get("/freight", response_class=HTMLResponse)
 def freight_dashboard(request: Request, load_id: str = ""):
     db = freight_store(request)
-    loads = db.list("freight_loads", order="updated_at desc", limit=500)
+    loads = [row for row in db.list("freight_loads", order="updated_at desc", limit=500) if row.get("dat_reference") != "agent-test"]
     missions = db.list("freight_missions", order="created_at desc", limit=500)
     profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     mission_map = {str(row["id"]): row for row in missions}
@@ -456,6 +457,216 @@ def freight_missions(request: Request, mission_id: str = "", profile_id: str = "
         edit_mission=db.get("freight_missions", mission_id) if mission_id else None,
         edit_profile=db.get("freight_truck_profiles", profile_id) if profile_id else None,
     )
+
+
+@app.get("/freight/agent-test", response_class=HTMLResponse)
+def freight_agent_test_page(request: Request, load_id: str = "", mission_id: str = ""):
+    """Real end-to-end freight agent test controls."""
+    db = freight_store(request)
+    missions = db.list("freight_missions", order="created_at desc", limit=500)
+    profiles = db.list("freight_truck_profiles", {"active": True}, order="created_at desc", limit=500)
+    state = None
+    if load_id:
+        try:
+            state = agent_test_state(db, load_id)
+        except ValueError:
+            state = None
+    selected_mission = next((row for row in missions if str(row.get("id")) == str(mission_id)), None)
+    if not selected_mission and state:
+        selected_mission = state.get("mission")
+    return page(
+        request,
+        "agent_test.html",
+        workspace="freight",
+        fx_nav=freight_nav(db),
+        scenarios=scenario_catalog(),
+        missions=missions,
+        profiles=profiles,
+        selected_mission=selected_mission,
+        agent_state=state,
+    )
+
+
+@app.get("/freight/agent-test/scenarios")
+@app.get("/api/freight/agent-test/scenarios")
+@app.get("/api/agent-test/scenarios")
+def freight_agent_test_scenarios(request: Request):
+    # The request argument intentionally keeps these endpoints behind the
+    # normal session middleware while returning no tenant data.
+    return {"scenarios": scenario_catalog()}
+
+
+async def _run_agent_test_request(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Send a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Agent-test payload must be a JSON object")
+    db = freight_store(request)
+    try:
+        state = create_local_test_session(db, payload)
+        return {"load_id": state["load"]["id"], "state": state}
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/freight/agent-test/start")
+@app.post("/freight/agent-test")
+@app.post("/freight/agent-test/run")
+@app.post("/api/freight/agent-test")
+@app.post("/api/agent-test")
+async def freight_agent_test_start(request: Request):
+    """Start a local agent-test session without email transport."""
+    return await _run_agent_test_request(request)
+
+
+@app.post("/freight/agent-test/message")
+@app.post("/api/freight/agent-test/message")
+async def freight_agent_test_message(request: Request):
+    db = freight_store(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Send a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Message payload must be an object")
+    try:
+        return inject_broker_reply(db, str(payload.get("load_id") or ""), str(payload.get("body") or ""))
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/freight/agent-test/state")
+@app.get("/api/freight/agent-test/state")
+async def freight_agent_test_state(request: Request, load_id: str = ""):
+    if not load_id:
+        raise HTTPException(400, "load_id is required")
+    try:
+        return agent_test_state(freight_store(request), load_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/freight/agent-test/approve")
+@app.post("/api/freight/agent-test/approve")
+async def freight_agent_test_approve(request: Request):
+    db = freight_store(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Send a JSON object") from exc
+    draft_id = str(payload.get("draft_id") or "") if isinstance(payload, dict) else ""
+    if not draft_id:
+        raise HTTPException(400, "draft_id is required")
+    try:
+        return approve_test_draft(db, draft_id)
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/freight/agent-test/facts")
+@app.post("/api/freight/agent-test/facts")
+async def freight_agent_test_facts(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Send a JSON object") from exc
+    if not isinstance(payload, dict) or not payload.get("load_id") or not isinstance(payload.get("facts"), dict):
+        raise HTTPException(400, "load_id and facts are required")
+    try:
+        return confirm_test_facts(freight_store(request), str(payload["load_id"]), payload["facts"])
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/freight/agent-test/reset")
+@app.post("/api/freight/agent-test/reset")
+async def freight_agent_test_reset(request: Request):
+    db = freight_store(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Send a JSON object") from exc
+    load_id = str(payload.get("load_id") or "") if isinstance(payload, dict) else ""
+    load = db.get("freight_loads", load_id) if load_id else None
+    if not load or load.get("dat_reference") != "agent-test":
+        raise HTTPException(404, "Local agent-test session not found")
+    db.delete("freight_loads", {"id": load_id})
+    return {"deleted": True, "load_id": load_id}
+
+
+@app.post("/freight/agent-test/mission")
+@app.post("/api/freight/agent-test/mission")
+async def freight_agent_test_mission(request: Request):
+    """Create a mission from the test page using the same mission fields."""
+    db = freight_store(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Send a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Mission payload must be an object")
+    destinations = payload.get("destinations")
+    if not isinstance(destinations, list):
+        labels = payload.get("destination_label")
+        labels = labels if isinstance(labels, list) else [labels]
+        kinds = payload.get("destination_kind")
+        kinds = kinds if isinstance(kinds, list) else [kinds]
+        radii = payload.get("destination_radius")
+        radii = radii if isinstance(radii, list) else [radii]
+        destinations = parse_destinations(labels, kinds, radii)
+    destinations = [item for item in destinations if isinstance(item, dict) and str(item.get("label") or "").strip()]
+    name = str(payload.get("name") or "").strip()
+    if not name or not destinations:
+        raise HTTPException(400, "Mission name and at least one destination are required")
+    mode = str(payload.get("execution_mode") or payload.get("mode") or "approve").lower()
+    if mode == "auto":
+        permissions = {"auto_profile_reply": True, "auto_counter": True, "auto_pass": True}
+    else:
+        permissions = {"auto_profile_reply": False, "auto_counter": False, "auto_pass": False}
+    stamp = now_iso()
+    mission = {
+        "id": new_id(),
+        "name": name,
+        "truck_profile_id": str(payload.get("truck_profile_id") or "") or None,
+        "origin_city": str(payload.get("origin_city") or "").strip(),
+        "origin_state": str(payload.get("origin_state") or "").strip().upper(),
+        "origin_deadhead_miles": _optional_int(payload.get("origin_deadhead_miles")) or 0,
+        "pickup_start": str(payload.get("pickup_start") or "") or None,
+        "pickup_end": str(payload.get("pickup_end") or "") or None,
+        "equipment_type": str(payload.get("equipment_type") or "").strip(),
+        "trailer_length_ft": _optional_int(payload.get("trailer_length_ft")),
+        "max_weight_lbs": _optional_int(payload.get("max_weight_lbs")),
+        "destinations": destinations,
+        "floor_total": _optional_float(payload.get("floor_total")),
+        "target_total": _optional_float(payload.get("target_total")),
+        "floor_loaded_rpm": _optional_float(payload.get("floor_loaded_rpm")),
+        "floor_all_in_rpm": _optional_float(payload.get("floor_all_in_rpm")),
+        "target_all_in_rpm": _optional_float(payload.get("target_all_in_rpm")),
+        "counter_amount": _optional_float(payload.get("counter_amount")),
+        "maximum_counter_rounds": _optional_int(payload.get("maximum_counter_rounds")) or 3,
+        "permissions": permissions,
+        "active": bool(payload.get("active", True)),
+        "created_at": stamp,
+        "updated_at": stamp,
+    }
+    if mission["truck_profile_id"] and not db.get("freight_truck_profiles", mission["truck_profile_id"]):
+        raise HTTPException(400, "Choose an existing truck profile")
+    if not any(value is not None and value > 0 for value in (mission["floor_total"], mission["floor_loaded_rpm"], mission["floor_all_in_rpm"])):
+        raise HTTPException(400, "Set at least one minimum rate")
+    if mission["pickup_start"] and mission["pickup_end"] and mission["pickup_end"] < mission["pickup_start"]:
+        raise HTTPException(400, "Pickup-through date must be on or after pickup-from date")
+    if mission["floor_total"] and mission["target_total"] and mission["target_total"] < mission["floor_total"]:
+        raise HTTPException(400, "Target total cannot be below the minimum total")
+    if mission["floor_all_in_rpm"] and mission["target_all_in_rpm"] and mission["target_all_in_rpm"] < mission["floor_all_in_rpm"]:
+        raise HTTPException(400, "Target all-in RPM cannot be below the minimum all-in RPM")
+    if mode == "auto":
+        lane_issue = auto_lane_issue(mission)
+        if lane_issue:
+            raise HTTPException(400, lane_issue)
+    saved = db.insert("freight_missions", mission)
+    return {"mission": saved}
 
 
 @app.get("/freight/settings", response_class=HTMLResponse)
@@ -671,6 +882,10 @@ async def freight_mission_save(request: Request):
         return RedirectResponse("/freight/missions?tab=missions&notice=Target+all-in+RPM+cannot+be+below+the+minimum+all-in+RPM", 303)
     if data["floor_total"] and data["counter_amount"] and data["counter_amount"] < data["floor_total"]:
         return RedirectResponse("/freight/missions?tab=missions&notice=Counter+offer+cannot+be+below+the+minimum+total", 303)
+    if execution_mode == "auto":
+        lane_issue = auto_lane_issue(data)
+        if lane_issue:
+            return RedirectResponse(f"/freight/missions?tab=missions&notice={quote(lane_issue)}", 303)
     if row_id:
         db.update("freight_missions", row_id, data)
     else:

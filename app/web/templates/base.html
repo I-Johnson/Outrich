@@ -11,6 +11,7 @@
   <nav>
     <a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}" title="Loads"><svg class="i"><use href="#i-inbox"/></svg><span class="fx-nav-t">Loads</span>{% if fx_nav and fx_nav.needs_you %}<span class="fx-count num" title="{{ fx_nav.needs_you }} need you">{{ fx_nav.needs_you }}</span>{% endif %}</a>
     <a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}" title="Missions &amp; fleet"><svg class="i"><use href="#i-route"/></svg><span class="fx-nav-t">Missions &amp; fleet</span></a>
+    <a href="/freight/agent-test" class="{{'active' if request.url.path.startswith('/freight/agent-test') else ''}}" title="Agent test"><svg class="i"><use href="#i-bolt"/></svg><span class="fx-nav-t">Agent test</span></a>
     <a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}" title="Settings"><svg class="i"><use href="#i-settings"/></svg><span class="fx-nav-t">Settings</span></a>
   </nav>
   <div class="fx-foot">
@@ -30,7 +31,7 @@
 {% else %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
 {% if request.session.get('admin_workspace') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
 {% if workspace == 'freight' %}
-<a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}">Loads & conversations</a><a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}">Missions & fleet</a><a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}">Settings & templates</a>
+<a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}">Loads & conversations</a><a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}">Missions & fleet</a><a href="/freight/agent-test" class="{{'active' if request.url.path.startswith('/freight/agent-test') else ''}}">Agent test</a><a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}">Settings & templates</a>
 {% else %}
 <a href="/" class="{{'active' if request.url.path == '/' else ''}}">Overview</a><a href="/leads" class="{{'active' if request.url.path.startswith('/leads') else ''}}">Leads</a><a href="/scraper" class="{{'active' if request.url.path.startswith('/scraper') else ''}}">Discovery</a><a href="/templates" class="{{'active' if request.url.path.startswith('/templates') else ''}}">Templates</a><a href="/campaigns" class="{{'active' if request.url.path.startswith('/campaigns') else ''}}">Campaigns</a><a href="/pingram-inbox" class="{{'active' if request.url.path.startswith('/pingram-inbox') else ''}}">Pingram Inbox</a><a href="/settings" class="{{'active' if request.url.path.startswith('/settings') else ''}}">Settings</a>
 {% endif %}</nav>
