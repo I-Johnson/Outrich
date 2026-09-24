@@ -22,6 +22,7 @@ from app.adapters.mapbox_geocoding import search_locations
 from app.adapters.public_records import label_for_state
 from app.config import settings as env
 from app.core.ai_copywriter import generate_or_improve
+from app.core.auth import MIN_PASSWORD_LENGTH, hash_password, normalize_email as normalize_login_email, verify_password
 from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, seed_legacy_gmail_senders, sender_context
@@ -93,38 +94,127 @@ async def not_found(request: Request, exc: LookupError):
     return PlainTextResponse("Not found", status_code=404)
 
 
+PUBLIC_PATHS = {"/login", "/signup", "/admin/login", "/health"}
+PUBLIC_PREFIXES = ("/static/", "/webhooks/")
+# Paths a regular (non-admin) user may reach. Everything else is the admin's outreach engine.
+USER_PREFIXES = ("/freight",)
+USER_PATHS = {"/logout", "/templates/save"}
+SESSION_MAX_AGE = 60 * 60 * 24 * 30  # keep people signed in for 30 days
+
+
+def is_admin(request: Request) -> bool:
+    return bool(request.session.get("admin"))
+
+
+def home_for(request: Request) -> str:
+    return "/" if is_admin(request) else "/freight"
+
+
 @app.middleware("http")
 async def admin_auth(request: Request, call_next):
-    public = request.url.path in {"/login", "/health"} or request.url.path.startswith("/static/") or request.url.path.startswith("/webhooks/")
-    if not public and not request.session.get("admin"):
-        return RedirectResponse(f"/login?next={request.url.path}", 303)
+    path = request.url.path
+    public = path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
+    if not public:
+        if not (request.session.get("uid") or request.session.get("admin")):
+            return RedirectResponse(f"/login?next={quote(path)}", 303)
+        if not is_admin(request) and not (path in USER_PATHS or path == "/freight" or path.startswith("/freight/")):
+            # Signed-in customers only see Freight; the outreach engine stays admin-only.
+            return RedirectResponse("/freight", 303)
     response = await call_next(request)
     response.headers.update({"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin"})
     return response
 
 
 # Added after the auth middleware so session decoding wraps it.
-app.add_middleware(SessionMiddleware, secret_key=env.SESSION_SECRET, same_site="lax", https_only=env.PUBLIC_BASE_URL.startswith("https://"))
+app.add_middleware(SessionMiddleware, secret_key=env.SESSION_SECRET, max_age=SESSION_MAX_AGE, same_site="lax", https_only=env.PUBLIC_BASE_URL.startswith("https://"))
 
 
 def page(request: Request, name: str, **context):
     workspace = context.pop("workspace", "freight" if request.url.path.startswith("/freight") else "outreach")
+    if not is_admin(request): workspace = "freight"
     context.update({"request": request, "env": env, "app_settings": store.get("settings", 1) or {}, "workspace": workspace})
     return templates.TemplateResponse(request=request, name=name, context=context)
 
 
+def _rate_limited(request: Request) -> tuple[str, list[float], bool]:
+    key = request.client.host if request.client else "unknown"; now = time.time()
+    attempts = [x for x in LOGIN_ATTEMPTS.get(key, []) if now - x < 900]
+    return key, attempts, len(attempts) >= 8
+
+
+def _record_failure(key: str, attempts: list[float]):
+    attempts.append(time.time()); LOGIN_ATTEMPTS[key] = attempts
+
+
+def _is_env_admin(email: str, password: str) -> bool:
+    return bool(env.ADMIN_PASSWORD) and secrets.compare_digest(normalize_login_email(email), env.ADMIN_EMAIL) and secrets.compare_digest(password, env.ADMIN_PASSWORD)
+
+
+def _start_admin_session(request: Request):
+    request.session.clear(); request.session["admin"] = env.ADMIN_EMAIL; request.session["uid"] = ADMIN_OWNER_ID; request.session["role"] = "admin"
+
+
+def _start_user_session(request: Request, user: dict):
+    request.session.clear(); request.session["uid"] = str(user["id"]); request.session["role"] = user.get("role") or "user"
+    request.session["email"] = user.get("email") or ""
+    if user.get("role") == "admin": request.session["admin"] = user.get("email") or env.ADMIN_EMAIL
+
+
+def _find_user(email: str) -> dict | None:
+    rows = store.list("app_users", {"email": normalize_login_email(email)}, order="", limit=1)
+    return rows[0] if rows else None
+
+
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: str = ""): return page(request, "login.html", error=error)
+def login_page(request: Request, error: str = ""):
+    if request.session.get("uid") or request.session.get("admin"): return RedirectResponse(home_for(request), 303)
+    return page(request, "login.html", error=error)
 
 
 @app.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
-    key = request.client.host if request.client else "unknown"; now = time.time()
-    attempts = [x for x in LOGIN_ATTEMPTS.get(key, []) if now - x < 900]
-    if len(attempts) >= 8: return RedirectResponse("/login?error=Too+many+attempts.+Try+again+later.", 303)
-    if not secrets.compare_digest(email.lower().strip(), env.ADMIN_EMAIL) or not secrets.compare_digest(password, env.ADMIN_PASSWORD):
-        attempts.append(now); LOGIN_ATTEMPTS[key] = attempts; return RedirectResponse("/login?error=Invalid+email+or+password", 303)
-    LOGIN_ATTEMPTS.pop(key, None); request.session["admin"] = env.ADMIN_EMAIL; request.session["uid"] = ADMIN_OWNER_ID; return RedirectResponse("/", 303)
+    key, attempts, limited = _rate_limited(request)
+    if limited: return RedirectResponse("/login?error=Too+many+attempts.+Try+again+later.", 303)
+    if _is_env_admin(email, password):
+        LOGIN_ATTEMPTS.pop(key, None); _start_admin_session(request); return RedirectResponse("/", 303)
+    user = _find_user(email)
+    if not user or not verify_password(password, user.get("password_hash") or ""):
+        _record_failure(key, attempts); return RedirectResponse("/login?error=Invalid+email+or+password", 303)
+    LOGIN_ATTEMPTS.pop(key, None); store.update("app_users", user["id"], {"last_login_at": now_iso()})
+    _start_user_session(request, user); return RedirectResponse(home_for(request), 303)
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_page(request: Request, error: str = ""): return page(request, "admin_login.html", error=error)
+
+
+@app.post("/admin/login")
+def admin_login(request: Request, email: str = Form(...), password: str = Form(...)):
+    key, attempts, limited = _rate_limited(request)
+    if limited: return RedirectResponse("/admin/login?error=Too+many+attempts.+Try+again+later.", 303)
+    if not _is_env_admin(email, password):
+        _record_failure(key, attempts); return RedirectResponse("/admin/login?error=Invalid+email+or+password", 303)
+    LOGIN_ATTEMPTS.pop(key, None); _start_admin_session(request); return RedirectResponse("/", 303)
+
+
+@app.get("/signup", response_class=HTMLResponse)
+def signup_page(request: Request, error: str = ""):
+    if request.session.get("uid") or request.session.get("admin"): return RedirectResponse(home_for(request), 303)
+    return page(request, "signup.html", error=error, min_password=MIN_PASSWORD_LENGTH)
+
+
+@app.post("/signup")
+def signup(request: Request, name: str = Form(""), email: str = Form(...), password: str = Form(...)):
+    key, attempts, limited = _rate_limited(request)
+    if limited: return RedirectResponse("/signup?error=Too+many+attempts.+Try+again+later.", 303)
+    email = normalize_login_email(email); name = name.strip()[:120]
+    if not valid_email(email): return RedirectResponse("/signup?error=Enter+a+valid+email+address", 303)
+    if len(password) < MIN_PASSWORD_LENGTH: return RedirectResponse(f"/signup?error=Password+must+be+at+least+{MIN_PASSWORD_LENGTH}+characters", 303)
+    if email == env.ADMIN_EMAIL or _find_user(email):
+        _record_failure(key, attempts); return RedirectResponse("/login?error=That+email+already+has+an+account.+Log+in+instead.", 303)
+    user = store.insert("app_users", {"id": new_id(), "email": email, "password_hash": hash_password(password), "name": name, "role": "user", "created_at": now_iso(), "last_login_at": now_iso()})
+    seed_owner_defaults(str(user["id"]))
+    _start_user_session(request, user); return RedirectResponse("/freight?notice=Welcome+to+Outrich.+Start+by+connecting+your+Gmail.", 303)
 
 
 @app.post("/logout")
@@ -864,6 +954,7 @@ def template_list(request: Request, edit: str = "", vertical: str = "outreach"):
 async def template_save(request: Request):
     form = await request.form(); row_id = str(form.get("id") or "")
     vertical = "freight" if form.get("vertical") == "freight" else "outreach"
+    if vertical != "freight" and not is_admin(request): raise HTTPException(403, "Not allowed")
     data = {"name": str(form.get("name") or ""), "subject": str(form.get("subject") or ""), "body": str(form.get("body") or ""), "type": str(form.get("type") or "plain"), "angle_tag": str(form.get("angle_tag") or ""), "active": bool(form.get("active")), "vertical": vertical, "updated_at": now_iso()}
     if not all(str(data[field]).strip() for field in ("name", "subject", "body")):
         destination = "/freight/settings?tab=templates" if vertical == "freight" else "/templates?vertical=outreach"

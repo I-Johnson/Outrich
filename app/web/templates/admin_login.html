@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}Admin login{% endblock %}{% block content %}
+<div class="login-card"><div class="logo">O</div><h1>Admin login</h1><p>Sign in to the Outrich admin workspace.</p>{% if error %}<div class="error">{{error}}</div>{% endif %}
+<form method="post" action="/admin/login"><label>Email<input type="email" name="email" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form>
+<p class="auth-switch"><a href="{{ '/freight/settings' if request.session.get('uid') else '/login' }}">Back</a></p></div>
+{% endblock %}

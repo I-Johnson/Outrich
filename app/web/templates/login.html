@@ -1,4 +1,5 @@
-{% extends "base.html" %}{% block title %}Admin login{% endblock %}{% block content %}
-<div class="login-card"><div class="logo">O</div><h1>Welcome back</h1><p>Sign in to your private outreach workspace.</p>{% if error %}<div class="error">{{error}}</div>{% endif %}
-<form method="post" action="/login"><label>Email<input type="email" name="email" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form></div>
+{% extends "base.html" %}{% block title %}Log in · Outrich{% endblock %}{% block content %}
+<div class="login-card"><div class="logo">O</div><h1>Welcome back</h1><p>Log in to your Outrich workspace.</p>{% if error %}<div class="error">{{error}}</div>{% endif %}
+<form method="post" action="/login"><label>Email<input type="email" name="email" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Log in</button></form>
+<p class="auth-switch">New to Outrich? <a href="/signup">Create an account</a></p></div>
 {% endblock %}

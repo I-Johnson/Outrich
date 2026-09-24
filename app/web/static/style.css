@@ -791,6 +791,9 @@ select option { background: #ffffff; color: #09090b; }
 .login-card h1 { margin-bottom: 6px; letter-spacing: -0.03em; }
 .login-card form { display: grid; gap: 15px; margin-top: 24px; }
 .login-card button { width: 100%; padding: 11px; margin-top: 6px; }
+.login-card .field-note { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.login-card .auth-switch { margin: 18px 0 0; font-size: 13px; color: var(--muted); text-align: center; }
+.login-card .auth-switch a { color: inherit; font-weight: 650; text-decoration: underline; }
 
 /* Dialog */
 dialog {

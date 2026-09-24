@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}Sign up · Outrich{% endblock %}{% block content %}
+<div class="login-card"><div class="logo">O</div><h1>Create your account</h1><p>Start finding loads and emailing brokers in a few minutes.</p>{% if error %}<div class="error">{{error}}</div>{% endif %}
+<form method="post" action="/signup"><label>Name<input type="text" name="name" autocomplete="name" maxlength="120"></label><label>Email<input type="email" name="email" autocomplete="email" required></label><label>Password<input type="password" name="password" autocomplete="new-password" minlength="{{min_password}}" required><span class="field-note">At least {{min_password}} characters.</span></label><button>Create account</button></form>
+<p class="auth-switch">Already have an account? <a href="/login">Log in</a></p></div>
+{% endblock %}
