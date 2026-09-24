@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.hover-container { position: relative; display: inline-flex; align-items: center; }
+.hover-card {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 999;
+  width: 360px;
+  background: #ffffff;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px -4px rgba(0,0,0,0.18), 0 6px 12px -4px rgba(0,0,0,0.08);
+  padding: 12px 14px;
+  pointer-events: none;
+  text-align: left;
+}
+.hover-card::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 20px;
+  border-width: 6px;
+  border-style: solid;
+  border-color: #ffffff transparent transparent transparent;
+}
+.hover-container:hover .hover-card { display: block; }
+.hover-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11.5px; border-bottom: 1px solid #f1f5f9; padding-bottom: 4px; }
+.hover-card-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+  white-space: pre-wrap;
+  max-height: 110px;
+  overflow: hidden;
+  background: #f8fafc;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 8px;
+}
+.hover-card-tags { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; color: #64748b; font-weight: 550; }
+.data-badge { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; border: 1px solid #e2e8f0; }
+
+.source-item {
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.source-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; margin-bottom: 2px; }
+.source-val { font-size: 13px; font-weight: 550; color: #0f172a; word-break: break-word; }
+</style>
+
+<header>
+  <div>
+    <span class="eyebrow">Campaign</span>
+    <h1>{{campaign.name}}</h1>
+    <p>{{campaign.provider|upper}} · global cap {{app_settings.daily_cap or 20}} emails/day/sender · accounts 
+      {% set sender_emails = [] %}
+      {% for acc in campaign.gmail_accounts %}
+        {% set _ = sender_emails.append(gmail_account_emails.get(acc) or acc) %}
+      {% endfor %}
+      {{sender_emails|join(' + ')}}
+      · {{app_settings.min_delay_minutes or 3}}–{{app_settings.max_delay_minutes or 15}} min spacing</p>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span class="badge {{campaign.state}} large">{{campaign.state}}</span>
+  </div>
+</header>
+
+<div class="actions">
+  {% if campaign.state=='draft' %}
+    <form method="post" action="/campaigns/{{campaign.id}}/start">
+      <button data-confirm="Queue every eligible lead matching this campaign?">Start campaign</button>
+    </form>
+    {% if not logs %}
+      <form method="post" action="/campaigns/{{campaign.id}}/delete">
+        <button class="danger" data-confirm="Delete this unused draft campaign?">Delete campaign</button>
+      </form>
+    {% endif %}
+  {% elif campaign.state=='running' %}
+    <form method="post" action="/campaigns/{{campaign.id}}/state">
+      <input type="hidden" name="state" value="paused">
+      <button class="secondary">Pause</button>
+    </form>
+    <form method="post" action="/campaigns/{{campaign.id}}/state">
+      <input type="hidden" name="state" value="stopped">
+      <button class="danger" data-confirm="Stop this campaign? Queued messages will not send.">Stop</button>
+    </form>
+  {% elif campaign.state=='paused' %}
+    <form method="post" action="/campaigns/{{campaign.id}}/state">
+      <input type="hidden" name="state" value="running">
+      <button>Resume</button>
+    </form>
+  {% endif %}
+</div>
+
+{% set totals = performance.summary %}
+<section class="stats">
+  <article class="stat"><span class="icon blue">✉</span><b>{{totals.total}}</b><small>Total emails</small></article>
+  <article class="stat"><span class="icon amber">⏳</span><b>{{totals.scheduled}}</b><small>Scheduled</small></article>
+  <article class="stat"><span class="icon green">✓</span><b>{{totals.sent}}</b><small>Delivered</small></article>
+  <article class="stat"><span class="icon violet">↩</span><b>{{totals.replies}}</b><small>Replies</small></article>
+  <article class="stat"><span class="icon red">!</span><b>{{totals.bounced}}</b><small>Bounced</small></article>
+  <article class="stat"><span class="icon cyan">×</span><b>{{totals.failed}}</b><small>Failed</small></article>
+</section>
+
+{% if performance.templates %}
+<section class="panel">
+  <div class="panel-head"><div><h2>Template performance</h2><p>Delivery and manually recorded reply results by message.</p></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Template</th><th>Total</th><th>Delivered</th><th>Replies</th><th>Reply rate</th><th>Bounced</th><th>Failed</th></tr></thead>
+    <tbody>{% for row in performance.templates %}<tr><td><strong>{{row.name}}</strong></td><td>{{row.total}}</td><td>{{row.sent}}</td><td>{{row.replies}}</td><td>{{row.reply_rate}}%</td><td>{{row.bounced}}</td><td>{{row.failed}}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <div>
+      <h2 style="margin:0;">Send log ({{logs|length}} emails)</h2>
+      <p style="margin:2px 0 0;font-size:12.5px;color:var(--text-muted);">Hover over any subject to quick-preview, or click Preview for the full email and lead source data.</p>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Lead / Company</th>
+          <th>Subject & Preview</th>
+          <th>Trade / City</th>
+          <th>Scheduled</th>
+          <th>Status</th>
+          <th style="text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in logs %}
+          {% set c = l.client or {} %}
+          <tr id="row-{{l.id}}">
+            <td>
+              <strong style="color:var(--ink-heading);font-size:13.5px;display:block;">{{c.short_name or c.business_name or 'Unknown Lead'}}</strong>
+              <small style="color:var(--text-muted);font-size:12px;">
+                {% if c.owner_first_name %}{{c.owner_first_name}} · {% endif %}{{c.email or 'no email'}}
+              </small>
+            </td>
+
+            <td>
+              <div class="hover-container">
+                <a href="javascript:void(0)" onclick="openModal('{{l.id}}')" style="font-weight:600;font-size:13px;color:var(--ink-heading);text-decoration:none;">
+                  {{l.subject_sent or '(Empty Subject)'}}
+                </a>
+
+                <!-- Hover Card Preview -->
+                <div class="hover-card">
+                  <div class="hover-card-head">
+                    <strong>To: {{c.owner_first_name or c.short_name or 'Lead'}} &lt;{{c.email}}&gt;</strong>
+                    <span class="badge {{l.status}}" style="font-size:10px;padding:2px 6px;">{{l.status}}</span>
+                  </div>
+                  <div class="hover-card-body">{{l.body_sent[:200]}}{% if l.body_sent|length > 200 %}...{% endif %}</div>
+                  <div class="hover-card-tags">
+                    {% if c.category %}<span class="data-badge">🔨 {{c.category}}</span>{% endif %}
+                    {% if c.city %}<span class="data-badge">📍 {{c.city}}{% if c.state %}, {{c.state}}{% endif %}</span>{% endif %}
+                    {% if c.website %}<span class="data-badge">🌐 {{c.website}}</span>{% endif %}
+                  </div>
+                </div>
+              </div>
+            </td>
+
+            <td>
+              <span style="font-size:12.5px;display:block;">{{c.category or '—'}}</span>
+              <small style="color:var(--text-muted);font-size:11.5px;">{{c.city or '—'}}{% if c.state %}, {{c.state}}{% endif %}</small>
+            </td>
+
+            <td style="font-size:12.5px;white-space:nowrap;">
+              {{l.scheduled_for[:16].replace('T', ' ') if l.scheduled_for else '—'}}
+            </td>
+
+            <td>
+              <span class="badge {{l.status}}">{{l.status}}</span>
+              <small style="display:block;margin-top:4px;color:var(--text-muted);">From: {{gmail_account_emails.get(l.sender_account or '1') or ('Sender ' ~ (l.sender_account or '1'))}}</small>
+            </td>
+
+            <td style="text-align:right;white-space:nowrap;">
+              <button type="button" class="button secondary small" onclick="openModal('{{l.id}}')" style="padding:4px 9px;font-size:11.5px;margin-right:6px;">
+                👁️ Preview
+              </button>
+              {% if l.status in ['queued', 'failed'] %}
+                <form method="post" action="/email-log/{{l.id}}/send-now" style="display:inline-block;">
+                  <button class="button primary small" style="padding:4px 9px;font-size:11.5px;">{{'Send now' if l.status == 'queued' else 'Retry now'}}</button>
+                </form>
+              {% endif %}
+            </td>
+
+            <!-- Hidden Data Store for Modal -->
+            <div id="data-{{l.id}}" style="display:none;"
+              data-id="{{l.id}}"
+              data-status="{{l.status}}"
+              data-scheduled="{{l.scheduled_for or ''}}"
+              data-subject="{% if l.subject_sent %}{{l.subject_sent|e}}{% endif %}"
+              data-template="{% if l.template and l.template.name %}{{l.template.name|e}}{% endif %}"
+              data-body="{% if l.body_sent %}{{l.body_sent|e}}{% endif %}"
+              data-business="{% if c.business_name %}{{c.business_name|e}}{% endif %}"
+              data-short="{% if c.short_name %}{{c.short_name|e}}{% endif %}"
+              data-owner="{% if c.owner_first_name %}{{c.owner_first_name|e}}{% endif %}"
+              data-email="{% if c.email %}{{c.email|e}}{% endif %}"
+              data-phone="{% if c.phone %}{{c.phone|e}}{% endif %}"
+              data-website="{% if c.website %}{{c.website|e}}{% endif %}"
+              data-category="{% if c.category %}{{c.category|e}}{% endif %}"
+              data-location="{% if c.city %}{{c.city|e}}{% endif %}{% if c.state %}, {{c.state|e}}{% endif %}"
+              data-zip="{% if c.zip %}{{c.zip|e}}{% endif %}"
+              data-source="{% if c.source %}{{c.source|e}}{% endif %}"
+              data-angle="{% if c.outreach_angle %}{{c.outreach_angle|e}}{% endif %}"
+              data-notes="{% if c.notes %}{{c.notes|e}}{% endif %}"
+              data-error="{% if l.error %}{{l.error|e}}{% endif %}"
+            ></div>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="6" class="empty">Click "Start campaign" above to generate and queue emails.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Detailed Email & Source Data Modal Dialog -->
+<dialog id="preview-dialog" style="max-width:880px;width:94%;border-radius:14px;border:1px solid #e2e8f0;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);padding:0;background:#ffffff;">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+    <div>
+      <h2 id="modal-title" style="margin:0;font-size:18px;font-weight:750;color:#09090b;">Email & Lead Preview</h2>
+      <p id="modal-subtitle" style="margin:3px 0 0;font-size:12.5px;color:#64748b;"></p>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span id="modal-status-badge" class="badge"></span>
+      <button type="button" class="button ghost small" onclick="document.getElementById('preview-dialog').close()" style="border-radius:50%;width:30px;height:30px;padding:0;font-size:15px;">✕</button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:20px;padding:20px 22px;max-height:68vh;overflow-y:auto;">
+    <!-- Left Column: Rendered Outbound Email -->
+    <div>
+      <h3 style="margin:0 0 10px;font-size:13px;font-weight:750;text-transform:uppercase;letter-spacing:0.5px;color:#475569;">✉️ Rendered Email</h3>
+      <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <div style="background:#f8fafc;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-size:12.5px;display:flex;flex-direction:column;gap:5px;">
+          <div><span style="color:#64748b;font-weight:600;width:65px;display:inline-block;">To:</span> <strong id="modal-email-to" style="color:#0f172a;"></strong></div>
+          <div><span style="color:#64748b;font-weight:600;width:65px;display:inline-block;">Subject:</span> <strong id="modal-email-subject" style="color:#0f172a;"></strong></div>
+          <div><span style="color:#64748b;font-weight:600;width:65px;display:inline-block;">Template:</span> <span id="modal-email-template" style="color:#475569;font-weight:550;"></span></div>
+        </div>
+        <div id="modal-email-body" style="padding:16px 18px;font-size:13.5px;line-height:1.65;color:#1e293b;white-space:pre-wrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#ffffff;min-height:180px;"></div>
+      </div>
+      <div id="modal-error-box" style="display:none;margin-top:10px;padding:10px 12px;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;color:#b91c1c;font-size:12px;"></div>
+    </div>
+
+    <!-- Right Column: Source Data Breakdown -->
+    <div>
+      <h3 style="margin:0 0 10px;font-size:13px;font-weight:750;text-transform:uppercase;letter-spacing:0.5px;color:#475569;">📋 Lead & Source Data</h3>
+      <div id="modal-source-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;">
+    <span id="modal-footer-info" style="font-size:12px;color:#64748b;"></span>
+    <div style="display:flex;gap:10px;">
+      <button type="button" class="button secondary" onclick="document.getElementById('preview-dialog').close()">Close</button>
+      <form id="modal-send-form" method="post" action="">
+        <button id="modal-send-btn" class="button primary">Send now</button>
+      </form>
+    </div>
+  </div>
+</dialog>
+
+<script>
+function openModal(id) {
+  const el = document.getElementById('data-' + id);
+  if (!el) return;
+
+  const d = el.dataset;
+  const clean = (val) => (!val || val === 'None' || val === 'null' || val.trim() === '') ? '' : val.trim();
+
+  const business = clean(d.business);
+  const shortName = clean(d.short);
+  const owner = clean(d.owner);
+  const email = clean(d.email);
+  const location = clean(d.location);
+  const error = clean(d.error);
+
+  document.getElementById('modal-title').textContent = shortName || business || 'Lead Preview';
+  document.getElementById('modal-subtitle').textContent = (owner ? owner + ' · ' : '') + email;
+
+  const badge = document.getElementById('modal-status-badge');
+  badge.textContent = d.status;
+  badge.className = 'badge ' + d.status;
+
+  document.getElementById('modal-email-to').textContent = (owner ? owner + ' ' : '') + '<' + email + '>';
+  document.getElementById('modal-email-subject').textContent = d.subject || '(None)';
+  document.getElementById('modal-email-template').textContent = clean(d.template) || 'Standard';
+  document.getElementById('modal-email-body').textContent = d.body || '(No body rendered)';
+
+  const errBox = document.getElementById('modal-error-box');
+  if (error) {
+    errBox.style.display = 'block';
+    errBox.textContent = 'Error: ' + error;
+  } else {
+    errBox.style.display = 'none';
+  }
+
+  // Populate source data list
+  const list = document.getElementById('modal-source-list');
+  list.innerHTML = '';
+
+  const fields = [
+    { label: 'Business Name', val: business },
+    { label: 'Short Brand Name', val: shortName },
+    { label: 'Owner / Contact', val: owner },
+    { label: 'Email', val: email },
+    { label: 'Phone', val: clean(d.phone) },
+    { label: 'Website', val: clean(d.website), link: true },
+    { label: 'Category / Trade', val: clean(d.category) },
+    { label: 'Location', val: location + (clean(d.zip) ? ' ' + clean(d.zip) : '') },
+    { label: 'Lead Source', val: clean(d.source) },
+    { label: 'Outreach Context', val: clean(d.angle) || clean(d.notes) }
+  ];
+
+  fields.forEach(f => {
+    if (!f.val) return;
+    const div = document.createElement('div');
+    div.className = 'source-item';
+    div.innerHTML = `<span class="source-label">${f.label}</span>` +
+      (f.link ? `<a class="source-val" href="${f.val.startsWith('http') ? f.val : 'https://' + f.val}" target="_blank" style="color:#2563eb;">${f.val}</a>`
+              : `<span class="source-val">${f.val}</span>`);
+    list.appendChild(div);
+  });
+
+  document.getElementById('modal-footer-info').textContent = d.scheduled ? 'Scheduled: ' + d.scheduled.replace('T', ' ') : 'Not scheduled';
+
+  const sendForm = document.getElementById('modal-send-form');
+  const sendBtn = document.getElementById('modal-send-btn');
+  if (d.status === 'queued') {
+    sendForm.action = '/email-log/' + d.id + '/send-now';
+    sendBtn.style.display = 'inline-flex';
+  } else {
+    sendBtn.style.display = 'none';
+  }
+
+  document.getElementById('preview-dialog').showModal();
+}
+</script>
+{% endblock %}

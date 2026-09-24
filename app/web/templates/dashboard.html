@@ -1,0 +1,650 @@
+{% extends "base.html" %}
+{% block content %}
+<header>
+  <div>
+    <span class="eyebrow">Workspace</span>
+    <h1>Good morning</h1>
+    <p>Your outreach engine at a glance.</p>
+  </div>
+  <a class="button" href="/campaigns">New campaign</a>
+</header>
+
+<section class="stats">
+  <article class="stat"><span class="icon blue" style="font-size:16px;">👥</span><b>{{stats.leads}}</b><small>Total leads</small></article>
+  <article class="stat"><span class="icon amber" style="font-size:16px;">⏳</span><b>{{stats.queued}}</b><small>Ready to send</small></article>
+  <article class="stat"><span class="icon green" style="font-size:16px;">✉️</span><b>{{stats.sent}}</b><small>Emails sent{% if env.DRY_RUN %} (dry run){% endif %}</small></article>
+  <article class="stat"><span class="icon violet" style="font-size:16px;">💬</span><b>{{stats.replies}}</b><small>Replies</small></article>
+  <article class="stat"><span class="icon red" style="font-size:16px;">⚠️</span><b>{{stats.bounced}}</b><small>Bounced</small></article>
+  <article class="stat"><span class="icon cyan" style="font-size:16px;">🔍</span><b>{{stats.scrapes}}</b><small>Discovery jobs</small></article>
+</section>
+
+<style>
+  /* Command Center Styles */
+  .schedule-panel {
+    border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  }
+  .command-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .command-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .view-toggle {
+    display: inline-flex;
+    background: #f1f5f9;
+    padding: 3px;
+    border-radius: 8px;
+    gap: 2px;
+  }
+  .view-btn {
+    border: none;
+    background: none;
+    font-size: 12.5px;
+    font-weight: 550;
+    color: #64748b;
+    padding: 5px 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .view-btn.active {
+    background: #ffffff;
+    color: #0f172a;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    font-weight: 650;
+  }
+  .filter-select {
+    padding: 6px 10px;
+    font-size: 12.5px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: #ffffff;
+    color: #0f172a;
+  }
+  
+  /* Filter Tabs */
+  .provider-tabs {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--line, #e2e8f0);
+    padding-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .provider-tab {
+    background: none;
+    border: 1px solid var(--line, #e2e8f0);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 550;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .provider-tab:hover {
+    background: #f8fafc;
+    color: #0f172a;
+    border-color: #cbd5e1;
+  }
+  .provider-tab.active {
+    background: #0f172a;
+    color: #ffffff;
+    border-color: #0f172a;
+  }
+  .provider-tab.active.pingram-active {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+  }
+  .provider-tab.active.gmail-active {
+    background: #6366f1;
+    border-color: #6366f1;
+    color: #ffffff;
+  }
+
+  /* Summary Metrics Strip */
+  .schedule-summary-modern {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    background: #f8fafc;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+  }
+  .summary-metric {
+    display: flex;
+    flex-direction: column;
+  }
+  .summary-metric b {
+    font-size: 20px;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  .summary-metric span {
+    font-size: 11.5px;
+    color: #64748b;
+    font-weight: 500;
+  }
+
+  /* Chart Column Enhancements */
+  .chart-legend-modern {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    font-size: 12px;
+    color: #64748b;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-box {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+  }
+  .legend-box.pingram-sent { background: #0284c7; }
+  .legend-box.pingram-scheduled { background: #7dd3fc; border: 1px dashed #0284c7; }
+  .legend-box.gmail-sent { background: #6366f1; }
+  .legend-box.gmail-scheduled { background: #c7d2fe; border: 1px dashed #6366f1; }
+
+  /* Sender Quota Matrix */
+  .matrix-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .sender-card {
+    background: #ffffff;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 10px;
+    padding: 14px;
+    transition: all 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  }
+  .sender-card:hover {
+    border-color: #cbd5e1;
+    box-shadow: 0 4px 8px -2px rgba(0,0,0,0.05);
+  }
+  .sender-card-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .sender-card-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13.5px;
+    flex-shrink: 0;
+  }
+  .sender-card-avatar.pingram { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+  .sender-card-avatar.gmail   { background: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe; }
+  
+  .sender-card-meta {
+    min-width: 0;
+    flex: 1;
+  }
+  .sender-card-name {
+    font-weight: 650;
+    font-size: 13.5px;
+    color: #0f172a;
+    margin: 0;
+    line-height: 1.2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .sender-card-role {
+    font-size: 11px;
+    color: #64748b;
+    margin: 2px 0 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  .sender-progress-wrap {
+    background: #f1f5f9;
+    border-radius: 6px;
+    height: 7px;
+    overflow: hidden;
+    width: 100%;
+  }
+  .sender-progress-bar {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.3s ease;
+  }
+  .sender-progress-bar.pingram { background: #0284c7; }
+  .sender-progress-bar.gmail   { background: #6366f1; }
+
+  .sender-stats-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    color: #64748b;
+  }
+  .sender-stats-row strong {
+    color: #0f172a;
+  }
+</style>
+
+<section class="panel schedule-panel">
+  <div class="command-head">
+    <div>
+      <h2 style="margin:0 0 3px;">Outreach Activity & Delivery Calendar</h2>
+      <p id="schedule-subtitle" style="margin:0; font-size:13px; color:var(--muted);">Sent and queued emails across all representatives in your browser timezone.</p>
+    </div>
+    
+    <div class="command-controls">
+      <!-- View Toggle -->
+      <div class="view-toggle">
+        <button type="button" class="view-btn active" id="btn-view-timeline" onclick="switchView('timeline')">
+          📅 Daily Timeline
+        </button>
+        <button type="button" class="view-btn" id="btn-view-matrix" onclick="switchView('matrix')">
+          👥 Sender Quotas ({{ sender_stats|length }})
+        </button>
+      </div>
+
+      <!-- Quick Sender Selector -->
+      <select id="sender-selector" class="filter-select" onchange="onSenderSelectChange(this.value)">
+        <option value="all">All Representatives ({{ sender_stats|length }})</option>
+        <optgroup label="Pingram Reps (contractorops.ai)">
+          {% for s in sender_stats if s.provider == 'pingram' %}
+            <option value="{{ s.id }}">{{ s.display_name }} ({{ s.scheduled }} queued)</option>
+          {% endfor %}
+        </optgroup>
+        <optgroup label="Gmail Inboxes">
+          {% for s in sender_stats if s.provider != 'pingram' %}
+            <option value="{{ s.id }}">{{ s.display_name }} ({{ s.email }})</option>
+          {% endfor %}
+        </optgroup>
+      </select>
+    </div>
+  </div>
+
+  <!-- Provider Filter Tabs -->
+  <div class="provider-tabs">
+    <button type="button" class="provider-tab active" data-provider="all" onclick="filterByProvider('all', this)">
+      All Senders ({{ sender_stats|length }})
+    </button>
+    <button type="button" class="provider-tab" data-provider="pingram" onclick="filterByProvider('pingram', this)">
+      ⚡ Pingram Conveyor Belt ({{ pingram_reps_count }} Reps · {{ total_domain_cap }}/day max)
+    </button>
+    <button type="button" class="provider-tab" data-provider="gmail" onclick="filterByProvider('gmail', this)">
+      ✉ Gmail Inboxes ({{ gmail_senders_count }} Inboxes)
+    </button>
+  </div>
+
+  <!-- KPI Metrics Strip -->
+  <div class="schedule-summary-modern">
+    <div class="summary-metric">
+      <b id="schedule-total">0</b>
+      <span>Emails in view</span>
+    </div>
+    <div class="summary-metric">
+      <b id="schedule-sent" style="color:#0284c7;">0</b>
+      <span>Already delivered</span>
+    </div>
+    <div class="summary-metric">
+      <b id="schedule-upcoming" style="color:#0369a1;">0</b>
+      <span>Scheduled / Queued</span>
+    </div>
+    <div class="summary-metric">
+      <b id="active-senders-count">{{ sender_stats|length }}</b>
+      <span>Active senders</span>
+    </div>
+    <div class="summary-metric">
+      <b style="color:#15803d;">{{ total_domain_cap }}/day</b>
+      <span>Domain capacity</span>
+    </div>
+  </div>
+
+  <!-- VIEW 1: Daily Timeline Calendar Bar Chart -->
+  <div id="view-timeline-container">
+    <div class="chart-legend-modern">
+      <span class="legend-item"><span class="legend-box pingram-sent"></span> Pingram Sent</span>
+      <span class="legend-item"><span class="legend-box pingram-scheduled"></span> Pingram Scheduled (24/7 conveyor)</span>
+      <span class="legend-item"><span class="legend-box gmail-sent"></span> Gmail Sent</span>
+      <span class="legend-item"><span class="legend-box gmail-scheduled"></span> Gmail Scheduled (9am–5pm)</span>
+      <span style="margin-left:auto; font-size:11.5px; color:var(--muted);">Hover column for rep breakdown</span>
+    </div>
+    <div id="outreach-calendar" class="outreach-calendar" aria-label="Daily sent and scheduled email bar chart"></div>
+    <p id="schedule-empty" class="schedule-empty" hidden>No sent or scheduled emails match this view filter.</p>
+  </div>
+
+  <!-- VIEW 2: Sender Quotas & Roster Matrix -->
+  <div id="view-matrix-container" style="display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+      <p style="margin:0; font-size:12.5px; color:var(--muted);">
+        Live daily capacity, queued distribution, and delivery progress for all {{ sender_stats|length }} outreach identities.
+      </p>
+      <input type="text" id="matrix-search" placeholder="Search sender by name or email…" oninput="filterMatrixCards(this.value)" style="padding:6px 12px; font-size:12px; width:220px; border-radius:7px; border:1px solid var(--line);">
+    </div>
+
+    <div class="matrix-grid" id="matrix-grid">
+      {% for s in sender_stats %}
+        <div class="sender-card" data-provider="{{ s.provider }}" data-name="{{ s.display_name|lower }} {{ s.email|lower }} {{ s.signature|lower }}">
+          <div class="sender-card-top">
+            <div class="sender-card-avatar {{ s.provider }}">
+              {{ s.display_name[:1]|upper }}
+            </div>
+            <div class="sender-card-meta">
+              <div class="sender-card-name">
+                <span>{{ s.display_name }}</span>
+                {% if s.provider == 'pingram' %}
+                  <span class="badge running" style="font-size:10px; padding:1px 6px;">⚡ Pingram</span>
+                {% else %}
+                  <span class="badge" style="font-size:10px; padding:1px 6px; background:#f1f5f9; color:#475569;">✉ Gmail</span>
+                {% endif %}
+              </div>
+              <p class="sender-card-role" title="{{ s.signature }}">{{ s.signature or s.email }}</p>
+            </div>
+          </div>
+
+          <div>
+            <div class="sender-stats-row" style="margin-bottom:4px;">
+              <span>Daily quota: <strong>{{ s.sent_today }} / {{ s.daily_cap }} today</strong></span>
+              <span><strong>{{ s.scheduled }} queued</strong></span>
+            </div>
+            <div class="sender-progress-wrap">
+              <div class="sender-progress-bar {{ s.provider }}" style="width: {{ [s.utilization, 100]|min }}%;"></div>
+            </div>
+          </div>
+
+          <div class="sender-stats-row" style="border-top:1px solid #f1f5f9; padding-top:8px; margin-top:2px;">
+            <code style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--muted);">{{ s.email }}</code>
+            <button type="button" class="button link" onclick="selectSenderAndShowTimeline('{{ s.id }}')" style="font-size:11px; padding:0; color:#0284c7; font-weight:600;">
+              View on calendar &rarr;
+            </button>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<div class="grid-2">
+  <section class="panel">
+    <div class="panel-head"><div><h2>Campaigns</h2><p>Active and recent outreach</p></div><a href="/campaigns">View all</a></div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>State</th><th>Provider</th></tr></thead><tbody>{% for c in campaigns %}<tr><td><a href="/campaigns/{{c.id}}">{{c.name}}</a></td><td><span class="badge {{c.state}}">{{c.state}}</span></td><td>{{c.provider}}</td></tr>{% else %}<tr><td colspan="3" class="empty">No campaigns yet.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="panel">
+    <div class="panel-head"><div><h2>Quick start</h2><p>From setup to first send</p></div></div>
+    <ol class="steps"><li><a href="/settings">Complete your business profile</a><small>Sender, offer, and schedule</small></li><li><a href="/leads">Import or add leads</a><small>CSV preview catches problems first</small></li><li><a href="/templates">Review templates</a><small>Every detail comes from Settings</small></li><li><a href="/campaigns">Create a campaign</a><small>Start a slow, durable drip</small></li></ol>
+  </section>
+</div>
+
+<script id="schedule-events" type="application/json">{{ calendar_events|tojson }}</script>
+<script id="schedule-accounts" type="application/json">{{ calendar_accounts|tojson }}</script>
+<script id="schedule-senders" type="application/json">{{ sender_stats|tojson }}</script>
+<script>
+(() => {
+  const allEvents = JSON.parse(document.getElementById('schedule-events').textContent || '[]');
+  const accountLabels = JSON.parse(document.getElementById('schedule-accounts').textContent || '{}');
+  const allSenders = JSON.parse(document.getElementById('schedule-senders').textContent || '[]');
+  
+  // Mapping sender ID -> provider & display name
+  const sendersById = {};
+  allSenders.forEach(s => { sendersById[s.id] = s; });
+
+  let activeProvider = 'all';
+  let activeSenderId = 'all';
+
+  const chart = document.getElementById('outreach-calendar');
+  const empty = document.getElementById('schedule-empty');
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'browser local time';
+  document.getElementById('schedule-subtitle').textContent = `Sent and queued volume in ${timeZone}.`;
+
+  const dayParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const dayLabel = new Intl.DateTimeFormat(undefined, {
+    timeZone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  });
+
+  const keyFor = (date) => {
+    const parts = Object.fromEntries(dayParts.formatToParts(date).map(({type, value}) => [type, value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  };
+
+  function renderChart() {
+    chart.innerHTML = '';
+
+    // Filter events according to activeProvider and activeSenderId
+    const events = allEvents.filter(ev => {
+      const sender = sendersById[ev.account];
+      const provider = sender ? sender.provider : (ev.provider || 'gmail');
+      if (activeProvider !== 'all' && provider !== activeProvider) return false;
+      if (activeSenderId !== 'all' && ev.account !== activeSenderId) return false;
+      return true;
+    });
+
+    if (!events.length) {
+      chart.hidden = true;
+      empty.hidden = false;
+      document.getElementById('schedule-total').textContent = '0';
+      document.getElementById('schedule-sent').textContent = '0';
+      document.getElementById('schedule-upcoming').textContent = '0';
+      return;
+    }
+
+    chart.hidden = false;
+    empty.hidden = true;
+
+    // Group by Day and sub-breakdown by provider & status
+    const groups = new Map();
+    let totalSent = 0;
+    let totalUpcoming = 0;
+
+    for (const event of events) {
+      const date = new Date(event.timestamp);
+      if (Number.isNaN(date.getTime())) continue;
+      const key = keyFor(date);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          date,
+          pingram_sent: 0,
+          pingram_scheduled: 0,
+          gmail_sent: 0,
+          gmail_scheduled: 0,
+          by_account: {}
+        });
+      }
+      const g = groups.get(key);
+      const sender = sendersById[event.account];
+      const provider = sender ? sender.provider : (event.provider || 'gmail');
+      const isSent = event.status === 'sent';
+      const isPingram = provider === 'pingram';
+
+      if (isSent) {
+        totalSent++;
+        if (isPingram) g.pingram_sent++;
+        else g.gmail_sent++;
+      } else {
+        totalUpcoming++;
+        if (isPingram) g.pingram_scheduled++;
+        else g.gmail_scheduled++;
+      }
+
+      if (!g.by_account[event.account]) g.by_account[event.account] = {sent: 0, scheduled: 0};
+      if (isSent) g.by_account[event.account].sent++;
+      else g.by_account[event.account].scheduled++;
+    }
+
+    document.getElementById('schedule-total').textContent = totalSent + totalUpcoming;
+    document.getElementById('schedule-sent').textContent = totalSent;
+    document.getElementById('schedule-upcoming').textContent = totalUpcoming;
+
+    const days = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const dayTotal = (g) => g.pingram_sent + g.pingram_scheduled + g.gmail_sent + g.gmail_scheduled;
+    const maxDaily = Math.max(...days.map(([, g]) => dayTotal(g)), 1);
+
+    for (const [, day] of days) {
+      const count = dayTotal(day);
+      const column = document.createElement('div');
+      column.className = 'schedule-day';
+
+      const totalEl = document.createElement('b');
+      totalEl.className = 'schedule-day-total';
+      totalEl.textContent = count;
+
+      const plot = document.createElement('div');
+      plot.className = 'schedule-plot';
+
+      const bar = document.createElement('div');
+      bar.className = 'schedule-bar';
+      bar.style.height = `${Math.max(10, (count / maxDaily) * 168)}px`;
+
+      // Render segments: Pingram Sent, Pingram Scheduled, Gmail Sent, Gmail Scheduled
+      const segments = [
+        {count: day.pingram_sent, color: '#0284c7', label: 'Pingram sent'},
+        {count: day.pingram_scheduled, color: '#7dd3fc', label: 'Pingram scheduled'},
+        {count: day.gmail_sent, color: '#6366f1', label: 'Gmail sent'},
+        {count: day.gmail_scheduled, color: '#c7d2fe', label: 'Gmail scheduled'},
+      ];
+
+      for (const seg of segments) {
+        if (!seg.count) continue;
+        const span = document.createElement('span');
+        span.className = 'schedule-segment';
+        span.style.background = seg.color;
+        span.style.flexGrow = seg.count;
+        span.title = `${seg.label}: ${seg.count}`;
+        bar.appendChild(span);
+      }
+
+      plot.appendChild(bar);
+
+      const label = document.createElement('span');
+      label.className = 'schedule-day-label';
+      label.textContent = dayLabel.format(day.date);
+
+      const detail = document.createElement('small');
+      const sSum = day.pingram_sent + day.gmail_sent;
+      const qSum = day.pingram_scheduled + day.gmail_scheduled;
+      detail.textContent = `${sSum} sent · ${qSum} plan`;
+
+      // Build detailed hover tooltip
+      let repTooltip = `${dayLabel.format(day.date)}: ${count} total\n`;
+      if (day.pingram_sent + day.pingram_scheduled > 0) {
+        repTooltip += `• Pingram: ${day.pingram_sent} sent, ${day.pingram_scheduled} scheduled\n`;
+      }
+      if (day.gmail_sent + day.gmail_scheduled > 0) {
+        repTooltip += `• Gmail: ${day.gmail_sent} sent, ${day.gmail_scheduled} scheduled\n`;
+      }
+      column.title = repTooltip.trim();
+      column.append(totalEl, plot, label, detail);
+      chart.appendChild(column);
+    }
+  }
+
+  // Global functions attached to window for event listeners
+  window.filterByProvider = (provider, btn) => {
+    activeProvider = provider;
+    document.querySelectorAll('.provider-tab').forEach(el => {
+      el.classList.remove('active', 'pingram-active', 'gmail-active');
+    });
+    if (btn) {
+      btn.classList.add('active');
+      if (provider === 'pingram') btn.classList.add('pingram-active');
+      if (provider === 'gmail') btn.classList.add('gmail-active');
+    }
+    renderChart();
+    filterMatrixByProvider(provider);
+  };
+
+  window.onSenderSelectChange = (val) => {
+    activeSenderId = val;
+    renderChart();
+  };
+
+  window.selectSenderAndShowTimeline = (senderId) => {
+    activeSenderId = senderId;
+    const selector = document.getElementById('sender-selector');
+    if (selector) selector.value = senderId;
+    switchView('timeline');
+    renderChart();
+  };
+
+  window.switchView = (view) => {
+    const timelineEl = document.getElementById('view-timeline-container');
+    const matrixEl = document.getElementById('view-matrix-container');
+    const btnTimeline = document.getElementById('btn-view-timeline');
+    const btnMatrix = document.getElementById('btn-view-matrix');
+
+    if (view === 'timeline') {
+      timelineEl.style.display = 'block';
+      matrixEl.style.display = 'none';
+      btnTimeline.classList.add('active');
+      btnMatrix.classList.remove('active');
+    } else {
+      timelineEl.style.display = 'none';
+      matrixEl.style.display = 'block';
+      btnTimeline.classList.remove('active');
+      btnMatrix.classList.add('active');
+    }
+  };
+
+  window.filterMatrixCards = (query) => {
+    query = (query || '').toLowerCase().trim();
+    const cards = document.querySelectorAll('.sender-card');
+    cards.forEach(card => {
+      const matchProvider = (activeProvider === 'all' || card.dataset.provider === activeProvider);
+      const matchSearch = (!query || (card.dataset.name || '').includes(query));
+      card.style.display = (matchProvider && matchSearch) ? 'flex' : 'none';
+    });
+  };
+
+  function filterMatrixByProvider(provider) {
+    const query = (document.getElementById('matrix-search')?.value || '').toLowerCase().trim();
+    const cards = document.querySelectorAll('.sender-card');
+    cards.forEach(card => {
+      const matchProvider = (provider === 'all' || card.dataset.provider === provider);
+      const matchSearch = (!query || (card.dataset.name || '').includes(query));
+      card.style.display = (matchProvider && matchSearch) ? 'flex' : 'none';
+    });
+  }
+
+  // Initial render
+  renderChart();
+})();
+</script>
+{% endblock %}
+

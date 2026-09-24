@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+data/*.db
+data/*.db-wal
+data/*.db-shm
+__pycache__/
+*.pyc
+.venv/
+launch_and_marketing/
+**/node_modules/
+.DS_Store
+raw_screenshots*
+raw_videos*
+.pytest_cache/
+supabase/.temp/

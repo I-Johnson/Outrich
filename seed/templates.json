@@ -1,0 +1,177 @@
+[
+  {
+    "name": "General - Admin Automation in State",
+    "angle_tag": "admin_automation",
+    "type": "plain",
+    "subject": "{{category}} ops in {{city}}",
+    "body": "Hey {{owner_first_name}},\r\n\r\nI'm building a tool specifically for {{category}} businesses in {{state}} to automate the admin work and estimate follow-ups.\r\n\r\nWe're already helping around {{client_count}} {{client_noun}} streamline their operations so they can focus on actual jobs instead of paperwork.\r\n\r\nWould you be open to a quick 15-minute chat to see if {{product_name}} makes sense for {{short_name}}? You can grab a time here: {{booking_link}}\r\n\r\nThanks,\r\n{{sender_name}}"
+  },
+  {
+    "name": "General - Direct Intro & Demo Pitch",
+    "angle_tag": "direct_intro",
+    "type": "plain",
+    "subject": "{{short_name}}",
+    "body": "Hey {{short_name}},\n\n{{sender_name}} here. We built {{product_name}} to help {{category}} businesses handle leads, estimates, proposals, and follow-ups without stitching together five different tools. We're currently working with over {{client_count}} {{client_noun}} and would love your feedback.\n\nWorth a quick 20-30 minute demo? {{booking_link}}\n\n{{sender_name}}"
+  },
+  {
+    "name": "General - Feature Rundown & Local Proof",
+    "angle_tag": "feature_rundown",
+    "type": "plain",
+    "subject": "helping {{category}} businesses in {{city}}",
+    "body": "Hey {{short_name}},\r\n\r\n{{product_name}} helps teams capture leads, generate estimates, create proposals, follow up automatically, and coordinate their work.\r\n\r\nWe work with over {{client_count}} {{client_noun}} and would value your feedback. Quick demo: {{booking_link}}, or take a look: {{product_url}}\r\n\r\n{{Signature}}"
+  },
+  {
+    "name": "General - Founder Story & Family Business",
+    "angle_tag": "founder_story",
+    "type": "plain",
+    "subject": "quick question for {{owner_first_name}}",
+    "body": "Hey {{owner_first_name}},\r\n\r\nGrowing up in my family's {{category}} business https://www.topscorelandscaping.com/, I got tired of juggling a dozen different tools. Being an engineer, I built {{product_name}} ({{product_url}}) to handle everything in one simple place.\r\n\r\nIt helps {{client_noun}} capture leads, send quick estimates, and automate follow-ups without the busywork.\r\n\r\nRight now, {{client_count}}+ {{client_noun}}  across Texas and California are using it to run their day-to-day smoothly.\r\n\r\nOpen to checking out a quick 10-minute demo this week? You can grab a spot here: {{booking_link}}\r\n\r\n{{Signature}}"
+  },
+  {
+    "name": "General - Question Opener (Spreadsheet vs CRM)",
+    "angle_tag": "question",
+    "type": "plain",
+    "subject": "how do you handle new leads?",
+    "body": "Hey {{short_name}},\n\nQuick question: when a new lead comes in, how are you handling the estimate and follow-up today, spreadsheets, a CRM, or mostly by hand?\n\nI built {{product_name}} to make that workflow simpler. Happy to show you if it's relevant: {{booking_link}}\n\n{{sender_name}}"
+  },
+  {
+    "name": "General - Short Callback Request",
+    "angle_tag": "call_back",
+    "type": "plain",
+    "subject": "quick one for {{short_name}}",
+    "body": "Hey {{short_name}},\n\nI'm {{sender_name}}. I built a system that helps teams capture leads, send estimates and proposals, and follow up automatically. If that sounds useful, just reply here and I'll walk you through it.\n\n{{sender_name}}"
+  },
+  {
+    "name": "General - Simple HTML Intro Card",
+    "angle_tag": "html_styled",
+    "type": "html",
+    "subject": "{{short_name}}",
+    "body": "<div style=\"font:16px/1.55 Arial,sans-serif;color:#172033;max-width:560px\"><p>Hey {{short_name}},</p><p>{{sender_name}} here. We built <strong>{{product_name}}</strong> to help {{category}} businesses handle leads, estimates, proposals, and follow-ups.</p><p><a href=\"{{booking_link}}\" style=\"display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 16px;border-radius:6px\">Book a demo</a></p><p>{{sender_name}}</p></div>"
+  },
+  {
+    "name": "HVAC - Cold Season Surge & Dispatch",
+    "angle_tag": "hvac_cold_season",
+    "type": "plain",
+    "subject": "Ready for the upcoming cold season, {{owner_first_name}}?",
+    "body": "Hey {{owner_first_name}},\n\nWhen we are past September, the calls come in faster than any office can route them. The shops that win the season are the ones with scheduling, dispatch, and estimates running in one place instead of on sticky notes.\n\n{{product_name}} ({{product_url}}) handles the intake, books the visit, sends market based estimates, and follows up so no job slips while your team is slammed.\n\nWorth a 15 minute chat before the next spike? {{booking_link}}\n\n{{signature}}"
+  },
+  {
+    "name": "HVAC - Meta Angle 1: Commercial Maintenance Scouting",
+    "angle_tag": "hvac_meta_angle",
+    "type": "plain",
+    "subject": "Curious how we found you, {{owner_first_name}}?",
+    "body": "Hey {{owner_first_name}},\n\nCurious how this email reached you? It wasn't me, it was our AI.\n\nWe built an outreach engine that autonomously scouts local markets for commercial HVAC opportunities from property managers, HOAs, and facility directors, drafts personalized pitches, and delivers them. It just found {{short_name}}, wrote this email, and hit send.\n\nGetting the commercial lead is only half the battle. We also built {{product_name}} ({{product_url}}) to handle the rest, like an AI receptionist that answers emergency service calls 24/7, market-based equipment estimates, technician dispatching, and automated proposal follow-ups so you never lose a job to phone tag.\n\nWant me to run a quick search for your service area and show you the commercial HVAC maintenance contracts our AI can find?\n\n{{signature}}"
+  },
+  {
+    "name": "HVAC - Meta Angle 2: Exclusive Service Contracts vs Shared Leads",
+    "angle_tag": "hvac_meta_angle",
+    "type": "plain",
+    "subject": "tired of fighting over shared HVAC leads?",
+    "body": "Hey {{owner_first_name}},\n\nI'll let you in on a secret: I didn't manually type this email. Our AI searched your area, found {{short_name}}, and handled the outreach autonomously.\n\nHVAC contractors are using this exact system to find and pitch commercial service contracts and property managers directly, so they can stop burning cash on expensive, shared residential leads.\n\nAnd once those commercial opportunities respond, {{product_name}} ({{product_url}}) handles the operations: an AI receptionist that answers after-hours emergency calls, automated quote generation for unit changeouts, and instant technician dispatch.\n\nWe're working with about {{client_count}} {{client_noun}} right now to refine this. Open to a brief 15-minute chat to share your thoughts on what we've built?\n\n{{booking_link}}\n\n{{signature}}"
+  },
+  {
+    "name": "HVAC - Meta Angle 3: How We Found You (24/7 Dispatch & Intake)",
+    "angle_tag": "hvac_meta_angle",
+    "type": "plain",
+    "subject": "How we found {{short_name}}",
+    "body": "Hey {{owner_first_name}},\n\nWondering how we got your email? We didn't buy a stale list or bid on a shared lead.\n\nWe built an AI that actively scans your local market for commercial properties, reaches out to facility managers, and sets up high-ticket HVAC service agreements automatically. It identified {{short_name}}, and it's the exact engine we're handing to HVAC shops to bring commercial service contracts straight to their inbox.\n\nBeyond outbound leads, {{product_name}} ({{product_url}}) runs the daily intake: a 24/7 AI receptionist that collects equipment details from frantic homeowners, schedules technician visits on your calendar, and automates proposal follow-ups before competitors even call back.\n\nMind if I send over a quick screenshot of the commercial facilities and property managers our AI can pull up around {{city}}?\n\n{{signature}}"
+  },
+  {
+    "name": "HVAC - Quoting Speed & Fast Estimates",
+    "angle_tag": "hvac_quoting_speed",
+    "type": "plain",
+    "subject": "how fast does {{short_name}} send estimates?",
+    "body": "Hey {{owner_first_name}},\n\nHonest question. After a site visit, how long does it take {{short_name}} to get a professional estimate in the homeowner's inbox? The first shop to send a clean proposal usually wins the job, and most {{category}} teams lose days to manual quoting.\n\n{{product_name}} generates market based estimates, builds the proposal, and automates the follow up so you are always first.\n\nCurious how you are handling it today, and happy to show you ours: {{booking_link}}\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - 3D Visualizer Pitch",
+    "angle_tag": "remodeler_3d_feature",
+    "type": "plain",
+    "subject": "Streamlining leads + projects at {{short_name}}",
+    "body": "Hey {{owner_first_name}} ,\r\n\r\nI built {{product_name}} ({{product_url}}) to help remodeling businesses  like yours manage leads and projects in one place.\r\n\r\nWe work with about {{client_count}} {{client_noun}}. Some of the main features include:\r\n\r\n\u2022 AI receptionist: Answers customer calls, collects project details, texts leads back, and schedules visits.\r\n\r\n\u2022 3D project design: Create 3D designs to help customers visualize their projects.\r\n\r\n\u2022 Estimates and proposals: Generate market based estimates, create professional proposals, and automate follow ups.\r\n\r\n\u2022 Lead and team management: Find commercial leads through HOAs and property managers, and manage subcontractor availability and dispatch.\r\n\r\nI'd love to get your feedback on what we've built. Are you open to a brief 15 minute chat?\r\n\r\nYou can grab a time here: {{booking_link}}\r\n\r\n{{Signature}}\r\n"
+  },
+  {
+    "name": "Remodelers - AI Receptionist Intake (No URL)",
+    "angle_tag": "remodeling_1",
+    "type": "plain",
+    "subject": "Quick question about {{short_name}}",
+    "body": "Hey {{owner_first_name}},\n\nI came across {{short_name}} and wanted to reach out.\n\nWe built {{product_name}} for remodeling companies to help capture and manage leads without adding more work for the team.\n\nOur AI receptionist answers calls, collects project details, texts leads back, and can schedule visits automatically.\n\nCurious, how are you currently handling calls when nobody is available to answer?\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - AI Receptionist Intake (with URL)",
+    "angle_tag": "remodeling_1",
+    "type": "plain",
+    "subject": "Quick question about {{short_name}}",
+    "body": "Hey {{owner_first_name}},\n\nI came across {{short_name}} and wanted to reach out.\n\nWe built {{product_name}} ({{product_url}}) for remodeling companies to help capture and manage leads without adding more work for the team.\n\nOur AI receptionist answers calls, collects project details, texts leads back, and can schedule visits automatically.\n\nCurious, how are you currently handling calls when nobody is available to answer?\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Estimating & Proposals (No URL)",
+    "angle_tag": "remodeling_2",
+    "type": "plain",
+    "subject": "How are you handling estimates?",
+    "body": "Hey {{owner_first_name}},\n\nQuick question. How are you currently handling estimates and proposals at {{short_name}}?\n\nWe built {{product_name}} to help remodelers go from lead to estimate to proposal in one place, with market based estimates and automated follow ups.\n\nI'd be curious to see how you're doing this today.\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Estimating & Proposals (with URL)",
+    "angle_tag": "remodeling_2",
+    "type": "plain",
+    "subject": "How are you handling estimates?",
+    "body": "Hey {{owner_first_name}},\n\nQuick question. How are you currently handling estimates and proposals at {{short_name}}?\n\nWe built {{product_name}} ({{product_url}}) to help remodelers go from lead to estimate to proposal in one place, with market based estimates and automated follow ups.\n\nI'd be curious to see how you're doing this today.\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Full Suite & 3D Design (No URL)",
+    "angle_tag": "remodeling_4",
+    "type": "plain",
+    "subject": "Streamlining leads + projects at {{short_name}}",
+    "body": "Hey {{owner_first_name}},\n\nI built {{product_name}} to help remodeling businesses like {{short_name}} manage leads and projects in one place.\n\nWe work with about {{client_count}} {{client_noun}}.\n\nIt includes:\n\n\u2022 AI receptionist that answers calls, collects project details, texts leads back, and schedules visits.\n\n\u2022 3D project design for showing homeowners what their project could look like.\n\n\u2022 Estimates, proposals, and automated follow ups in one workflow.\n\nWould you be open to a brief 15 minute chat? I'd love to get your feedback on what we're building.\n\n{{booking_link}}\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Full Suite & 3D Design (with URL)",
+    "angle_tag": "remodeling_4",
+    "type": "plain",
+    "subject": "Streamlining leads + projects at {{short_name}}",
+    "body": "Hey {{owner_first_name}},\n\nI built {{product_name}} ({{product_url}}) to help remodeling businesses like {{short_name}} manage leads and projects in one place.\n\nWe work with about {{client_count}} {{client_noun}}.\n\nIt includes:\n\n\u2022 AI receptionist that answers calls, collects project details, texts leads back, and schedules visits.\n\n\u2022 3D project design for showing homeowners what their project could look like.\n\n\u2022 Estimates, proposals, and automated follow ups in one workflow.\n\nWould you be open to a brief 15 minute chat? I'd love to get your feedback on what we're building.\n\n{{booking_link}}\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Lead Maximizer (No URL)",
+    "angle_tag": "remodeling_3",
+    "type": "plain",
+    "subject": "More from the leads you already have",
+    "body": "Hey {{owner_first_name}},\n\nI built {{product_name}} for remodeling companies that want to make more of the leads they're already getting.\n\nIt helps handle incoming calls, collect project details, follow up with homeowners, and move opportunities through estimates and proposals.\n\nWe're working with about {{client_count}} {{client_noun}} so far.\n\nWould you be open to a quick look?\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Lead Maximizer (with URL)",
+    "angle_tag": "remodeling_3",
+    "type": "plain",
+    "subject": "More from the leads you already have",
+    "body": "Hey {{owner_first_name}},\n\nI built {{product_name}} ({{product_url}}) for remodeling companies that want to make more of the leads they're already getting.\n\nIt helps handle incoming calls, collect project details, follow up with homeowners, and move opportunities through estimates and proposals.\n\nWe're working with about {{client_count}} {{client_noun}} so far.\n\nWould you be open to a quick look?\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Meta Angle 1: How We Found You",
+    "angle_tag": "remodelers_meta_angle_1",
+    "type": "plain",
+    "subject": "Curious how we found you?",
+    "body": "Hey {{owner_first_name}},\n\nCurious how this email reached you? It wasn't me, it was our AI.\n\nWe built an outreach engine that autonomously scouts local markets for commercial opportunities from HOAs and property managers, drafts personalized pitches, and delivers them. It just found {{short_name}}, wrote this email, and hit send.\n\nBut getting the lead is only half the battle. We also built ContractorOps ({{product_url}}) to handle the rest of the job, like an AI receptionist that answers your calls 24/7, automated market-based estimates, 3D project designs, and team dispatching so you can manage everything in one place.\n\nWant me to run a quick search for your service area and show you the commercial jobs the AI can find?\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Meta Angle 2: Looking for More Leads",
+    "angle_tag": "remodelers_meta_angle_2",
+    "type": "plain",
+    "subject": "Are you looking for more leads? ",
+    "body": "Hey {{owner_first_name}},\r\n\r\nI\u2019ll let you in on a secret, I didn't manually write this email. Our AI searched your area, found {{short_name}}, and handled the outreach.\r\n\r\nContractors are using this exact system to automatically find and pitch commercial jobs so they can stop fighting over expensive shared leads. And it doesn't just stop at outreach. Once the AI finds those jobs, the platform also gives you an AI receptionist to handle incoming calls, quick proposal generators, and even 3D design software to help close the deal.\r\n\r\nWe're working with about 30 contractors right now to refine this. Open to a brief 15-minute chat to share your feedback on what we've built?\r\n\r\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Meta Angle 3: How We Got Your Email",
+    "angle_tag": "remodelers_meta_angle_3",
+    "type": "plain",
+    "subject": "How we got your email",
+    "body": "Hey {{owner_first_name}},\n\nCurious how we got your email? We didn't buy a list or pay for a shared lead.\n\nWe built an AI that actively hunts for commercial opportunities, finds the right contact, and sends a personalized message automatically. It found you, and it\u2019s the exact system we\u2019re equipping remodeling businesses with to bring warm deals straight to their inbox.\n\nNot only does it find the leads, but ContractorOps ({{product_url}}) actually helps you run the business, too. We baked in features like an AI receptionist that texts leads back instantly, professional proposal automation, 3D design visualization, and subcontractor management.\n\nMind if I send over a quick screenshot of the commercial jobs our AI can pull up around your zip code?\n\n{{signature}}"
+  },
+  {
+    "name": "Remodelers - Meta Angle 4: Exclusive Commercial Leads",
+    "angle_tag": "remodelers_meta_angle_4",
+    "type": "plain",
+    "subject": "Curious how we found {{short_name}}?",
+    "body": "Hey {{owner_first_name}},\n\nWondering how this email reached you? Our AI outreach engine found {{short_name}}, realized you were a great fit, and reached out automatically.\n\nWe built this engine to help remodeling businesses scale by finding their own exclusive commercial leads. But we didn't stop there, we also built out the rest of the platform to include a 24/7 AI receptionist, automated estimates, 3D project design, and crew dispatching so you can manage the entire lifecycle of those new leads.\n\nI\u2019d love to get your eyes on it and hear your thoughts as a local expert. Would you be open to a quick 15-minute chat this week?\n\n{{signature}}"
+  }
+]

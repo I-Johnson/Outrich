@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% block content %}
+<h1>Queue <small>{{rows|length}} waiting · now {{now}}</small></h1>
+
+<div class="row">
+  <div class="box">
+    <b>Drip {% if paused %}<span class="tag bounced">PAUSED</span>{% else %}<span class="tag sent">RUNNING</span>{% endif %}</b>
+    <div class="hint">Sends every {{settings.SCHEDULER_INTERVAL_MIN}} min, only {{settings.SEND_START_HOUR}}:00&ndash;{{settings.SEND_END_HOUR}}:00 <b>in each recipient's own timezone</b>.
+      {% if next_at %}Next due <b>{{next_at}}</b>.{% else %}Nothing scheduled.{% endif %}</div>
+    <form method="post" action="/queue/pause" style="display:inline">
+      <button class="{% if not paused %}danger{% endif %}">
+        {% if paused %}Resume drip{% else %}Pause drip{% endif %}</button>
+    </form>
+    <form method="post" action="/queue/send-due" style="display:inline">
+      <button>Send everything due now</button>
+    </form>
+  </div>
+  <div class="box">
+    <b>Scheduled per day</b>
+    <table style="margin-top:6px">
+      {% for d in per_day %}<tr><td class="mono">{{d.d}}</td><td>{{d.n}}</td></tr>
+      {% else %}<tr><td class="empty">Nothing queued.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<h2>Queued messages</h2>
+<table>
+  <tr><th>Send at (their time)</th><th>To</th><th>Company</th><th>From</th><th>Subject</th><th></th></tr>
+  {% for r in rows %}
+  <tr>
+    <td class="mono">{{r.send_local or 'immediate'}} <span class=hint>{{r.tzlabel}}</span></td>
+    <td class="mono">{{r.email}}</td>
+    <td>{{r.company}}</td>
+    <td>{{r.sender_name}}</td>
+    <td>{{r.subject}}</td>
+    <td><form method="post" action="/messages/{{r.id}}/send-now">
+      <input type="hidden" name="back" value="/queue">
+      <button class="mini">Send now</button></form></td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="empty">Queue is empty. Import leads, then queue a campaign.</td></tr>{% endfor %}
+</table>
+{% endblock %}

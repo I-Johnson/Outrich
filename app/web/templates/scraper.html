@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block head %}
+{% if jobs and jobs[0].status in ['queued','running'] %}<meta http-equiv="refresh" content="8">{% endif %}
+{% endblock %}
+{% block content %}
+<header>
+  <div>
+    <span class="eyebrow">Discovery</span>
+    <h1>Find businesses</h1>
+    <p>Search, crawl politely, validate, and deduplicate.</p>
+  </div>
+</header>
+
+<div class="grid-2">
+  <!-- Discovery Run Form -->
+  <section class="panel">
+    <h2>New discovery run</h2>
+    <form action="/scraper/jobs" method="post" class="stack" id="discovery-form">
+      <label>Who to look for
+        <input id="discovery-categories" name="categories" placeholder="HVAC contractors, roofers" required>
+      </label>
+      <div class="chips">
+        {% for x in ['HVAC contractors','roofers','plumbers','electricians','landscapers'] %}
+        <button type="button" class="chip" onclick="this.closest('form').categories.value+=(this.closest('form').categories.value?', ':'')+this.textContent;updateEstimate()">{{x}}</button>
+        {% endfor %}
+      </div>
+
+      <!-- Mapbox Location Search Component -->
+      <div class="loc-search-group">
+        <label>Where (City, State, or ZIP)</label>
+        <div class="loc-search-box">
+          <div class="loc-input-icon">
+            <span class="pin-icon">📍</span>
+            <input type="text" id="loc-search-input" placeholder="Search city, metro, or ZIP via Mapbox..." autocomplete="off">
+            <span id="loc-spinner" class="loc-spin" style="display:none;"></span>
+          </div>
+          <div id="loc-dropdown" class="loc-dropdown" style="display:none;"></div>
+        </div>
+        
+        <div id="selected-locations" class="chips" style="margin-top:6px;min-height:22px;"></div>
+        
+        <label style="margin-top:6px;">Target location list
+          <input type="text" id="hidden-locations" name="locations" placeholder="Austin, TX; Los Angeles, CA" required>
+          <small>Use the Mapbox search above to add verified cities, or edit directly (separate with semicolons).</small>
+        </label>
+        
+        <div class="chips" style="margin-top:4px;">
+          <small style="color:var(--muted);margin-right:4px;">Quick add:</small>
+          <span class="chip" onclick="addLocation('Austin, TX')">+ Austin, TX</span>
+          <span class="chip" onclick="addLocation('Dallas, TX')">+ Dallas, TX</span>
+          <span class="chip" onclick="addLocation('Houston, TX')">+ Houston, TX</span>
+          <span class="chip" onclick="addLocation('Los Angeles, CA')">+ Los Angeles, CA</span>
+          <span class="chip" onclick="addLocation('Miami, FL')">+ Miami, FL</span>
+        </div>
+      </div>
+
+      <label>Results per city
+        <input id="discovery-limit" type="number" name="result_limit" value="30" min="1" max="100">
+      </label>
+      <div class="estimate" id="serp-estimate">Choose at least one category and location to see the estimated SERP usage.</div>
+      <button>Queue jobs</button>
+    </form>
+  </section>
+
+  <!-- Preset Form -->
+  <section class="panel">
+    <h2>Save a preset</h2>
+    <form action="/scraper/presets" method="post" class="stack">
+      <label>Name<input name="name" placeholder="Texas metros" required></label>
+      <label>Categories<input name="categories" placeholder="HVAC contractors" required></label>
+      <label>Locations<input name="locations" placeholder="Austin, TX; Dallas, TX" required></label>
+      <label>Limit<input type="number" name="result_limit" value="30"></label>
+      <button class="secondary">Save preset</button>
+    </form>
+    {% if presets %}
+    <h3>Saved presets</h3>
+    {% for preset in presets %}
+    <div class="history">
+      <div><strong>{{preset.name}}</strong><small>{{preset.config.categories}} · {{preset.config.locations}}</small></div>
+      <button type="button" class="secondary compact" onclick='loadPreset({{preset.config|tojson}})'>Load</button>
+    </div>
+    {% endfor %}
+    {% endif %}
+    <h3>State sources</h3>
+    <p>Texas: <span class="badge">{{state_labels.TX}}</span> · California: <span class="badge">{{state_labels.CA}}</span></p>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Jobs</h2>
+      <p>Each category/city pair runs independently and retries safely.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Target</th>
+          <th>Status</th>
+          <th>Found</th>
+          <th>Saved</th>
+          <th>Discarded</th>
+          <th>Calls</th>
+          <th>Last scraped</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td><strong>{{j.category}}</strong><small>{{j.city}}, {{j.state}}</small></td>
+          <td><span class="badge {{j.status}}">{{j.status}}</span></td>
+          <td>{{j.found_count}}</td>
+          <td>{{j.saved_count}}</td>
+          <td>{{j.discarded_count}}</td>
+          <td>{{j.serp_calls_used}}</td>
+          <td>{{j.completed_at or '—'}}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">No discovery jobs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Recent discards</h2>
+  {% for d in discards %}
+  <div class="history">
+    <strong>{{d.business_name or 'Unknown business'}}</strong>
+    <span class="badge red">{{d.reason}}</span>
+  </div>
+  {% else %}
+  <p class="muted">No discarded results.</p>
+  {% endfor %}
+</section>
+
+<script>
+let debounceLocTimer = null;
+const locInput = document.getElementById('loc-search-input');
+const locDropdown = document.getElementById('loc-dropdown');
+const locSpinner = document.getElementById('loc-spinner');
+const hiddenLocs = document.getElementById('hidden-locations');
+const chipsContainer = document.getElementById('selected-locations');
+const categoriesInput = document.getElementById('discovery-categories');
+const limitInput = document.getElementById('discovery-limit');
+const estimate = document.getElementById('serp-estimate');
+
+function updateEstimate() {
+  const categories = (categoriesInput.value || '').split(',').map(s => s.trim()).filter(Boolean);
+  const locations = (hiddenLocs.value || '').split(';').map(s => s.trim()).filter(Boolean);
+  const resultLimit = Math.min(Math.max(Number(limitInput.value) || 1, 1), 100);
+  const jobCount = categories.length * locations.length;
+  if (!jobCount) {
+    estimate.textContent = 'Choose at least one category and location to see the estimated SERP usage.';
+    return;
+  }
+  const baseCalls = jobCount;
+  const maximumCalls = baseCalls + (jobCount * resultLimit * 2);
+  estimate.textContent = `Estimated SERP calls: ${baseCalls} initial map ${baseCalls === 1 ? 'search' : 'searches'}; up to ${maximumCalls} total only if every result needs both website and contact fallbacks.`;
+}
+
+function syncChipsFromInput() {
+  const parts = (hiddenLocs.value || '').split(';').map(s => s.trim()).filter(Boolean);
+  chipsContainer.innerHTML = '';
+  parts.forEach(loc => {
+    const chip = document.createElement('span');
+    chip.className = 'chip loc-chip';
+    chip.innerHTML = `📍 ${loc} <b onclick="removeLocation('${loc.replace(/'/g, "\\'")}')">&times;</b>`;
+    chipsContainer.appendChild(chip);
+  });
+}
+
+function addLocation(loc) {
+  let parts = (hiddenLocs.value || '').split(';').map(s => s.trim()).filter(Boolean);
+  if (!parts.includes(loc)) {
+    parts.push(loc);
+    hiddenLocs.value = parts.join('; ');
+    syncChipsFromInput();
+    updateEstimate();
+  }
+}
+
+function removeLocation(loc) {
+  let parts = (hiddenLocs.value || '').split(';').map(s => s.trim()).filter(Boolean);
+  parts = parts.filter(p => p !== loc);
+  hiddenLocs.value = parts.join('; ');
+  syncChipsFromInput();
+  updateEstimate();
+}
+
+function loadPreset(config) {
+  categoriesInput.value = config.categories || '';
+  hiddenLocs.value = config.locations || '';
+  limitInput.value = config.result_limit || 30;
+  syncChipsFromInput();
+  updateEstimate();
+  document.getElementById('discovery-form').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+hiddenLocs.addEventListener('input', () => { syncChipsFromInput(); updateEstimate(); });
+categoriesInput.addEventListener('input', updateEstimate);
+limitInput.addEventListener('input', updateEstimate);
+
+locInput.addEventListener('input', function() {
+  clearTimeout(debounceLocTimer);
+  const q = this.value.trim();
+  if (q.length < 2) {
+    locDropdown.style.display = 'none';
+    return;
+  }
+  locSpinner.style.display = 'inline-block';
+  debounceLocTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/locations/search?q=${encodeURIComponent(q)}`);
+      const results = await res.json();
+      locSpinner.style.display = 'none';
+      if (!results || results.length === 0) {
+        locDropdown.innerHTML = '<div class="loc-item-empty">No matching US locations found</div>';
+        locDropdown.style.display = 'block';
+        return;
+      }
+      locDropdown.innerHTML = '';
+      results.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'loc-item';
+        item.innerHTML = `<span class="loc-name">📍 ${r.value}</span><small class="loc-sub">${r.label}</small>`;
+        item.addEventListener('click', () => {
+          addLocation(r.value);
+          locInput.value = '';
+          locDropdown.style.display = 'none';
+        });
+        locDropdown.appendChild(item);
+      });
+      locDropdown.style.display = 'block';
+    } catch (e) {
+      locSpinner.style.display = 'none';
+    }
+  }, 220);
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.loc-search-box')) {
+    locDropdown.style.display = 'none';
+  }
+});
+
+// Initial sync if default values exist
+syncChipsFromInput();
+updateEstimate();
+</script>
+{% endblock %}

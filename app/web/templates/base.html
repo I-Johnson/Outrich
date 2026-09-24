@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Outreach{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=20260922-campaign-builder">{% block head %}{% endblock %}</head>
+<body>{% if request.session.get('admin') %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
+<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div><nav>
+{% if workspace == 'freight' %}
+<a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}">Loads & conversations</a><a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}">Missions & fleet</a><a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}">Settings & templates</a>
+{% else %}
+<a href="/" class="{{'active' if request.url.path == '/' else ''}}">Overview</a><a href="/leads" class="{{'active' if request.url.path.startswith('/leads') else ''}}">Leads</a><a href="/scraper" class="{{'active' if request.url.path.startswith('/scraper') else ''}}">Discovery</a><a href="/templates" class="{{'active' if request.url.path.startswith('/templates') else ''}}">Templates</a><a href="/campaigns" class="{{'active' if request.url.path.startswith('/campaigns') else ''}}">Campaigns</a><a href="/pingram-inbox" class="{{'active' if request.url.path.startswith('/pingram-inbox') else ''}}">Pingram Inbox</a><a href="/settings" class="{{'active' if request.url.path.startswith('/settings') else ''}}">Settings</a>
+{% endif %}</nav>
+<div class="aside-foot"><span class="dot {{'live' if not env.DRY_RUN else ''}}"></span>{{'Live sending' if not env.DRY_RUN else 'Dry run'}}<form action="/logout" method="post"><button class="link">Sign out</button></form></div></aside>{% endif %}
+<main class="{{'auth' if not request.session.get('admin') else ''}}">{% if request.query_params.get('notice') %}<div class="notice">{{request.query_params.get('notice')}}</div>{% endif %}{% block content %}{% endblock %}</main>
+<script>document.querySelectorAll('[data-confirm]').forEach(x=>x.addEventListener('click',e=>{if(!confirm(x.dataset.confirm))e.preventDefault()}));</script>{% block scripts %}{% endblock %}</body></html>
