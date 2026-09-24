@@ -32,6 +32,7 @@ from app.core.lead_status import delete_unused_client, set_client_status
 from app.core.schedule import calendar_events
 from app.core.sender import cancel_campaign_queue, delete_campaign, queue_campaign, refresh_campaign_states, send_due
 from app.core.template_engine import render_template, unknown_variables
+from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import count, init_db, new_id, now_iso, store
 from app.jobs import scheduler
 
@@ -49,9 +50,47 @@ def seed_templates():
         stamp = now_iso(); store.insert("email_templates", {"id": new_id(), **item, "active": True, "created_at": stamp, "updated_at": stamp})
 
 
+def current_owner(request: Request) -> str | None:
+    """Owner id for the signed-in session; the env admin owns the legacy data."""
+    uid = request.session.get("uid")
+    if uid:
+        return str(uid)
+    return ADMIN_OWNER_ID if request.session.get("admin") else None
+
+
+def freight_store(request: Request) -> OwnerStore:
+    owner = current_owner(request)
+    if not owner:
+        raise HTTPException(401, "Sign in required")
+    return OwnerStore(store, owner)
+
+
+def ensure_admin_user():
+    """Keep an app_users row for the env admin so owner_id always points at a user."""
+    existing = store.get("app_users", ADMIN_OWNER_ID)
+    email = env.ADMIN_EMAIL
+    if not existing:
+        store.insert("app_users", {"id": ADMIN_OWNER_ID, "email": email, "password_hash": "", "name": "Admin", "role": "admin", "created_at": now_iso()})
+    elif existing.get("email") != email:
+        store.update("app_users", ADMIN_OWNER_ID, {"email": email})
+
+
+def seed_owner_defaults(owner_id: str):
+    """Give an owner their own freight template and settings row."""
+    scoped = OwnerStore(store, owner_id)
+    seed_freight_template(scoped); seed_freight_settings(scoped)
+
+
 @app.on_event("startup")
 def startup():
-    init_db(); seed_templates(); seed_freight_template(); seed_freight_settings(); seed_legacy_gmail_senders(); scheduler.start()
+    init_db(); ensure_admin_user(); seed_templates()
+    admin = OwnerStore(store, ADMIN_OWNER_ID)
+    seed_legacy_gmail_senders(admin); seed_owner_defaults(ADMIN_OWNER_ID); scheduler.start()
+
+
+@app.exception_handler(LookupError)
+async def not_found(request: Request, exc: LookupError):
+    return PlainTextResponse("Not found", status_code=404)
 
 
 @app.middleware("http")
@@ -85,7 +124,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     if len(attempts) >= 8: return RedirectResponse("/login?error=Too+many+attempts.+Try+again+later.", 303)
     if not secrets.compare_digest(email.lower().strip(), env.ADMIN_EMAIL) or not secrets.compare_digest(password, env.ADMIN_PASSWORD):
         attempts.append(now); LOGIN_ATTEMPTS[key] = attempts; return RedirectResponse("/login?error=Invalid+email+or+password", 303)
-    LOGIN_ATTEMPTS.pop(key, None); request.session["admin"] = env.ADMIN_EMAIL; return RedirectResponse("/", 303)
+    LOGIN_ATTEMPTS.pop(key, None); request.session["admin"] = env.ADMIN_EMAIL; request.session["uid"] = ADMIN_OWNER_ID; return RedirectResponse("/", 303)
 
 
 @app.post("/logout")
@@ -183,18 +222,19 @@ def _optional_int(value) -> int | None:
 
 @app.get("/freight", response_class=HTMLResponse)
 def freight_dashboard(request: Request, load_id: str = ""):
-    loads = store.list("freight_loads", order="updated_at desc", limit=500)
-    missions = store.list("freight_missions", order="created_at desc", limit=500)
-    profiles = store.list("freight_truck_profiles", order="created_at desc", limit=500)
+    db = freight_store(request)
+    loads = db.list("freight_loads", order="updated_at desc", limit=500)
+    missions = db.list("freight_missions", order="created_at desc", limit=500)
+    profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     mission_map = {str(row["id"]): row for row in missions}
     profile_map = {str(row["id"]): row for row in profiles}
-    threads = store.list("freight_threads", order="updated_at desc", limit=1000)
+    threads = db.list("freight_threads", order="updated_at desc", limit=1000)
     thread_map = {str(row["load_id"]): row for row in threads}
-    open_alerts = store.list("freight_alerts", {"status": "open"}, order="created_at desc", limit=200)
+    open_alerts = db.list("freight_alerts", {"status": "open"}, order="created_at desc", limit=200)
     alerts_by_thread: dict[str, list[dict]] = {}
     for alert in open_alerts:
         alerts_by_thread.setdefault(str(alert.get("thread_id")), []).append(alert)
-    pending_drafts = store.list("freight_drafts", {"status": "pending"}, order="created_at desc", limit=500)
+    pending_drafts = db.list("freight_drafts", {"status": "pending"}, order="created_at desc", limit=500)
     drafts_by_thread = {str(row["thread_id"]): row for row in pending_drafts}
     for load in loads:
         mission = mission_map.get(str(load.get("mission_id"))) or {}
@@ -209,14 +249,14 @@ def freight_dashboard(request: Request, load_id: str = ""):
     selected = next((row for row in loads if str(row["id"]) == str(load_id)), None) or (loads[0] if loads else None)
     messages = []
     if selected and selected.get("thread"):
-        raw_messages = store.list("freight_messages", {"thread_id": selected["thread"]["id"]}, order="created_at asc", limit=500)
+        raw_messages = db.list("freight_messages", {"thread_id": selected["thread"]["id"]}, order="created_at asc", limit=500)
         messages = [format_freight_message(dict(m)) for m in raw_messages]
-    cfg = store.get("settings", 1) or {}
-    freight_settings = store.get("freight_settings", 1) or {}
-    gmail_senders = [row for row in list_gmail_senders(active_only=True, storage=store, cfg=cfg) if row.get("provider", "gmail") == "gmail"]
-    freight_templates = store.list("email_templates", {"active": True, "vertical": "freight"}, order="created_at asc", limit=200)
+    cfg = db.get("settings", 1) or {}
+    freight_settings = db.get("freight_settings", 1) or {}
+    gmail_senders = [row for row in list_gmail_senders(active_only=True, storage=db, cfg=cfg) if row.get("provider", "gmail") == "gmail"]
+    freight_templates = db.list("email_templates", {"active": True, "vertical": "freight"}, order="created_at asc", limit=200)
     default_template = next((t for t in freight_templates if str(t["id"]) == str(freight_settings.get("default_template_id"))), None) or (freight_templates[0] if freight_templates else None)
-    cursors = store.list("freight_mail_cursors", order="updated_at desc", limit=100)
+    cursors = db.list("freight_mail_cursors", order="updated_at desc", limit=100)
     return page(
         request, "freight.html", workspace="freight", loads=loads, selected_load=selected,
         messages=messages, missions=missions, profiles=profiles, freight_templates=freight_templates,
@@ -227,28 +267,30 @@ def freight_dashboard(request: Request, load_id: str = ""):
 
 @app.get("/freight/missions", response_class=HTMLResponse)
 def freight_missions(request: Request, mission_id: str = "", profile_id: str = "", tab: str = ""):
-    missions = store.list("freight_missions", order="created_at desc", limit=500)
-    profiles = store.list("freight_truck_profiles", order="created_at desc", limit=500)
-    fsettings = store.get("freight_settings", 1) or {}
+    db = freight_store(request)
+    missions = db.list("freight_missions", order="created_at desc", limit=500)
+    profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
+    fsettings = db.get("freight_settings", 1) or {}
     active_tab = tab or ("trucks" if profile_id else "missions")
     return page(
         request, "freight_missions.html", workspace="freight", missions=missions, profiles=profiles,
         freight_settings=fsettings, active_tab=active_tab,
-        edit_mission=store.get("freight_missions", mission_id) if mission_id else None,
-        edit_profile=store.get("freight_truck_profiles", profile_id) if profile_id else None,
+        edit_mission=db.get("freight_missions", mission_id) if mission_id else None,
+        edit_profile=db.get("freight_truck_profiles", profile_id) if profile_id else None,
     )
 
 
 @app.get("/freight/settings", response_class=HTMLResponse)
 def freight_settings_page(request: Request, tab: str = "identity", edit_template: str = ""):
-    cfg = store.get("settings", 1) or {}
-    senders = [row for row in list_gmail_senders(active_only=True, storage=store, cfg=cfg) if row.get("provider", "gmail") == "gmail"]
-    freight_templates = store.list("email_templates", {"active": True, "vertical": "freight"}, order="created_at asc", limit=200)
-    fsettings = store.get("freight_settings", 1) or {}
+    db = freight_store(request)
+    cfg = db.get("settings", 1) or {}
+    senders = [row for row in list_gmail_senders(active_only=True, storage=db, cfg=cfg) if row.get("provider", "gmail") == "gmail"]
+    freight_templates = db.list("email_templates", {"active": True, "vertical": "freight"}, order="created_at asc", limit=200)
+    fsettings = db.get("freight_settings", 1) or {}
     default_template = next((t for t in freight_templates if str(t["id"]) == str(fsettings.get("default_template_id"))), None) or (freight_templates[0] if freight_templates else None)
-    edit_tpl = store.get("email_templates", edit_template) if edit_template else None
-    missions = store.list("freight_missions", order="created_at desc", limit=500)
-    profiles = store.list("freight_truck_profiles", order="created_at desc", limit=500)
+    edit_tpl = db.get("email_templates", edit_template) if edit_template else None
+    missions = db.list("freight_missions", order="created_at desc", limit=500)
+    profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     return page(
         request, "freight_settings.html", workspace="freight",
         freight_settings=fsettings, gmail_senders=senders,
@@ -260,9 +302,10 @@ def freight_settings_page(request: Request, tab: str = "identity", edit_template
 
 @app.post("/freight/settings")
 async def freight_settings_save(request: Request):
+    db = freight_store(request)
     form = await request.form()
-    sender_ids = {str(row["id"]) for row in list_gmail_senders(active_only=True, storage=store, cfg=store.get("settings", 1) or {}) if row.get("provider", "gmail") == "gmail"}
-    template_ids = {str(row["id"]) for row in store.list("email_templates", {"active": True, "vertical": "freight"}, order="", limit=200)}
+    sender_ids = {str(row["id"]) for row in list_gmail_senders(active_only=True, storage=db, cfg=db.get("settings", 1) or {}) if row.get("provider", "gmail") == "gmail"}
+    template_ids = {str(row["id"]) for row in db.list("email_templates", {"active": True, "vertical": "freight"}, order="", limit=200)}
     sender_id = str(form.get("default_sender_account") or "")
     template_id = str(form.get("default_template_id") or "")
     if sender_id not in sender_ids or template_id not in template_ids:
@@ -275,12 +318,13 @@ async def freight_settings_save(request: Request):
         "default_template_id": template_id,
         "updated_at": now_iso(),
     }
-    store.update("freight_settings", 1, values)
+    db.update("freight_settings", 1, values)
     return RedirectResponse("/freight/settings?notice=Freight+settings+saved", 303)
 
 
 @app.post("/freight/senders/add")
 async def freight_sender_add(request: Request):
+    db = freight_store(request)
     form = await request.form()
     email = normalize_email(str(form.get("email") or ""))
     password = str(form.get("app_password") or "").replace(" ", "").strip()
@@ -293,11 +337,11 @@ async def freight_sender_add(request: Request):
     if not password:
         return RedirectResponse("/freight/settings?notice=Google+App+Password+is+required", 303)
 
-    existing = [row for row in list_gmail_senders(storage=store) if str(row.get("email") or "").lower() == email]
+    existing = [row for row in list_gmail_senders(storage=db) if str(row.get("email") or "").lower() == email]
     stamp = now_iso()
     if existing:
         sender_id = str(existing[0]["id"])
-        store.update("gmail_senders", sender_id, {
+        db.update("gmail_senders", sender_id, {
             "app_password_encrypted": encrypt_secret(password),
             "display_name": display_name or existing[0].get("display_name") or "Freight Dispatch",
             "reply_to": reply_to or existing[0].get("reply_to") or email,
@@ -306,7 +350,7 @@ async def freight_sender_add(request: Request):
         })
     else:
         sender_id = new_id()
-        store.insert("gmail_senders", {
+        db.insert("gmail_senders", {
             "id": sender_id,
             "email": email,
             "display_name": display_name or "Freight Dispatch",
@@ -320,8 +364,8 @@ async def freight_sender_add(request: Request):
         })
 
     if auto_select:
-        fsettings = store.get("freight_settings", 1) or {}
-        store.update("freight_settings", 1, {
+        fsettings = db.get("freight_settings", 1) or {}
+        db.update("freight_settings", 1, {
             "default_sender_account": sender_id,
             "sender_name": display_name or fsettings.get("sender_name") or "Freight Dispatch",
             "reply_to": reply_to or fsettings.get("reply_to") or email,
@@ -333,6 +377,7 @@ async def freight_sender_add(request: Request):
 
 @app.post("/freight/profiles/save")
 async def freight_profile_save(request: Request):
+    db = freight_store(request)
     form = await request.form()
     row_id = str(form.get("id") or "")
     stamp = now_iso()
@@ -356,14 +401,15 @@ async def freight_profile_save(request: Request):
     if not data["name"]:
         return RedirectResponse("/freight/missions?tab=trucks&notice=Truck+profile+name+is+required", 303)
     if row_id:
-        store.update("freight_truck_profiles", row_id, data)
+        db.update("freight_truck_profiles", row_id, data)
     else:
-        row_id = new_id(); store.insert("freight_truck_profiles", {"id": row_id, **data, "created_at": stamp})
+        row_id = new_id(); db.insert("freight_truck_profiles", {"id": row_id, **data, "created_at": stamp})
     return RedirectResponse(f"/freight/missions?tab=trucks&profile_id={row_id}&notice=Truck+profile+saved", 303)
 
 
 @app.post("/freight/missions/save")
 async def freight_mission_save(request: Request):
+    db = freight_store(request)
     form = await request.form()
     row_id = str(form.get("id") or "")
     stamp = now_iso()
@@ -424,31 +470,32 @@ async def freight_mission_save(request: Request):
     if data["floor_total"] and data["counter_amount"] and data["counter_amount"] < data["floor_total"]:
         return RedirectResponse("/freight/missions?tab=missions&notice=Counter+offer+cannot+be+below+the+minimum+total", 303)
     if row_id:
-        store.update("freight_missions", row_id, data)
+        db.update("freight_missions", row_id, data)
     else:
-        row_id = new_id(); store.insert("freight_missions", {"id": row_id, **data, "created_at": stamp})
+        row_id = new_id(); db.insert("freight_missions", {"id": row_id, **data, "created_at": stamp})
     return RedirectResponse(f"/freight/missions?tab=missions&mission_id={row_id}&notice=Mission+saved", 303)
 
 
 @app.post("/freight/loads/send")
 async def freight_load_send(request: Request):
+    db = freight_store(request)
     form = await request.form()
     mission_id = str(form.get("mission_id") or "")
-    mission = store.get("freight_missions", mission_id)
+    mission = db.get("freight_missions", mission_id)
     if not mission:
         return RedirectResponse("/freight?notice=Choose+a+mission", 303)
     profile_id = str(form.get("truck_profile_id") or mission.get("truck_profile_id") or "")
-    profile = store.get("freight_truck_profiles", profile_id) if profile_id else None
+    profile = db.get("freight_truck_profiles", profile_id) if profile_id else None
     if not profile:
         return RedirectResponse("/freight?notice=Choose+a+truck+profile", 303)
-    freight_settings = store.get("freight_settings", 1) or {}
+    freight_settings = db.get("freight_settings", 1) or {}
     sender_account = str(freight_settings.get("default_sender_account") or "")
-    active_senders = [s for s in list_gmail_senders(active_only=True, storage=store, cfg=store.get("settings", 1) or {}) if s.get("provider", "gmail") == "gmail"]
+    active_senders = [s for s in list_gmail_senders(active_only=True, storage=db, cfg=db.get("settings", 1) or {}) if s.get("provider", "gmail") == "gmail"]
     if not sender_account or not any(str(s["id"]) == sender_account for s in active_senders):
         if active_senders:
             sender_account = str(active_senders[0]["id"])
     template_id = str(freight_settings.get("default_template_id") or "")
-    freight_templates = store.list("email_templates", {"active": True, "vertical": "freight"}, order="created_at asc", limit=100)
+    freight_templates = db.list("email_templates", {"active": True, "vertical": "freight"}, order="created_at asc", limit=100)
     if not template_id or not any(str(t["id"]) == template_id for t in freight_templates):
         if freight_templates:
             template_id = str(freight_templates[0]["id"])
@@ -475,9 +522,9 @@ async def freight_load_send(request: Request):
     }
     if not valid_email(row["broker_email"]):
         return RedirectResponse("/freight?notice=Enter+a+valid+broker+email", 303)
-    store.insert("freight_loads", row)
+    db.insert("freight_loads", row)
     try:
-        send_first_touch(load_id)
+        send_first_touch(load_id, storage=db)
     except Exception as exc:
         return RedirectResponse(f"/freight?load_id={load_id}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
     return RedirectResponse(f"/freight?load_id={load_id}&notice=Load+email+sent", 303)
@@ -485,37 +532,40 @@ async def freight_load_send(request: Request):
 
 @app.post("/freight/drafts/{draft_id}/send")
 async def freight_draft_send(request: Request, draft_id: str):
-    draft = store.get("freight_drafts", draft_id)
+    db = freight_store(request)
+    draft = db.get("freight_drafts", draft_id)
     if not draft:
         raise HTTPException(404, "Draft not found")
-    thread = store.get("freight_threads", draft["thread_id"]) or {}
+    thread = db.get("freight_threads", draft["thread_id"]) or {}
     form = await request.form()
     body_text = str(form.get("body_text") or draft.get("body_text") or "").strip()
     if not body_text:
         return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Reply+cannot+be+empty", 303)
-    store.update("freight_drafts", draft_id, {"body_text": body_text, "updated_at": now_iso()})
+    db.update("freight_drafts", draft_id, {"body_text": body_text, "updated_at": now_iso()})
     try:
-        send_draft(draft_id)
+        send_draft(draft_id, storage=db)
     except ValueError as exc:
         return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
     return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Reply+sent", 303)
 
 
 @app.post("/freight/alerts/{alert_id}/resolve")
-def freight_alert_resolve(alert_id: str):
-    alert = store.get("freight_alerts", alert_id)
+def freight_alert_resolve(request: Request, alert_id: str):
+    db = freight_store(request)
+    alert = db.get("freight_alerts", alert_id)
     if not alert:
         raise HTTPException(404, "Alert not found")
-    thread = store.get("freight_threads", alert["thread_id"]) or {}
-    store.update("freight_alerts", alert_id, {"status": "resolved", "resolved_at": now_iso()})
+    thread = db.get("freight_threads", alert["thread_id"]) or {}
+    db.update("freight_alerts", alert_id, {"status": "resolved", "resolved_at": now_iso()})
     return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Alert+resolved", 303)
 
 
 @app.post("/freight/threads/{thread_id}/state")
 async def freight_thread_state(thread_id: str, request: Request):
+    db = freight_store(request)
     form = await request.form()
     try:
-        result = set_thread_state(thread_id, str(form.get("state") or ""))
+        result = set_thread_state(thread_id, str(form.get("state") or ""), storage=db)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/freight?load_id={result['load']['id']}&notice=Load+marked+{quote(result['thread']['state'])}", 303)
@@ -523,20 +573,21 @@ async def freight_thread_state(thread_id: str, request: Request):
 
 @app.post("/freight/loads/{load_id}/facts")
 async def freight_load_facts(load_id: str, request: Request):
+    db = freight_store(request)
     form = await request.form()
     try:
-        verify_load_facts(load_id, dict(form))
+        verify_load_facts(load_id, dict(form), storage=db)
         # After facts are verified, resolve open fact alerts and re-evaluate inbound message if present
-        thread_rows = store.list("freight_threads", {"load_id": load_id}, order="", limit=1)
+        thread_rows = db.list("freight_threads", {"load_id": load_id}, order="", limit=1)
         if thread_rows:
             th = thread_rows[0]
-            for al in store.list("freight_alerts", {"thread_id": th["id"], "status": "open"}):
+            for al in db.list("freight_alerts", {"thread_id": th["id"], "status": "open"}):
                 if al.get("kind") in {"miles_unverified", "conflicting_load_facts", "verify_load_facts", "ambiguous_rate"}:
-                    store.update("freight_alerts", al["id"], {"status": "resolved", "resolved_at": now_iso()})
-            inbound_msgs = store.list("freight_messages", {"thread_id": th["id"], "direction": "in"}, order="created_at desc", limit=1)
+                    db.update("freight_alerts", al["id"], {"status": "resolved", "resolved_at": now_iso()})
+            inbound_msgs = db.list("freight_messages", {"thread_id": th["id"], "direction": "in"}, order="created_at desc", limit=1)
             if inbound_msgs:
-                set_thread_state(th["id"], "waiting")
-                evaluate_inbound(th, inbound_msgs[0], storage=store)
+                set_thread_state(th["id"], "waiting", storage=db)
+                evaluate_inbound(th, inbound_msgs[0], storage=db)
     except ValueError as exc:
         return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(str(exc))}", 303)
     return RedirectResponse(f"/freight?load_id={load_id}&notice=Load+facts+verified+and+re-evaluated", 303)
@@ -544,7 +595,8 @@ async def freight_load_facts(load_id: str, request: Request):
 
 @app.post("/freight/threads/{thread_id}/reply")
 async def freight_thread_reply(thread_id: str, request: Request):
-    thread = store.get("freight_threads", thread_id)
+    db = freight_store(request)
+    thread = db.get("freight_threads", thread_id)
     if not thread:
         raise HTTPException(404, "Thread not found")
     form = await request.form()
@@ -555,7 +607,7 @@ async def freight_thread_reply(thread_id: str, request: Request):
 
     draft_id = new_id()
     reason = "counter_manual" if extract_offer(body_text) is not None else action_type
-    store.insert("freight_drafts", {
+    db.insert("freight_drafts", {
         "id": draft_id,
         "thread_id": thread_id,
         "subject": thread.get("subject", ""),
@@ -568,9 +620,9 @@ async def freight_thread_reply(thread_id: str, request: Request):
         "updated_at": now_iso(),
     })
     if thread.get("state") in {"needs_attention", "mismatch", "protected_review", "offer_review", "closed"}:
-        set_thread_state(thread_id, "negotiating")
+        set_thread_state(thread_id, "negotiating", storage=db)
     try:
-        send_draft(draft_id)
+        send_draft(draft_id, storage=db)
     except Exception as exc:
         return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
     return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Reply+sent+to+broker", 303)
@@ -578,8 +630,9 @@ async def freight_thread_reply(thread_id: str, request: Request):
 
 
 @app.post("/freight/check-mail")
-def freight_check_mail():
-    result = poll_freight_replies()
+def freight_check_mail(request: Request):
+    db = freight_store(request)
+    result = poll_freight_replies(storage=db)
     return RedirectResponse(f"/freight?notice=Checked+mail:+{result['matched']}+matched+replies", 303)
 
 
@@ -820,8 +873,13 @@ async def template_save(request: Request):
         if vertical == "freight":
             return RedirectResponse(f"/freight/settings?tab=templates&edit_template={row_id or 'new'}&notice=Error: Unknown variables: {', '.join(unknown)}", 303)
         return RedirectResponse(f"/templates?vertical={vertical}&edit={row_id or 'new'}&notice=Error: Unknown variables: {', '.join(unknown)}", 303)
-    if row_id: store.update("email_templates", row_id, data)
-    else: store.insert("email_templates", {"id": new_id(), **data, "created_at": now_iso()})
+    target = freight_store(request) if vertical == "freight" else store
+    if row_id:
+        existing = target.get("email_templates", row_id)
+        if not existing or (existing.get("vertical") or "outreach") != vertical:
+            raise HTTPException(404, "Template not found")
+        target.update("email_templates", row_id, data)
+    else: target.insert("email_templates", {"id": new_id(), **data, "created_at": now_iso()})
     if vertical == "freight":
         return RedirectResponse("/freight/settings?tab=templates&notice=Template+saved+successfully", 303)
     return RedirectResponse(f"/templates?vertical={vertical}&notice=Template+saved+successfully", 303)
@@ -858,10 +916,12 @@ async def templates_ai_generate(request: Request):
 @app.api_route("/templates/{template_id}/preview", methods=["GET", "POST"], response_class=HTMLResponse)
 def template_preview(request: Request, template_id: str):
     item = store.get("email_templates", template_id)
+    if item and (item.get("vertical") or "outreach") == "freight":
+        item = freight_store(request).get("email_templates", template_id)
     if not item:
         raise HTTPException(404, "Template not found")
     vertical = item.get("vertical") or "outreach"
-    cfg = freight_config(store) if vertical == "freight" else (store.get("settings", 1) or {})
+    cfg = freight_config(freight_store(request)) if vertical == "freight" else (store.get("settings", 1) or {})
     sig = cfg.get("email_signature") or ("Freight Dispatch" if vertical == "freight" else "")
     sample = ({"origin": "Phoenix, AZ", "destination": "Dallas, TX", "pickup_date": "tomorrow", "equipment": "53 ft dry van", "truck_location": "Phoenix, AZ", "mc_number": "123456", "dot_number": "987654", "broker_company": "Sample Broker", "loaded_miles": 1060, "deadhead_miles": 25, "posted_rate": "$2,650", "all_in_rpm": "2.44", "signature": sig} if vertical == "freight" else (store.list("clients", limit=1) or [{"short_name": "Acme Roofing", "category": "roofing", "city": "Austin", "state": "TX"}])[0])
     subject, sm = render_template(item["subject"], sample, cfg); body, bm = render_template(item["body"], sample, cfg)
@@ -1018,7 +1078,7 @@ async def gmail_sender_add(request: Request):
         
     stamp = now_iso()
     reply_to = normalize_email(str(form.get("reply_to") or "")) or ("outreach@contractorops.ai" if provider == "pingram" else email)
-    store.insert("gmail_senders", {
+    OwnerStore(store, ADMIN_OWNER_ID).insert("gmail_senders", {
         "id": new_id(),
         "email": email,
         "display_name": str(form.get("display_name") or "").strip() or "Outreach",
@@ -1035,7 +1095,8 @@ async def gmail_sender_add(request: Request):
 
 @app.post("/settings/gmail-senders/{sender_id}")
 async def gmail_sender_update(request: Request, sender_id: str):
-    sender = store.get("gmail_senders", sender_id)
+    admin_db = OwnerStore(store, ADMIN_OWNER_ID)
+    sender = admin_db.get("gmail_senders", sender_id)
     if not sender: raise HTTPException(404)
     form = await request.form(); email = normalize_email(str(form.get("email") or ""))
     if not valid_email(email): return RedirectResponse("/settings?notice=Enter+a+valid+Gmail+address", 303)
@@ -1044,7 +1105,7 @@ async def gmail_sender_update(request: Request, sender_id: str):
     values = {"email": email, "display_name": str(form.get("display_name") or "").strip() or "Outreach", "signature": str(form.get("signature") or "").strip(), "reply_to": normalize_email(str(form.get("reply_to") or "")) or email, "active": form.get("active") == "on", "updated_at": now_iso()}
     password = str(form.get("app_password") or "").replace(" ", "").strip()
     if password: values["app_password_encrypted"] = encrypt_secret(password)
-    store.update("gmail_senders", sender_id, values)
+    admin_db.update("gmail_senders", sender_id, values)
     return RedirectResponse("/settings?notice=Gmail+sender+updated", 303)
 
 
