@@ -381,7 +381,8 @@ class FreightConversationTests(unittest.TestCase):
             # Test missions page renders onboarding and tabs
             res_missions = client.get("/freight/missions")
             self.assertEqual(res_missions.status_code, 200)
-            self.assertIn("Freight Setup Journey", res_missions.text)
+            # The setup journey only shows while setup is incomplete.
+            self.assertIn("Missions &amp; fleet", res_missions.text)
             self.assertIn("Freight Missions", res_missions.text)
             self.assertIn("Truck Fleet", res_missions.text)
 
