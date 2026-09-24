@@ -1,0 +1,859 @@
+{% extends "base.html" %}
+{% block title %}Freight workspace{% endblock %}
+{% block head %}
+<style>
+.freight-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.freight-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.compose-panel {
+  margin-bottom: 20px;
+  background: var(--panel-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+}
+.compose-panel summary {
+  padding: 12px 18px;
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--ink-heading);
+  background: #fafbfc;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.compose-panel summary:hover {
+  background: #f1f5f9;
+}
+.compose-form {
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.1fr 1.25fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+/* Two-column layout: Left = Conversation (prominent), Right = Loads Queue/Table */
+.freight-shell {
+  display: grid;
+  grid-template-columns: minmax(500px, 1.3fr) minmax(420px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+/* LEFT COLUMN: Conversation */
+.conversation-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--panel-shadow);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.convo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.convo-route {
+  font-size: 19px;
+  font-weight: 800;
+  color: var(--ink-heading);
+  margin: 2px 0 4px;
+}
+.convo-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+  align-items: center;
+}
+.convo-meta-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: #334155;
+  font-weight: 600;
+}
+
+/* Metric pills */
+.convo-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.convo-metric {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+}
+.convo-metric strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink-heading);
+}
+.convo-metric span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* Status tags */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status.waiting {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+.status.draft_ready {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+.status.needs_attention {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+.status.booked {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.status.negotiating,.status.passed {background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.status.mismatch,.status.closed,.status.accepted_pending_review,.status.offer_review,.status.protected_review {background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+
+/* Email Thread Stream */
+.thread-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 6px;
+}
+.msg-card {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 14px 16px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+}
+.msg-card.out {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  border-left: 3px solid #3b82f6;
+}
+.msg-card.in {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  border-left: 3px solid #10b981;
+}
+.msg-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+.msg-sender {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.msg-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+}
+.msg-card.out .msg-avatar {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.msg-card.in .msg-avatar {
+  background: #d1fae5;
+  color: #065f46;
+}
+.msg-author {
+  font-weight: 750;
+  font-size: 12.5px;
+  color: var(--ink-heading);
+}
+.msg-email-tag {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 4px;
+  font-weight: 400;
+}
+.msg-time {
+  font-size: 11px;
+  color: var(--subtle);
+  white-space: nowrap;
+}
+.msg-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Quoted history collapsible */
+.quoted-box {
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+.quoted-box summary {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 6px;
+  user-select: none;
+  font-weight: 600;
+}
+.quoted-box summary:hover {
+  color: var(--ink-heading);
+  background: #e2e8f0;
+}
+.quoted-content {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-left: 2px solid #cbd5e1;
+  font-size: 11.5px;
+  color: #64748b;
+  white-space: pre-wrap;
+  font-family: inherit;
+  border-radius: 0 6px 6px 0;
+}
+
+/* AI Counter / Draft Action Box */
+.draft-card {
+  margin-top: 8px;
+  padding: 16px;
+  border-radius: 10px;
+  background: #fffdf5;
+  border: 1px solid #fde68a;
+  box-shadow: 0 2px 6px rgba(217, 119, 6, 0.05);
+}
+.draft-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.draft-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.draft-badge {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.draft-reason-pill {
+  font-size: 11.5px;
+  color: #78350f;
+  font-weight: 600;
+}
+.draft-textarea {
+  width: 100%;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  background: #ffffff;
+  color: var(--ink-heading);
+  resize: vertical;
+  min-height: 80px;
+}
+.draft-textarea:focus {
+  outline: none;
+  border-color: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.15);
+}
+.draft-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.draft-policy-hint {
+  font-size: 11.5px;
+  color: #92400e;
+  font-weight: 500;
+}
+.approve-send-btn {
+  background: #0f172a;
+  color: #ffffff;
+  font-weight: 700;
+  padding: 8px 18px;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s ease;
+}
+.approve-send-btn:hover {
+  background: #1e293b;
+}
+
+/* Waiting state banner */
+.waiting-banner {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #f0f7ff;
+  border: 1px solid #bfdbfe;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #1e40af;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+/* RIGHT COLUMN: Loads Queue & Table */
+.loads-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--panel-shadow);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.loads-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.loads-panel-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink-heading);
+  margin: 0;
+}
+.loads-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.loads-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 480px;
+  font-size: 11.5px;
+}
+.loads-table th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  color: #64748b;
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.loads-table td {
+  padding: 10px;
+  border-bottom: 1px solid #edf0f3;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.loads-table tr {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.loads-table tr:hover {
+  background: #f8fafc;
+}
+.loads-table tr.selected {
+  background: #eff6ff;
+  border-left: 3px solid #2563eb;
+}
+.route-cell {
+  font-weight: 750;
+  color: #0f172a;
+}
+.route-dest {
+  font-weight: 400;
+  color: #64748b;
+}
+.offer-cell {
+  font-weight: 800;
+  color: #0f172a;
+}
+.loads-footer-health {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+@media(max-width: 1080px) {
+  .freight-shell {
+    grid-template-columns: 1fr;
+  }
+  .convo-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .compose-form {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media(max-width: 650px) {
+  .compose-form {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<header class="freight-header">
+  <div>
+    <span class="eyebrow">Freight agent</span>
+    <h1 style="margin:2px 0 4px">Loads & conversations</h1>
+    <p style="margin:0;color:var(--muted)">Review incoming broker offers, approve AI counter-proposals, and send load inquiries.</p>
+  </div>
+  <div class="freight-actions">
+    <a class="button ghost" href="/freight/settings">Settings & templates</a>
+    <a class="button ghost" href="/freight/missions">Missions & fleet</a>
+  </div>
+</header>
+
+{% if not missions or not profiles or not gmail_senders or not freight_settings.default_template_id %}
+<div class="notice">
+  Setup needed: 
+  {% if not profiles %}<a href="/freight/missions?tab=trucks">add a truck profile</a>{% endif %}
+  {% if not missions %} · <a href="/freight/missions?tab=missions">create a mission</a>{% endif %}
+  {% if not gmail_senders %} · connect a Gmail sender in Settings{% endif %}
+  · <a href="/freight/settings">configure Freight settings & signature</a>
+</div>
+{% endif %}
+
+<!-- Composer Bar -->
+<details class="compose-panel" {% if not loads %}open{% endif %}>
+  <summary>
+    <span>➕</span>
+    <span>Send a new load inquiry</span>
+  </summary>
+  <form action="/freight/loads/send" method="post" class="compose-form">
+    <label>Truck profile
+      <select name="truck_profile_id" id="truck_select" required>
+        <option value="">Choose truck</option>
+        {% for p in profiles if p.active %}
+        <option value="{{p.id}}" {% if loop.first and loop.last %}selected{% endif %}>{{p.name}} · {{p.current_city}}, {{p.current_state}}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Mission
+      <select name="mission_id" id="mission_select" required>
+        <option value="">Choose mission</option>
+        {% for m in missions if m.active %}
+        <option value="{{m.id}}" data-truck="{{m.truck_profile_id or ''}}" {% if loop.first and loop.last %}selected{% endif %}>{{m.name}}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Broker email
+      <input type="email" name="broker_email" placeholder="broker@company.com" autocomplete="off" required autofocus>
+    </label>
+    <label>Subject line <span style="font-weight:400;color:var(--muted);font-size:11px">(optional)</span>
+      <input type="text" name="subject" placeholder="Template: {{ default_template.subject if default_template else 'Truck available — {{equipment}}' }}">
+    </label>
+    <button class="approve-send-btn" style="height:38px;padding-inline:20px" {% if not missions or not profiles or not gmail_senders %}disabled{% endif %}>Send email</button>
+  </form>
+</details>
+
+<script>
+document.getElementById('mission_select')?.addEventListener('change', function() {
+  const truckId = this.options[this.selectedIndex]?.dataset?.truck;
+  const truckSelect = document.getElementById('truck_select');
+  if (truckId && truckSelect) truckSelect.value = truckId;
+});
+</script>
+
+<div class="freight-shell">
+  <!-- LEFT COLUMN: Active Conversation & Drafts -->
+  <section class="conversation-panel">
+    {% if selected_load %}
+      <div class="convo-header">
+        <div>
+          <span class="eyebrow">Active Thread</span>
+          <h2 class="convo-route">{{ selected_load.origin_city }}, {{ selected_load.origin_state }} → {{ selected_load.destination_city }}{{ ', ' + selected_load.destination_state if selected_load.destination_state else '' }}</h2>
+          <div class="convo-meta">
+            <span class="convo-meta-badge">✉ {{ selected_load.broker_email }}</span>
+            {% if selected_load.mission.name %}
+            <span class="convo-meta-badge">🎯 {{ selected_load.mission.name }}</span>
+            {% endif %}
+            {% if selected_load.equipment_type %}
+            <span class="convo-meta-badge">🚛 {{ selected_load.equipment_type }}</span>
+            {% endif %}
+            {% set is_load_auto = not selected_load.mission or not selected_load.mission.permissions or selected_load.mission.permissions.auto_counter or selected_load.mission.permissions.auto_profile_reply or selected_load.mission.permissions.auto_pass %}
+            <a href="/freight/missions?tab=missions{% if selected_load.mission_id %}&mission_id={{ selected_load.mission_id }}{% endif %}" class="convo-meta-badge" title="Click to change mission negotiation mode" style="text-decoration:none;{% if is_load_auto %}background:#e0f2fe;color:#0369a1;border-color:#bae6fd{% else %}background:#fef3c7;color:#92400e;border-color:#fde68a{% endif %};font-weight:700">
+              {{ '⚡ Auto Mode' if is_load_auto else '✋ Approve Mode' }}
+            </a>
+          </div>
+        </div>
+        <span class="status {{ selected_load.status }}">
+          {% if selected_load.status == 'waiting' %}waiting on broker{% elif selected_load.status == 'draft_ready' %}draft ready{% else %}{{ selected_load.status|replace('_', ' ') }}{% endif %}
+        </span>
+      </div>
+
+      {% if selected_load.thread.id %}
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin:8px 0 12px">
+        {% if selected_load.status != 'booked' %}<form action="/freight/threads/{{ selected_load.thread.id }}/state" method="post"><input type="hidden" name="state" value="booked"><button class="secondary" type="submit">Mark booked</button></form>{% endif %}
+        {% if selected_load.status != 'closed' %}<form action="/freight/threads/{{ selected_load.thread.id }}/state" method="post"><input type="hidden" name="state" value="closed"><button class="secondary" type="submit">Close load</button></form>{% endif %}
+        {% if selected_load.status in ['closed', 'mismatch', 'passed', 'accepted_pending_review', 'offer_review', 'protected_review', 'booked'] %}<form action="/freight/threads/{{ selected_load.thread.id }}/state" method="post"><input type="hidden" name="state" value="negotiating"><button class="secondary" type="submit">Reopen negotiation</button></form>{% endif %}
+      </div>
+      {% endif %}
+
+      <!-- Quick Metrics Bar -->
+      <div class="convo-metrics">
+        <div class="convo-metric">
+          <strong>{{ '$%.0f'|format(selected_load.economics.rate) if selected_load.economics.rate else '—' }}</strong>
+          <span>Current offer</span>
+        </div>
+        <div class="convo-metric">
+          <strong>{{ '%.2f'|format(selected_load.economics.loaded_rpm) if selected_load.economics.loaded_rpm else '—' }}</strong>
+          <span>Loaded RPM</span>
+        </div>
+        <div class="convo-metric">
+          <strong>{{ '%.2f'|format(selected_load.economics.all_in_rpm) if selected_load.economics.all_in_rpm else '—' }}</strong>
+          <span>All-in RPM</span>
+        </div>
+        <div class="convo-metric">
+          <strong>{{ selected_load.pickup_date or '—' }}</strong>
+          <span>Pickup Date</span>
+        </div>
+      </div>
+
+      {% if selected_load.thread.id and selected_load.status not in ['closed', 'booked'] %}
+      <details id="verify-details-box" style="margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:9px;background:#fff">
+        <summary style="cursor:pointer;font-weight:650">Verify broker load details</summary>
+        <p style="font-size:12px;color:var(--muted)">Confirm these after the broker replies. The first inquiry needs only a profile, mission, and email.</p>
+        <form action="/freight/loads/{{ selected_load.id }}/facts" method="post" class="form-grid">
+          <label>Pickup city<input name="origin_city" value="{{ selected_load.origin_city }}" required></label>
+          <label>Pickup state<input name="origin_state" maxlength="2" value="{{ selected_load.origin_state }}" required></label>
+          <label>Destination city<input name="destination_city" value="{{ '' if selected_load.destination_city == 'Open destinations' else selected_load.destination_city }}" required></label>
+          <label>Destination state<input name="destination_state" maxlength="2" value="{{ selected_load.destination_state }}" required></label>
+          <label>Broker equipment<input name="equipment_type" value="{{ selected_load.equipment_type }}" required></label>
+          <label>Pickup date<input type="date" name="pickup_date" value="{{ selected_load.pickup_date or '' }}"></label>
+          <label>Loaded miles<input type="number" id="loaded-miles-input" name="loaded_miles" min="1" step="1" value="{{ selected_load.loaded_miles if selected_load.loaded_miles is not none else '' }}"></label>
+          <label>Deadhead miles<input type="number" name="deadhead_miles" min="0" step="1" value="{{ selected_load.deadhead_miles if selected_load.deadhead_miles is not none else '' }}"></label>
+          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ selected_load.weight_lbs if selected_load.weight_lbs is not none else '' }}"></label>
+          <label class="check"><input type="checkbox" name="schedule_confirmed" value="yes" required> Broker pickup and delivery timing fits this truck</label>
+          <button type="submit">Verify load facts</button>
+        </form>
+      </details>
+      {% endif %}
+
+      <!-- Alerts & Attention Banner -->
+      {% if selected_load.alerts %}
+        {% for alert in selected_load.alerts %}
+        <div class="alert-card" style="margin: 8px 0 12px; border-left: 4px solid #f59e0b; background: #fffbeb; padding: 12px 16px; border-radius: 8px;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+            <div>
+              <strong style="color:#b45309; font-size:13px;">⚠ Action Required: {{ alert.summary }}</strong>
+              {% if not selected_load.loaded_miles and selected_load.mission.floor_loaded_rpm %}
+              <p style="margin:4px 0 0; font-size:12px; color:#78350f;">
+                Your mission requires a minimum rate floor of <strong>${{ '%.2f'|format(selected_load.mission.floor_loaded_rpm) }}/mi</strong>. Confirm loaded miles above so the system can evaluate rate economics.
+              </p>
+              {% endif %}
+            </div>
+            <div style="display:flex; gap:6px; flex-shrink:0;">
+              {% if not selected_load.loaded_miles %}
+              <button type="button" class="button secondary" onclick="document.getElementById('verify-details-box').open = true; document.getElementById('loaded-miles-input').focus();" style="font-size:11.5px; padding:3px 9px;">
+                Confirm Miles
+              </button>
+              {% endif %}
+              <form action="/freight/alerts/{{ alert.id }}/resolve" method="post" style="margin:0">
+                <button class="secondary" style="font-size:11.5px; padding:3px 9px;">Dismiss</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      {% elif selected_load.status == 'needs_attention' %}
+        <div class="alert-card" style="margin: 8px 0 12px; border-left: 4px solid #f59e0b; background: #fffbeb; padding: 12px 16px; border-radius: 8px;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+            <div>
+              <strong style="color:#b45309; font-size:13px;">⚠ Attention Needed: Review broker offer & details</strong>
+              <p style="margin:4px 0 0; font-size:12px; color:#78350f;">
+                {% if not selected_load.loaded_miles and selected_load.mission.floor_loaded_rpm %}
+                Broker offered <strong>${{ '%.0f'|format(selected_load.current_offer) if selected_load.current_offer else '—' }}</strong>. Your mission has a <strong>${{ '%.2f'|format(selected_load.mission.floor_loaded_rpm) }}/mi</strong> rate floor, but loaded miles are unverified. Confirm miles or reply manually below.
+                {% else %}
+                Review the broker's response. You can accept, counter, or write a custom reply below.
+                {% endif %}
+              </p>
+            </div>
+            {% if not selected_load.loaded_miles %}
+            <button type="button" class="button secondary" onclick="document.getElementById('verify-details-box').open = true; document.getElementById('loaded-miles-input').focus();" style="font-size:11.5px; padding:3px 9px; flex-shrink:0;">
+              Confirm Miles
+            </button>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      <!-- Messages Thread -->
+      <div class="thread-stream">
+        {% for msg in messages %}
+        <article class="msg-card {{ msg.direction }}">
+          <div class="msg-head">
+            <div class="msg-sender">
+              <span class="msg-avatar">{{ 'B' if msg.direction == 'in' else 'D' }}</span>
+              <div>
+                <span class="msg-author">{{ 'Broker' if msg.direction == 'in' else 'Dispatch (You)' }}</span>
+                <span class="msg-email-tag">&lt;{{ msg.from_email }}&gt;</span>
+              </div>
+            </div>
+            <time class="msg-time">{{ msg.formatted_time or msg.created_at[:16] }}</time>
+          </div>
+          <div class="msg-body">{{ msg.clean_body or msg.body_text }}</div>
+          {% if msg.quoted_body %}
+          <details class="quoted-box">
+            <summary>··· <span>show original thread history</span></summary>
+            <div class="quoted-content">{{ msg.quoted_body }}</div>
+          </details>
+          {% endif %}
+        </article>
+        {% else %}
+        <p style="color:var(--muted);font-style:italic">No messages recorded in this thread yet.</p>
+        {% endfor %}
+      </div>
+
+      <!-- Action Area: AI Draft or Manual Reply Composer -->
+      {% if selected_load.draft %}
+      <form action="/freight/drafts/{{ selected_load.draft.id }}/send" method="post" class="draft-card">
+        <div class="draft-header">
+          <div class="draft-title-wrap">
+            <span class="draft-badge">✦ Suggested reply</span>
+            <span class="draft-reason-pill">{{ selected_load.draft.reason|replace('_', ' ') }}</span>
+          </div>
+          <span style="font-size:11.5px;color:var(--muted)">Review and approve below</span>
+        </div>
+        <textarea name="body_text" rows="4" class="draft-textarea" required>{{ selected_load.draft.body_text }}</textarea>
+        <div class="draft-footer">
+          <div class="draft-policy-hint">
+            {% if selected_load.draft.policy_snapshot.offer %}Broker: ${{ '%.0f'|format(selected_load.draft.policy_snapshot.offer) }}{% endif %}
+            {% if selected_load.draft.policy_snapshot.floor %} · Floor: ${{ '%.0f'|format(selected_load.draft.policy_snapshot.floor) }}{% endif %}
+            {% if selected_load.draft.policy_snapshot.counter %} · Asking: ${{ '%.0f'|format(selected_load.draft.policy_snapshot.counter) }}{% endif %}
+          </div>
+          <button class="approve-send-btn">Approve & Send Email</button>
+        </div>
+      </form>
+      {% elif selected_load.status not in ['closed', 'booked'] %}
+      <!-- Quick Action & Manual Reply Composer -->
+      <div class="draft-card" style="margin-top:14px; border:1px solid #cbd5e1; border-radius:10px; background:#ffffff; box-shadow:0 1px 4px rgba(0,0,0,0.05); padding:16px;">
+        <div class="draft-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div class="draft-title-wrap" style="display:flex; align-items:center; gap:8px;">
+            <span class="draft-badge" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-weight:700;">✉ Reply to Broker</span>
+            {% if selected_load.status == 'needs_attention' %}
+            <span class="draft-reason-pill" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a;">Action needed</span>
+            {% endif %}
+          </div>
+          <span style="font-size:11.5px; color:var(--muted)">Use 1-click prefill or write custom response</span>
+        </div>
+
+        <!-- 1-Click Quick Response Buttons -->
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
+          {% if selected_load.current_offer %}
+          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; background:#f0fdf4; border-color:#bbf7d0; color:#15803d; cursor:pointer;" onclick="setQuickReply('accept', '{{ selected_load.current_offer|int }}')">
+            ✓ Accept ${{ '%.0f'|format(selected_load.current_offer) }} & Ask Rate Con
+          </button>
+          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; background:#f0f9ff; border-color:#bae6fd; color:#0369a1; cursor:pointer;" onclick="setQuickReply('counter', '{{ ((selected_load.current_offer * 1.08) // 50 * 50)|int }}')">
+            ↗ Counter ${{ ((selected_load.current_offer * 1.08) // 50 * 50)|int }}
+          </button>
+          {% endif %}
+          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; cursor:pointer;" onclick="setQuickReply('miles')">
+            ❓ Ask for Miles & Details
+          </button>
+          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; color:#dc2626; cursor:pointer;" onclick="setQuickReply('pass')">
+            ✕ Pass on Rate
+          </button>
+        </div>
+
+        <form action="/freight/threads/{{ selected_load.thread.id }}/reply" method="post" class="stack" style="gap:10px;">
+          <textarea id="manual-reply-text" name="body_text" rows="3" class="draft-textarea" required placeholder="Type your reply to the broker here..." style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font-size:13px; font-family:inherit; box-sizing:border-box;"></textarea>
+          <div class="draft-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <span style="font-size:11.5px; color:var(--muted)">
+              Sends directly from your connected dispatch Gmail
+            </span>
+            <button class="approve-send-btn" style="background:#0284c7; border:none; color:#ffffff; padding:8px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer;">Send Reply to Broker →</button>
+          </div>
+        </form>
+      </div>
+      {% endif %}
+
+    {% else %}
+      <div class="empty" style="padding:48px 16px;text-align:center">
+        <p style="font-size:15px;color:var(--muted)">Select a load from the list on the right to view its conversation.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <!-- RIGHT COLUMN: Loads Queue & Table -->
+  <section class="loads-panel">
+    <div class="loads-panel-head">
+      <div>
+        <h3 class="loads-panel-title">Active Loads & Inquiries</h3>
+        <span style="font-size:11px;color:var(--muted)">{{ loads|length }} total tracked</span>
+      </div>
+      <form action="/freight/check-mail" method="post" style="margin:0">
+        <button class="secondary" style="font-size:11.5px;padding:5px 12px">⚡ Check Gmail now</button>
+      </form>
+    </div>
+
+    <div class="loads-table-wrap">
+      <table class="loads-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Route</th>
+            <th>Pickup</th>
+            <th>Offer</th>
+            <th>Broker</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for load in loads %}
+          <tr class="{% if selected_load and selected_load.id == load.id %}selected{% endif %}" onclick="location.href='/freight?load_id={{ load.id }}'">
+            <td>
+              <span class="status {{ load.status }}">
+                {% if load.status == 'waiting' %}waiting{% elif load.status == 'draft_ready' %}draft ready{% else %}{{ load.status|replace('_', ' ') }}{% endif %}
+              </span>
+              {% if load.alerts %}<span title="{{ load.alerts[0].summary }}" style="color:var(--danger);font-weight:bold"> ⚠</span>{% endif %}
+            </td>
+            <td>
+              <div class="route-cell">{{ load.origin_city }}, {{ load.origin_state }}</div>
+              <div class="route-dest">→ {{ load.destination_city }}{{ ', ' + load.destination_state if load.destination_state else '' }}</div>
+            </td>
+            <td>{{ load.pickup_date or '—' }}</td>
+            <td class="offer-cell">
+              {{ '$%.0f'|format(load.current_offer) if load.current_offer else '—' }}
+            </td>
+            <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis" title="{{ load.broker_email }}">
+              {{ load.broker_company or load.broker_email.split('@')[0] }}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5" class="empty" style="text-align:center;padding:24px">No load inquiries yet. Use "+ Send a new load inquiry" above.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="loads-footer-health">
+      {% if mail_cursors %}
+      <span>Last Gmail check: {{ mail_cursors[0].last_checked_at[:19]|replace('T', ' ') if mail_cursors[0].last_checked_at else 'not checked' }}</span>
+      {% if mail_cursors[0].error %}
+      <span style="color:var(--danger)">Error: {{ mail_cursors[0].error }}</span>
+      {% endif %}
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function setQuickReply(type, amount) {
+  const ta = document.getElementById('manual-reply-text');
+  if (!ta) return;
+  if (type === 'accept') {
+    ta.value = `Sounds good at $${amount} all-in. Please send over the rate confirmation to get set up.`;
+  } else if (type === 'counter') {
+    ta.value = `We can get this covered for $${amount} all-in. Let me know if that works and send over the rate con.`;
+  } else if (type === 'miles') {
+    ta.value = `Could you please confirm the exact loaded miles, cargo weight, and pickup time window?`;
+  } else if (type === 'pass') {
+    ta.value = `Thank you for the update, but that rate is below our floor for this lane. Please keep us in mind for future loads.`;
+  }
+  ta.focus();
+}
+</script>
+{% endblock %}

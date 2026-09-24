@@ -1,0 +1,599 @@
+{% extends "base.html" %}
+{% block title %}Freight settings & templates{% endblock %}
+{% block head %}
+<style>
+/* Freight Onboarding Stepper */
+.freight-onboarding {
+  background: #ffffff;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03), 0 6px 16px -4px rgba(0,0,0,0.04);
+  padding: 18px 22px;
+  margin-bottom: 22px;
+}
+.onboarding-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.onboarding-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.onboarding-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+}
+.onboarding-badge.complete {
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
+}
+.stepper-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  position: relative;
+}
+.step-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.16s ease;
+}
+.step-card:hover {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.step-card.active {
+  border-color: #0284c7;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #0284c7, 0 2px 8px rgba(2,132,199,0.08);
+}
+.step-card.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+.step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 750;
+  background: #e2e8f0;
+  color: #475569;
+  flex-shrink: 0;
+}
+.step-card.active .step-num {
+  background: #0284c7;
+  color: #ffffff;
+}
+.step-card.done .step-num {
+  background: #16a34a;
+  color: #ffffff;
+}
+.step-meta h4 {
+  margin: 0 0 2px 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-heading);
+}
+.step-meta p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.step-status {
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-top: 4px;
+  display: block;
+}
+.step-status.done-text { color: #16a34a; }
+.step-status.active-text { color: #0284c7; }
+.step-status.pending-text { color: #94a3b8; }
+
+/* Tabs Bar */
+.freight-tabs-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.tabs-segmented {
+  display: inline-flex;
+  background: #eef2f6;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+}
+.tab-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none;
+  box-shadow: none;
+}
+.tab-segment:hover {
+  color: var(--ink-heading);
+  background: rgba(255, 255, 255, 0.6);
+  transform: none;
+}
+.tab-segment.active {
+  background: var(--dark-overtone);
+  color: #ffffff !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+  border-color: var(--dark-overtone);
+}
+.tab-count {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #e2e8f0;
+  color: #475569;
+}
+.tab-segment.active .tab-count {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+/* Settings Form Styles */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.wide {
+  grid-column: 1 / -1;
+}
+.field-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 5px;
+  line-height: 1.4;
+}
+
+/* Template Tab Styles */
+.templates-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+  gap: 20px;
+}
+.template-item {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+  transition: all 0.15s ease;
+}
+.template-item:hover {
+  border-color: #cbd5e1;
+  background: #fafbfc;
+}
+.template-item.is-editing {
+  border-color: #0284c7;
+  background: #f0f9ff;
+  box-shadow: 0 0 0 1px #0284c7;
+}
+.template-item h4 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  color: var(--ink-heading);
+}
+.var-pill {
+  display: inline-flex;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #334155;
+  cursor: pointer;
+  margin: 2px;
+}
+.var-pill:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+.tag-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+@media(max-width: 1000px) {
+  .freight-settings-grid, .templates-layout {
+    grid-template-columns: 1fr;
+  }
+  .stepper-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media(max-width: 650px) {
+  .stepper-steps {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{% set step1_done = true if (freight_settings.sender_name and freight_settings.default_sender_account) else false %}
+{% set step2_done = profiles|length > 0 %}
+{% set step3_done = missions|length > 0 %}
+{% set all_done = step1_done and step2_done and step3_done %}
+
+<header style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+  <div>
+    <span class="eyebrow">Freight Configuration</span>
+    <h1 style="margin:2px 0 4px">Settings & templates</h1>
+    <p style="margin:0;color:var(--muted)">Manage sender identity, connected Gmail account, dispatcher signature, and automated email templates.</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="button ghost" href="/freight/missions">Missions & fleet</a>
+    <a class="button" href="/freight">Open loads workspace →</a>
+  </div>
+</header>
+
+<!-- ONBOARDING PROGRESS ROADMAP -->
+<div class="freight-onboarding">
+  <div class="onboarding-head">
+    <div class="onboarding-title-wrap">
+      <h3 style="margin:0;font-size:14px;font-weight:750">Freight Setup Journey</h3>
+      <span class="onboarding-badge {{ 'complete' if all_done else '' }}">
+        {{ 'Ready for Dispatch' if all_done else ('Step 1 of 4: Sender Identity' if not step1_done else ('Step 2 of 4: Add Truck' if not step2_done else 'Step 3 of 4: Create Mission')) }}
+      </span>
+    </div>
+    {% if all_done %}
+    <span style="font-size:12px;color:#16a34a;font-weight:600">✓ All core requirements configured</span>
+    {% else %}
+    <span style="font-size:12px;color:var(--muted)">Follow this 4-step sequence to start sending load inquiries</span>
+    {% endif %}
+  </div>
+
+  <div class="stepper-steps">
+    <!-- Step 1 -->
+    <a href="/freight/settings" class="step-card {{ 'done' if step1_done else 'active' }}">
+      <div class="step-num">{{ '✓' if step1_done else '1' }}</div>
+      <div class="step-meta">
+        <h4>1. Email & Identity</h4>
+        <p>Sender name, Gmail & signature</p>
+        <span class="step-status {{ 'done-text' if step1_done else 'active-text' }}">{{ 'Configured ✓' if step1_done else 'Current step' }}</span>
+      </div>
+    </a>
+
+    <!-- Step 2 -->
+    <a href="/freight/missions?tab=trucks" class="step-card {{ 'done' if step2_done else ('active' if step1_done and not step2_done else '') }}">
+      <div class="step-num">{{ '✓' if step2_done else '2' }}</div>
+      <div class="step-meta">
+        <h4>2. Truck Profile</h4>
+        <p>Specs, dimensions, MC/DOT</p>
+        <span class="step-status {{ 'done-text' if step2_done else ('active-text' if step1_done else 'pending-text') }}">
+          {{ profiles|length ~ ' trucks on file ✓' if step2_done else ('Setup next →' if step1_done else 'Pending step 1') }}
+        </span>
+      </div>
+    </a>
+
+    <!-- Step 3 -->
+    <a href="/freight/missions?tab=missions" class="step-card {{ 'done' if step3_done else ('active' if step2_done and not step3_done else '') }}">
+      <div class="step-num">{{ '✓' if step3_done else '3' }}</div>
+      <div class="step-meta">
+        <h4>3. Freight Mission</h4>
+        <p>Origin, destinations & rate floor</p>
+        <span class="step-status {{ 'done-text' if step3_done else ('active-text' if step2_done else 'pending-text') }}">
+          {{ missions|length ~ ' active missions ✓' if step3_done else ('Setup next →' if step2_done else 'Pending step 2') }}
+        </span>
+      </div>
+    </a>
+
+    <!-- Step 4 -->
+    <a href="/freight" class="step-card {{ 'done' if all_done else '' }}">
+      <div class="step-num">{{ '✓' if all_done else '4' }}</div>
+      <div class="step-meta">
+        <h4>4. Find Loads</h4>
+        <p>Inquire & AI automated counter</p>
+        <span class="step-status {{ 'done-text' if all_done else 'pending-text' }}">
+          {{ 'Ready to dispatch →' if all_done else 'Requires steps 1-3' }}
+        </span>
+      </div>
+    </a>
+  </div>
+</div>
+
+<!-- SECTION 1: SENDER IDENTITY & SIGNATURE -->
+<section class="panel setting-form" style="margin-bottom:24px">
+  <div class="panel-head">
+    <div>
+      <h2 style="font-size:16px;margin:0 0 4px">✉️ Sender Identity & Signature</h2>
+      <p style="margin:0;color:var(--muted)">These settings apply exclusively to Freight load inquiries and replies.</p>
+    </div>
+  </div>
+
+  <form action="/freight/settings" method="post" class="stack" style="margin-top:16px">
+    <div class="field-grid">
+      <label>
+        Company / Sender display name
+        <input id="input-sender-name" name="sender_name" value="{{ freight_settings.sender_name or 'Freight Dispatch' }}" required>
+        <span class="field-hint">The 'From' display name brokers see in their inbox (e.g. <code>Grand Prairie Trucking - Dispatch</code>).</span>
+      </label>
+
+      <label>
+        Freight reply-to email
+        <input type="email" name="reply_to" value="{{ freight_settings.reply_to or '' }}" placeholder="Defaults to sending Gmail">
+        <span class="field-hint">Where broker replies should be directed (leave blank to use sending Gmail).</span>
+      </label>
+
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label style="font-weight:600;margin:0">Sending Gmail account</label>
+          <button type="button" class="button link" onclick="document.getElementById('add-freight-email-dialog').showModal()" style="font-size:12px;font-weight:700;color:#0284c7;background:none;border:none;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+            + Add new email
+          </button>
+        </div>
+        <select name="default_sender_account" required style="width:100%">
+          <option value="">Choose Gmail account</option>
+          {% for s in gmail_senders %}
+          <option value="{{ s.id }}" {% if freight_settings.default_sender_account|string == s.id|string %}selected{% endif %}>{{ s.email }}{% if s.display_name %} ({{ s.display_name }}){% endif %}</option>
+          {% endfor %}
+        </select>
+        <span class="field-hint">The connected Gmail account used to send inquiries and poll broker replies.</span>
+      </div>
+
+      <label>
+        Default inquiry template
+        <select name="default_template_id" required>
+          <option value="">Choose default template</option>
+          {% for t in freight_templates %}
+          <option value="{{ t.id }}" {% if freight_settings.default_template_id|string == t.id|string %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="field-hint">The email template selected by default for load inquiries.</span>
+      </label>
+
+      <label class="wide">
+        Company signature & contact info (<code>{{'{{'}}signature{{'}}'}}</code>)
+        <textarea id="input-signature" name="email_signature" rows="4" required style="font-family:inherit">{{ freight_settings.email_signature or 'Freight Dispatch' }}</textarea>
+        <span class="field-hint">Appended to every outbound email via the <code>{{'{{'}}signature{{'}}'}}</code> tag. Put your company name, dispatcher name, phone, and MC/DOT here.</span>
+      </label>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
+      <button class="primary-btn" style="padding:10px 24px">Save Freight settings</button>
+      {% if not gmail_senders %}
+      <div style="display:flex;align-items:center;gap:10px;background:#fef2f2;border:1px solid #fecaca;padding:8px 14px;border-radius:8px">
+        <span style="color:var(--danger);font-size:12.5px;font-weight:600">
+          ⚠ No Gmail account connected yet.
+        </span>
+        <button type="button" class="button" onclick="document.getElementById('add-freight-email-dialog').showModal()" style="font-size:11.5px;padding:4px 10px;background:#dc2626;color:#ffffff;border:none;border-radius:6px;cursor:pointer;font-weight:700">
+          + Connect Gmail Now
+        </button>
+      </div>
+      {% endif %}
+    </div>
+  </form>
+</section>
+
+<!-- SECTION 2: FREIGHT TEMPLATES & SUBJECT LINES -->
+<div class="templates-layout">
+  <!-- LEFT: Templates List -->
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2 style="font-size:16px;margin:0 0 4px">📄 Email Templates & Subject Lines ({{ freight_templates|length }})</h2>
+        <p style="margin:0;color:var(--muted)">Reusable templates for load inquiries, counters, and rate confirmations.</p>
+      </div>
+      <a class="button ghost" href="/freight/settings?edit_template=new#template-editor">+ New template</a>
+    </div>
+
+    <div style="margin-top:14px">
+      {% for t in freight_templates %}
+      <article class="template-item {{ 'is-editing' if edit_template and edit_template.id|string == t.id|string else '' }}">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <h4>{{ t.name }}</h4>
+            {% if t.active %}
+            <span class="badge running">Active</span>
+            {% else %}
+            <span class="badge paused">Inactive</span>
+            {% endif %}
+            {% if freight_settings.default_template_id|string == t.id|string %}
+            <span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#bae6fd">Default Inquiry</span>
+            {% endif %}
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">
+            <strong>Subject:</strong> <code>{{ t.subject }}</code>
+          </div>
+          <p style="font-size:12px;color:#64748b;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:480px">
+            {{ t.body|replace('\n', ' ') }}
+          </p>
+        </div>
+        <div>
+          <a class="button secondary" style="font-size:11.5px;padding:4px 10px" href="/freight/settings?edit_template={{ t.id }}#template-editor">Edit</a>
+        </div>
+      </article>
+      {% else %}
+      <div class="empty">No freight templates found. Create one using the form on the right.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- RIGHT: Template Editor -->
+  <section class="panel" id="template-editor">
+    <div class="panel-head">
+      <div>
+        <h2 style="font-size:16px;margin:0 0 4px">{{ 'Edit template' if edit_template else 'Create freight template' }}</h2>
+        <p style="margin:0;color:var(--muted)">Insert variables below into your subject and body.</p>
+      </div>
+      {% if edit_template %}
+      <a class="button ghost" style="font-size:12px" href="/freight/settings">Cancel</a>
+      {% endif %}
+    </div>
+
+    <form action="/templates/save" method="post" class="stack" style="margin-top:14px">
+      <input type="hidden" name="id" value="{{ edit_template.id if edit_template else '' }}">
+      <input type="hidden" name="vertical" value="freight">
+      <input type="hidden" name="type" value="plain">
+      <input type="hidden" name="angle_tag" value="">
+
+      <label>
+        Template name
+        <input name="name" required value="{{ edit_template.name if edit_template else '' }}" placeholder="e.g. Standard Load Inquiry">
+      </label>
+
+      <label>
+        Subject line
+        <input id="tpl-subject" name="subject" required value="{{ edit_template.subject if edit_template else 'Truck available — {{equipment}}' }}" placeholder="Truck available — {{equipment}}">
+        <div class="tag-bar">
+          <span style="font-size:11px;color:var(--muted);margin-right:4px">Insert into subject:</span>
+          <span class="var-pill" onclick="insertVar('tpl-subject', '{{equipment}}')">&#123;&#123;equipment&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-subject', '{{origin}}')">&#123;&#123;origin&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-subject', '{{destination}}')">&#123;&#123;destination&#125;&#125;</span>
+        </div>
+      </label>
+
+      <label>
+        Email body
+        <textarea id="tpl-body" name="body" rows="8" required placeholder="Hi, is this load still available? We have a {{equipment}} ready in {{origin}}...">{{ edit_template.body if edit_template else 'Hi,\n\nIs this load still available? We have an empty {{equipment}} ready in {{origin}}.\n\nCould you share current rate, cargo weight, and pickup window?\n\n{{signature}}' }}</textarea>
+        <div class="tag-bar">
+          <span style="font-size:11px;color:var(--muted);margin-right:4px">Insert into body:</span>
+          <span class="var-pill" onclick="insertVar('tpl-body', '{{equipment}}')">&#123;&#123;equipment&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-body', '{{origin}}')">&#123;&#123;origin&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-body', '{{destination}}')">&#123;&#123;destination&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-body', '{{signature}}')">&#123;&#123;signature&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-body', '{{mc_number}}')">&#123;&#123;mc_number&#125;&#125;</span>
+          <span class="var-pill" onclick="insertVar('tpl-body', '{{trailer_length}}')">&#123;&#123;trailer_length&#125;&#125;</span>
+        </div>
+      </label>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;flex-wrap:wrap;gap:12px">
+        <label class="check" style="margin:0">
+          <input type="checkbox" name="active" {% if not edit_template or edit_template.active %}checked{% endif %}>
+          <span>Template active for load outreach</span>
+        </label>
+        <button class="primary-btn">{{ 'Update template' if edit_template else 'Save template' }}</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<!-- CONNECT GMAIL MODAL DIALOG -->
+<dialog id="add-freight-email-dialog" style="max-width:520px;width:92%;padding:22px">
+  <form action="/freight/senders/add" method="post" class="stack" style="gap:14px">
+    <div class="dialog-head">
+      <div>
+        <h2 style="margin:0 0 2px;font-size:17px;font-weight:750">Connect Gmail / Workspace Email</h2>
+        <span style="color:var(--muted);font-size:12px">Use this email to send freight inquiries & negotiate rates with brokers</span>
+      </div>
+      <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
+    </div>
+
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;font-size:12px;color:#0369a1;line-height:1.45">
+      <strong>How to get a Google App Password:</strong>
+      <ol style="margin:4px 0 0 16px;padding:0">
+        <li>Enable 2-Step Verification in your Google Account.</li>
+        <li>Go to <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:#0284c7;font-weight:600;text-decoration:underline">myaccount.google.com/apppasswords</a>.</li>
+        <li>Create an app named "Freight Dispatch" and paste the 16-character code below.</li>
+      </ol>
+    </div>
+
+    <label>
+      Email address
+      <input type="email" name="email" placeholder="dispatch@yourcompany.com" required style="font-size:13px">
+      <span class="field-hint">Your Gmail or Google Workspace dispatch address.</span>
+    </label>
+
+    <label>
+      Google App Password (16 characters)
+      <input type="password" name="app_password" placeholder="xxxx xxxx xxxx xxxx" required autocomplete="off" style="font-size:13px;letter-spacing:1px">
+      <span class="field-hint">Spaces are automatically stripped. Passwords are encrypted securely at rest.</span>
+    </label>
+
+    <div class="field-grid" style="grid-template-columns:1fr 1fr;gap:12px">
+      <label>
+        Sender display name
+        <input name="display_name" placeholder="Freight Dispatch" style="font-size:13px">
+        <span class="field-hint">Shown to brokers in email client.</span>
+      </label>
+
+      <label>
+        Reply-to (optional)
+        <input type="email" name="reply_to" placeholder="Defaults to sending email" style="font-size:13px">
+        <span class="field-hint">Where broker replies are routed.</span>
+      </label>
+    </div>
+
+    <label class="check" style="margin-top:2px">
+      <input type="checkbox" name="auto_select" checked>
+      <span style="font-size:12.5px;font-weight:600">Set as default sending account for Freight immediately</span>
+    </label>
+
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;padding-top:12px;border-top:1px solid #f1f5f9">
+      <button type="button" class="button secondary" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="primary-btn" style="padding:8px 18px;font-size:13px">Connect & Use in Freight</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function insertVar(elementId, tag) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const start = el.selectionStart || el.value.length;
+  const end = el.selectionEnd || el.value.length;
+  const before = el.value.substring(0, start);
+  const after = el.value.substring(end, el.value.length);
+  el.value = before + tag + after;
+  el.focus();
+  el.setSelectionRange(start + tag.length, start + tag.length);
+}
+</script>
+{% endblock %}

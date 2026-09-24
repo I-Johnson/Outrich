@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .leads-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 22px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .leads-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  
+  /* Filter Container */
+  .filter-panel {
+    background: #ffffff;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 12px;
+    padding: 0;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    overflow: hidden;
+  }
+
+  /* Status Tabs with Count Badges */
+  .status-tabs-wrap {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--line, #e2e8f0);
+    background: #fcfdfe;
+    padding: 6px 14px 0;
+    overflow-x: auto;
+    gap: 4px;
+  }
+  .status-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--muted, #64748b);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    border-radius: 6px 6px 0 0;
+  }
+  .status-tab:hover {
+    color: var(--ink-heading, #0f172a);
+    background: #f1f5f9;
+  }
+  .status-tab.active {
+    color: #0284c7;
+    border-bottom-color: #0284c7;
+    font-weight: 650;
+    background: #ffffff;
+  }
+  .status-count-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #f1f5f9;
+    color: #64748b;
+  }
+  .status-tab.active .status-count-badge {
+    background: #e0f2fe;
+    color: #0369a1;
+  }
+
+  /* Filter Form Bar */
+  .filter-toolbar {
+    padding: 16px 20px;
+    background: #ffffff;
+    border-bottom: 1px solid var(--line, #e2e8f0);
+  }
+  .filter-form-grid {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 140px;
+  }
+  .filter-field.grow {
+    flex: 1;
+    min-width: 220px;
+  }
+  .filter-field label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--muted, #64748b);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .filter-field input, .filter-field select {
+    padding: 8px 12px;
+    font-size: 13px;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--ink-heading, #0f172a);
+  }
+  .filter-field input:focus, .filter-field select:focus {
+    border-color: #0284c7;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(2,132,199,0.1);
+  }
+
+  /* Filter Results & Active Badges Strip */
+  .filter-summary-strip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 20px;
+    background: #f8fafc;
+    border-bottom: 1px solid var(--line, #e2e8f0);
+    font-size: 12.5px;
+    color: var(--muted, #64748b);
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .active-filter-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 550;
+    background: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+  }
+  .filter-chip a {
+    color: #0369a1;
+    text-decoration: none;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  /* Bulk Actions Strip */
+  .bulk-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 20px;
+    background: #ffffff;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .bulk-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--muted, #64748b);
+  }
+  .selected-pill {
+    font-weight: 600;
+    color: #0f172a;
+    background: #f1f5f9;
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+
+  /* Table enhancements */
+  .lead-title-cell strong {
+    display: block;
+    color: var(--ink-heading, #0f172a);
+    font-size: 13.5px;
+  }
+  .lead-title-cell small {
+    display: block;
+    color: var(--muted, #64748b);
+    font-size: 11.5px;
+  }
+  .lead-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+  }
+</style>
+
+<header class="leads-header">
+  <div>
+    <span class="eyebrow">Audience Management</span>
+    <h1 style="margin:2px 0 4px;">Leads & Audience</h1>
+    <p>Segment, filter, and bulk-manage outreach prospects across all campaign sources.</p>
+  </div>
+  <div class="leads-actions">
+    <button type="button" class="secondary" onclick="document.getElementById('csv-dialog').showModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Upload CSV
+    </button>
+    <button type="button" class="button secondary" onclick="document.getElementById('lead-dialog').showModal()">
+      ＋ Add lead
+    </button>
+    <a href="/campaigns" class="button primary">
+      Create campaign
+    </a>
+  </div>
+</header>
+
+<!-- Main Filter & Leads Panel -->
+<section class="filter-panel">
+  <!-- Status Tabs with Exact Counts -->
+  <div class="status-tabs-wrap">
+    {% set cur_status = filters.status or '' %}
+    <a href="/leads{% if filters.search %}?search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if not cur_status else ''}}">
+      All Leads
+      <span class="status-count-badge">{{ status_counts.all or total_leads_count or leads|length }}</span>
+    </a>
+    <a href="/leads?status=new{% if filters.search %}&search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if cur_status == 'new' else ''}}">
+      New
+      <span class="status-count-badge">{{ status_counts.new or 0 }}</span>
+    </a>
+    <a href="/leads?status=queued{% if filters.search %}&search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if cur_status == 'queued' else ''}}">
+      Queued
+      <span class="status-count-badge">{{ status_counts.queued or 0 }}</span>
+    </a>
+    <a href="/leads?status=contacted{% if filters.search %}&search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if cur_status == 'contacted' else ''}}">
+      Contacted
+      <span class="status-count-badge">{{ status_counts.contacted or 0 }}</span>
+    </a>
+    <a href="/leads?status=replied{% if filters.search %}&search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if cur_status == 'replied' else ''}}">
+      Replied
+      <span class="status-count-badge">{{ status_counts.replied or 0 }}</span>
+    </a>
+    <a href="/leads?status=demo_booked{% if filters.search %}&search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if cur_status == 'demo_booked' else ''}}">
+      Demo Booked
+      <span class="status-count-badge">{{ status_counts.demo_booked or 0 }}</span>
+    </a>
+    <a href="/leads?status=do_not_contact{% if filters.search %}&search={{filters.search|urlencode}}{% endif %}" class="status-tab {{'active' if cur_status == 'do_not_contact' else ''}}">
+      Do Not Contact
+      <span class="status-count-badge">{{ status_counts.do_not_contact or 0 }}</span>
+    </a>
+  </div>
+
+  <!-- Filter Inputs Bar -->
+  <div class="filter-toolbar">
+    <form method="get" action="/leads" class="filter-form-grid" id="lead-filter-form">
+      <div class="filter-field grow">
+        <label>Search contacts</label>
+        <input name="search" value="{{filters.search or ''}}" placeholder="Search business, name, email, city, phone…">
+      </div>
+      <div class="filter-field">
+        <label>Category / Niche</label>
+        <input name="category" value="{{filters.category or ''}}" placeholder="e.g. remodeling" list="categories-list">
+        <datalist id="categories-list">
+          {% for cat in categories %}<option value="{{cat}}">{% endfor %}
+        </datalist>
+      </div>
+      <div class="filter-field" style="max-width:90px; min-width:80px;">
+        <label>State</label>
+        <input name="state" value="{{filters.state or ''}}" placeholder="TX" maxlength="2" style="text-transform:uppercase;">
+      </div>
+      <div class="filter-field">
+        <label>Status</label>
+        <select name="status">
+          <option value="">All statuses</option>
+          {% for s in ['new','queued','contacted','replied','demo_booked','do_not_contact','bounced'] %}
+            <option value="{{s}}" {% if filters.status == s %}selected{% endif %}>{{ s|replace('_',' ')|title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>Source</label>
+        <select name="source">
+          <option value="">All sources</option>
+          <option value="csv_import" {% if filters.source == 'csv_import' %}selected{% endif %}>CSV Imports</option>
+          <option value="scraper" {% if filters.source == 'scraper' %}selected{% endif %}>Discovery Scraper</option>
+          <option value="manual" {% if filters.source == 'manual' %}selected{% endif %}>Manual / Added</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button type="submit" class="button primary" style="padding:8px 16px;">
+          Filter leads
+        </button>
+        {% if filters.search or filters.category or filters.state or filters.status or filters.source %}
+          <a href="/leads" class="button secondary" style="padding:8px 12px;">Reset</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+
+  <!-- Live Filter Match Count Banner & Active Filter Chips -->
+  <div class="filter-summary-strip">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <strong>
+        Showing {{ filtered_count or leads|length }} of {{ total_leads_count or leads|length }} leads
+      </strong>
+      {% if filters.search or filters.category or filters.state or filters.status or filters.source %}
+        <span style="color:#cbd5e1;">&vert;</span>
+        <div class="active-filter-chips">
+          {% if filters.search %}
+            <span class="filter-chip">Search: "{{filters.search}}" <a href="/leads?{% for k,v in filters.items() if k != 'search' and v %}{{k}}={{v|urlencode}}&{% endfor %}">×</a></span>
+          {% endif %}
+          {% if filters.category %}
+            <span class="filter-chip">Category: {{filters.category}} <a href="/leads?{% for k,v in filters.items() if k != 'category' and v %}{{k}}={{v|urlencode}}&{% endfor %}">×</a></span>
+          {% endif %}
+          {% if filters.state %}
+            <span class="filter-chip">State: {{filters.state|upper}} <a href="/leads?{% for k,v in filters.items() if k != 'state' and v %}{{k}}={{v|urlencode}}&{% endfor %}">×</a></span>
+          {% endif %}
+          {% if filters.status %}
+            <span class="filter-chip">Status: {{filters.status|replace('_',' ')|title}} <a href="/leads?{% for k,v in filters.items() if k != 'status' and v %}{{k}}={{v|urlencode}}&{% endfor %}">×</a></span>
+          {% endif %}
+          {% if filters.source %}
+            <span class="filter-chip">Source: {{filters.source}} <a href="/leads?{% for k,v in filters.items() if k != 'source' and v %}{{k}}={{v|urlencode}}&{% endfor %}">×</a></span>
+          {% endif %}
+          <a href="/leads" style="font-size:11.5px; color:#ef4444; font-weight:600; text-decoration:none; margin-left:4px;">Clear all</a>
+        </div>
+      {% endif %}
+    </div>
+    <span style="font-size:11.5px;">Matches are deduplicated by domain and email</span>
+  </div>
+
+  <!-- Bulk Action Toolbar -->
+  <div class="bulk-bar">
+    <div class="bulk-left">
+      <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:600; font-size:12.5px;">
+        <input type="checkbox" id="select-all-leads" onclick="toggleSelectAll(this)">
+        Select all
+      </label>
+      <span class="selected-pill" id="selected-counter">0 selected</span>
+    </div>
+
+    <form id="bulk-form" action="/leads/bulk" method="post" class="inline" style="gap:8px; margin:0;">
+      <select name="action" style="padding:6px 10px; font-size:12px; border-radius:6px; border:1px solid var(--line);">
+        <option value="status:new">Set status: New</option>
+        <option value="status:queued">Set status: Queued</option>
+        <option value="status:replied">Mark as Replied</option>
+        <option value="status:demo_booked">Mark as Demo Booked</option>
+        <option value="status:do_not_contact">Mark as Do Not Contact</option>
+        <option value="delete">Delete selected</option>
+      </select>
+      <button type="submit" class="secondary" style="padding:6px 12px; font-size:12px;" data-confirm="Apply this bulk action to all selected leads?">
+        Apply to selected
+      </button>
+    </form>
+  </div>
+
+  <!-- Leads Table -->
+  <div class="table-wrap" style="margin:0;">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px;"></th>
+          <th>Business & Contact</th>
+          <th>Email Address</th>
+          <th>Trade / Niche</th>
+          <th>Location</th>
+          <th>Source</th>
+          <th>Status</th>
+          <th style="text-align:right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in leads %}
+          <tr>
+            <td>
+              <input type="checkbox" name="lead_ids" value="{{l.id}}" form="bulk-form" class="lead-checkbox" onchange="updateSelectedCount()">
+            </td>
+            <td class="lead-title-cell">
+              <a href="/leads/{{l.id}}" style="text-decoration:none;">
+                <strong>{{ l.short_name or l.business_name or 'Unnamed Business' }}</strong>
+              </a>
+              <small>
+                {% if l.owner_first_name %}{{ l.owner_first_name }} · {% endif %}
+                {% if l.website %}<a href="{{l.website}}" target="_blank" rel="noopener" style="color:var(--muted);">{{ l.website|replace('https://','')|replace('http://','')|replace('www.','')|truncate(28) }}</a>{% else %}No website{% endif %}
+              </small>
+            </td>
+            <td>
+              {% if l.email %}
+                <code style="font-family:'JetBrains Mono',monospace; font-size:12px; background:#f8fafc; padding:2px 6px; border-radius:4px; border:1px solid #e2e8f0;">{{ l.email }}</code>
+              {% else %}
+                <span style="color:#94a3b8; font-size:12px;">No email</span>
+              {% endif %}
+              {% if l.phone %}<small style="display:block; color:var(--muted); font-size:11px; margin-top:2px;">{{ l.phone }}</small>{% endif %}
+            </td>
+            <td>
+              <span class="lead-tag">🔨 {{ l.category or 'General' }}</span>
+            </td>
+            <td>
+              <span style="font-size:12.5px;">{{ l.city or '—' }}{% if l.state %}, {{ l.state }}{% endif %}</span>
+            </td>
+            <td>
+              <span class="lead-tag" style="font-size:11px;">{{ l.source or 'import' }}</span>
+            </td>
+            <td>
+              <span class="badge {{ l.status }}">{{ l.status|replace('_',' ') }}</span>
+            </td>
+            <td style="text-align:right;">
+              <form action="/leads/{{l.id}}/status" method="post" style="display:inline;">
+                <select name="status" onchange="this.form.submit()" style="padding:3px 8px; font-size:11.5px; border-radius:6px; border:1px solid var(--line); background:#ffffff;">
+                  <option value="" disabled selected>Change status…</option>
+                  <option value="new">New</option>
+                  <option value="queued">Queued</option>
+                  <option value="contacted">Contacted</option>
+                  <option value="replied">Replied</option>
+                  <option value="demo_booked">Demo booked</option>
+                  <option value="do_not_contact">Do not contact</option>
+                </select>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="8" class="empty" style="padding:48px 20px; text-align:center;">
+              <div style="font-size:28px; margin-bottom:8px;">🔍</div>
+              <strong style="font-size:15px; display:block; margin-bottom:4px;">No leads match these filters</strong>
+              <p style="color:var(--muted); font-size:13px; margin:0 0 16px;">Try adjusting your search terms or clearing status filters.</p>
+              <a href="/leads" class="button secondary small">Clear all filters</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Import History Panel -->
+<section class="panel" style="margin-top:24px;">
+  <div class="panel-head">
+    <div>
+      <h2>Import history & CSV batches</h2>
+      <p>Audit trail of all uploaded lead spreadsheets.</p>
+    </div>
+  </div>
+  {% for b in batches %}
+    <div class="history" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); gap:12px; flex-wrap:wrap;">
+      <div>
+        <strong>{{b.filename}}</strong>
+        <small style="display:block; color:var(--muted); font-size:12px; margin-top:2px;">
+          {% if b.status == 'preview' %}
+            {{b.total_rows}} detected · <span class="badge queued">awaiting confirmation</span>
+          {% else %}
+            {{b.imported_rows}} imported · {{b.rejected_rows}} rejected · <span class="badge {% if b.status=='done' %}replied{% else %}muted{% endif %}">{{b.status}}</span>
+          {% endif %}
+        </small>
+      </div>
+      {% if b.status=='preview' %}
+        <div style="display:flex; gap:8px; align-items:center;">
+          <a href="/imports/{{b.id}}/preview" class="button primary small" style="padding:4px 10px; font-size:12px;">Review & Confirm</a>
+          <form action="/imports/{{b.id}}/delete" method="post">
+            <button class="link danger" style="font-size:12px;" data-confirm="Discard this unconfirmed import preview?">Discard</button>
+          </form>
+        </div>
+      {% elif b.status=='done' %}
+        <div style="display:flex; gap:8px; align-items:center;">
+          {% if b.rejected_rows %}
+            <a href="/imports/{{b.id}}/rejected.csv" class="button secondary small" style="padding:4px 10px; font-size:12px;">Download rejected</a>
+          {% endif %}
+          <a href="/campaigns?batch_id={{b.id}}" class="button secondary small" style="padding:4px 10px; font-size:12px;">Launch campaign</a>
+          <form action="/imports/{{b.id}}/undo" method="post">
+            <button class="link danger" style="font-size:12px;" data-confirm="Delete unused leads from this batch? Imports with email history are protected.">Undo</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+  {% else %}
+    <p class="muted" style="padding:16px 0;">No CSV imports uploaded yet.</p>
+  {% endfor %}
+</section>
+
+<!-- Upload CSV Modal Dialog -->
+<dialog id="csv-dialog" style="max-width:500px; width:92%; border-radius:12px; border:1px solid #e2e8f0; padding:0;">
+  <form action="/imports/preview" method="post" enctype="multipart/form-data" class="stack" style="padding:22px;" onsubmit="const btn=this.querySelector('button[type=submit]'); if(btn){ btn.textContent='Uploading &amp; analyzing...'; btn.style.pointerEvents='none'; btn.style.opacity='0.65'; }">
+    <div class="dialog-head" style="margin-bottom:14px;">
+      <h2 style="margin:0;">Upload CSV Leads</h2>
+      <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin:0 0 16px;">Upload up to 5 MB / 5,000 rows. You will preview column mappings and cleaned data before any leads are saved.</p>
+    <input type="file" name="file" accept=".csv,text/csv" required style="padding:10px; border:1px dashed var(--line); border-radius:8px; background:#f8fafc; width:100%;">
+    <div class="actions" style="margin-top:20px; display:flex; justify-content:flex-end; gap:8px;">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit">Preview import</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Add Lead Modal Dialog -->
+<dialog id="lead-dialog" style="max-width:620px; width:94%; border-radius:12px; border:1px solid #e2e8f0; padding:0;">
+  <form action="/leads/save" method="post" class="stack" style="padding:22px;">
+    <div class="dialog-head" style="margin-bottom:14px;">
+      <h2 style="margin:0;">Add Lead Manually</h2>
+      <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
+    </div>
+    <div class="form-grid">
+      <label>Business name<input name="business_name" required></label>
+      <label>Short name<input name="short_name" placeholder="Generated if blank"></label>
+      <label>Owner / Contact name<input name="owner_first_name" placeholder="e.g. Blair"></label>
+      <label>Email address<input name="email" type="email" placeholder="blair@company.com"></label>
+      <label>Phone number<input name="phone" placeholder="(555) 123-4567"></label>
+      <label>Website URL<input name="website" placeholder="https://example.com"></label>
+      <label>Category / Trade<input name="category" placeholder="Remodeling"></label>
+      <label>City<input name="city" placeholder="San Antonio"></label>
+      <label>State (2 letters)<input name="state" maxlength="2" placeholder="TX"></label>
+      <label>ZIP code<input name="zip" placeholder="78201"></label>
+      <label class="wide">Outreach angle<input name="outreach_angle" placeholder="e.g. commercial roofing referral"></label>
+      <label class="wide">Internal notes<textarea name="notes" rows="3" placeholder="Context, background, referral source..."></textarea></label>
+    </div>
+    <div class="actions" style="margin-top:20px; display:flex; justify-content:flex-end; gap:8px;">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit">Save lead</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleSelectAll(master) {
+    const checkboxes = document.querySelectorAll('.lead-checkbox');
+    checkboxes.forEach(cb => cb.checked = master.checked);
+    updateSelectedCount();
+  }
+
+  function updateSelectedCount() {
+    const checked = document.querySelectorAll('.lead-checkbox:checked').length;
+    const counter = document.getElementById('selected-counter');
+    if (counter) {
+      counter.textContent = `${checked} selected`;
+      counter.style.background = checked > 0 ? '#e0f2fe' : '#f1f5f9';
+      counter.style.color = checked > 0 ? '#0369a1' : '#64748b';
+    }
+  }
+</script>
+{% endblock %}
+

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="campaigns-page">
+  <header class="campaigns-header">
+    <div>
+      <span class="eyebrow">Sending</span>
+      <h1>Campaigns</h1>
+      <p>Create personal outreach that stays inside every Gmail sender’s daily limit.</p>
+    </div>
+    <div class="campaigns-at-a-glance">
+      <span><b>{{campaigns|length}}</b> campaigns</span>
+      <span><b>{{gmail_accounts|length}}</b> active senders</span>
+      <span><b>{{app_settings.daily_cap or 20}}</b> per sender/day</span>
+    </div>
+  </header>
+
+  <div class="campaigns-layout">
+    <section class="panel campaign-index-panel">
+      <div class="panel-head campaign-panel-head">
+        <div><h2>Campaign history</h2><p>Open a campaign to review its queue and delivery log.</p></div>
+        <span class="count-pill">{{campaigns|length}}</span>
+      </div>
+      <div class="campaign-list-clean">
+        {% for c in campaigns %}
+          <article class="campaign-list-item">
+            <a href="/campaigns/{{c.id}}" class="campaign-list-main">
+              <div class="campaign-list-icon">✉</div>
+              <div class="campaign-list-copy">
+                <strong>{{c.name}}</strong>
+                <span>{{(c.gmail_accounts or ['1'])|length}} sender{% if (c.gmail_accounts or ['1'])|length != 1 %}s{% endif %} · {{c.target_filter.source or 'all leads'}} · {{app_settings.daily_cap or 20}}/day each</span>
+              </div>
+              <span class="badge {{c.state}}">{{c.state}}</span>
+            </a>
+            {% if c.state == 'draft' %}
+              <form method="post" action="/campaigns/{{c.id}}/delete" class="campaign-list-delete">
+                <button class="link danger" data-confirm="Delete this unused draft campaign?">Delete</button>
+              </form>
+            {% endif %}
+          </article>
+        {% else %}
+          <div class="campaign-empty-state"><span>✉</span><strong>No campaigns yet</strong><p>Your first campaign will appear here.</p></div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="panel campaign-builder">
+      <div class="campaign-builder-title">
+        <span class="campaign-builder-icon">＋</span>
+        <div><span class="eyebrow">New outreach</span><h2>{% if selected_batch %}Campaign for {{selected_batch.filename}}{% else %}Create campaign{% endif %}</h2><p>Choose the audience, content, and Gmail identities.</p></div>
+      </div>
+
+      <form method="post" action="/campaigns/save" class="campaign-builder-form">
+        <label class="campaign-name-field">Campaign name
+          <input name="name" value="{% if selected_batch %}Campaign - {{selected_batch.filename}}{% else %}New Outreach Campaign{% endif %}" required>
+        </label>
+
+        <section class="builder-section">
+          <div class="builder-section-head"><span class="builder-step">1</span><div><h3>Audience</h3><p>Define which eligible leads enter this campaign.</p></div></div>
+          <div class="builder-section-body">
+            {% if selected_batch %}
+              <div class="selected-audience">
+                <span class="selected-audience-icon">✓</span>
+                <div><small>Uploaded lead list</small><strong>{{selected_batch.filename}}</strong><span>{{selected_batch.imported_rows}} leads</span></div>
+                <input type="hidden" name="import_batch_id" value="{{selected_batch.id}}">
+                <input type="hidden" name="source" value="csv_import">
+              </div>
+            {% elif batches %}
+              <div class="form-grid">
+                <label>Target source
+                  <select name="source"><option value="">All leads (CSV & Discovered)</option><option value="csv_import">Only CSV imports</option></select>
+                </label>
+                <label>Specific CSV batch
+                  <select name="import_batch_id"><option value="">Any batch</option>{% for b in batches %}<option value="{{b.id}}" {% if batch_id==b.id %}selected{% endif %}>{{b.filename}} ({{b.imported_rows}} leads)</option>{% endfor %}</select>
+                </label>
+              </div>
+            {% endif %}
+            <div class="form-grid audience-filters">
+              <label>Category<input name="category" placeholder="e.g. roofers"></label>
+              <label>State<input name="state" maxlength="2" placeholder="e.g. TX"></label>
+              <label>City<input name="city" placeholder="e.g. Austin"></label>
+              <label>Lead status<select name="status"><option value="new">New leads</option><option value="">Any eligible lead</option></select></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="builder-section">
+          <div class="builder-section-head"><span class="builder-step">2</span><div><h3>Email templates</h3><p>Select one or more messages to rotate across the campaign.</p></div></div>
+          <div class="builder-section-body">
+            <div class="template-choice-list">
+              {% for t in templates %}
+                <label class="template-choice">
+                  <input type="checkbox" name="template_ids" value="{{t.id}}" checked>
+                  <span class="choice-check">✓</span>
+                  <span class="template-choice-copy"><strong>{{t.name}}</strong><small>{{t.subject}}</small></span>
+                </label>
+              {% else %}
+                <p class="muted">No active templates available.</p>
+              {% endfor %}
+            </div>
+            <p class="builder-help">Multiple selections are automatically rotated for simple A/B testing.</p>
+          </div>
+        </section>
+
+        <section class="builder-section">
+          <div class="builder-section-head"><span class="builder-step">3</span><div><h3>Sender settings</h3><p>Choose your provider and select sender identities.</p></div></div>
+          <div class="builder-section-body">
+            <div class="form-grid">
+              <label>Provider
+                <select name="provider" id="provider_select">
+                  <option value="gmail" {% if app_settings.email_provider == 'gmail' %}selected{% endif %}>Gmail</option>
+                  <option value="pingram" {% if app_settings.email_provider == 'pingram' %}selected{% endif %}>Pingram</option>
+                </select>
+              </label>
+            </div>
+            
+            <div class="sending-summary-strip" id="gmail_summary_strip">
+              <div><span>Cap</span><strong>{{app_settings.daily_cap or 20}} / sender / day</strong></div>
+              <div><span>Scheduling</span><strong>Earliest capacity first</strong></div>
+            </div>
+            <div class="sender-choice-grid" id="gmail_sender_grid">
+              {% for account in gmail_accounts %}
+                <label class="sender-choice" data-provider="{{account.provider or 'gmail'}}">
+                  <input type="checkbox" name="gmail_accounts" value="{{account.id}}" checked>
+                  <span class="choice-check">✓</span>
+                  <span class="sender-avatar">{{(account.display_name or account.email or 'G')[:1]|upper}}</span>
+                  <div><strong>{{account.display_name or 'Outreach'}}</strong><small>{{account.email}}</small></div>
+                </label>
+              {% else %}
+                <p class="empty" style="grid-column:1/-1;">No active senders available. Go to Settings to add one.</p>
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+
+        <div class="campaign-builder-footer">
+          <div><strong>Ready to create?</strong><span>You can review the campaign before starting its queue.</span></div>
+        </div>
+        <div style="margin-top:24px;"><button class="primary large" style="width:100%;">Create campaign</button></div>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  const providerSelect = document.getElementById('provider_select');
+  const gmailSummary = document.getElementById('gmail_summary_strip');
+  const senderChoices = document.querySelectorAll('.sender-choice');
+  
+  function updateProviderUI() {
+    const isPingram = providerSelect.value === 'pingram';
+    
+    // Pingram doesn't have a 20/day per sender cap, so hide the summary strip that says that
+    if (gmailSummary) {
+      gmailSummary.style.display = isPingram ? 'none' : 'flex';
+    }
+    
+    // Only show senders that belong to the selected provider
+    senderChoices.forEach(choice => {
+      const isMatch = choice.getAttribute('data-provider') === providerSelect.value;
+      choice.style.display = isMatch ? 'flex' : 'none';
+      const checkbox = choice.querySelector('input');
+      if (checkbox) checkbox.checked = isMatch;
+    });
+  }
+  
+  if (providerSelect) {
+    providerSelect.addEventListener('change', updateProviderUI);
+    updateProviderUI();
+  }
+</script>
+{% endblock %}

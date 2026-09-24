@@ -1,0 +1,1258 @@
+{% extends "base.html" %}
+{% block title %}Freight missions & fleet{% endblock %}
+{% block head %}
+<style>
+/* Modern Freight Missions Styling */
+.freight-onboarding {
+  background: #ffffff;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03), 0 6px 16px -4px rgba(0,0,0,0.04);
+  padding: 18px 22px;
+  margin-bottom: 22px;
+}
+.onboarding-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.onboarding-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.onboarding-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+}
+.onboarding-badge.complete {
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
+}
+.stepper-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.step-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.16s ease;
+}
+.step-card:hover {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.step-card.active {
+  border-color: #0284c7;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #0284c7, 0 2px 8px rgba(2,132,199,0.08);
+}
+.step-card.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+.step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 750;
+  background: #e2e8f0;
+  color: #475569;
+  flex-shrink: 0;
+}
+.step-card.active .step-num {
+  background: #0284c7;
+  color: #ffffff;
+}
+.step-card.done .step-num {
+  background: #16a34a;
+  color: #ffffff;
+}
+.step-meta h4 {
+  margin: 0 0 2px 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-heading);
+}
+.step-meta p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.step-status {
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-top: 4px;
+  display: block;
+}
+.step-status.done-text { color: #16a34a; }
+.step-status.active-text { color: #0284c7; }
+.step-status.pending-text { color: #94a3b8; }
+
+/* Tabs Bar */
+.freight-tabs-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.tabs-segmented {
+  display: inline-flex;
+  background: #eef2f6;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+}
+.tab-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: none;
+}
+.tab-segment:hover {
+  color: var(--ink-heading);
+  background: rgba(255, 255, 255, 0.6);
+  transform: none;
+}
+.tab-segment.active {
+  background: var(--dark-overtone);
+  color: #ffffff !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+  border-color: var(--dark-overtone);
+}
+.tab-count {
+  display: inline-flex;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #e2e8f0;
+  color: #475569;
+}
+.tab-segment.active .tab-count {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+/* Card Lists */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.entity-card {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  transition: all 0.16s ease;
+}
+.entity-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 14px -2px rgba(0,0,0,0.05);
+  transform: translateY(-1px);
+}
+.entity-card.is-active-border {
+  border-left: 4px solid #16a34a;
+}
+.entity-card.is-paused-border {
+  border-left: 4px solid #cbd5e1;
+  opacity: 0.9;
+}
+.entity-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.entity-title {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  font-weight: 750;
+  color: var(--ink-heading);
+}
+.route-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.chips-wrap {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.dest-chip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 650;
+  border: 1px solid #bfdbfe;
+}
+.spec-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.spec-pill {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11.5px;
+  font-weight: 550;
+}
+.spec-pill.highlight {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+  font-weight: 650;
+}
+
+/* Polished Form Sections */
+.form-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: var(--panel-shadow);
+  margin-top: 10px;
+}
+.form-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  font-weight: 750;
+  color: var(--ink-heading);
+  margin: 22px 0 12px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.form-section-title:first-child {
+  margin-top: 0;
+}
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.form-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.span-full {
+  grid-column: 1 / -1;
+}
+
+/* Destination Builder */
+.destination-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.5fr) 120px 110px 36px;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.remove-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.remove-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+  transform: none;
+}
+
+/* Mode Selector Cards (Auto vs Approve) */
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+.mode-card {
+  position: relative;
+  padding: 16px 18px;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  user-select: none;
+}
+.mode-card:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgba(0,0,0,0.04);
+}
+.mode-card.is-selected-auto {
+  border-color: #16a34a;
+  background: #f0fdf4;
+  box-shadow: 0 0 0 1px #16a34a, 0 4px 14px -2px rgba(22, 163, 74, 0.12);
+}
+.mode-card.is-selected-approve {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px #2563eb, 0 4px 14px -2px rgba(37, 99, 235, 0.12);
+}
+.mode-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.mode-icon.auto {
+  background: #dcfce7;
+  color: #15803d;
+}
+.mode-icon.approve {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.mode-content {
+  flex: 1;
+}
+.mode-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+  gap: 8px;
+  padding-right: 28px;
+}
+.mode-title {
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--ink-heading);
+}
+.mode-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.mode-badge.auto {
+  background: #dcfce7;
+  color: #15803d;
+}
+.mode-badge.approve {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.mode-desc {
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.45;
+  margin: 0 0 6px 0;
+}
+.mode-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.mode-card input[type="radio"] {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 18px;
+  height: 18px;
+  accent-color: #16a34a;
+  cursor: pointer;
+  margin: 0;
+}
+.mode-card.is-selected-approve input[type="radio"] {
+  accent-color: #2563eb;
+}
+.safety-guardrail-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.4;
+}
+.safety-guardrail-note strong {
+  color: var(--ink-heading);
+}
+
+/* Feature Toggle Cards */
+.toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+.toggle-card {
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.toggle-card:hover {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+.toggle-card input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  cursor: pointer;
+}
+.toggle-text b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-heading);
+  margin-bottom: 2px;
+}
+.toggle-text small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+/* Unit Input Group */
+.input-with-unit {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-unit-prefix {
+  position: absolute;
+  left: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+  pointer-events: none;
+}
+.input-with-unit.has-prefix input {
+  padding-left: 22px;
+}
+
+@media(max-width: 1000px) {
+  .stepper-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .form-grid-3, .form-grid-4, .toggle-grid, .mode-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media(max-width: 650px) {
+  .stepper-steps {
+    grid-template-columns: 1fr;
+  }
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .destination-row {
+    grid-template-columns: 1fr 100px 80px 34px;
+  }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{% set step1_done = true if (freight_settings.sender_name and freight_settings.default_sender_account) else false %}
+{% set step2_done = profiles|length > 0 %}
+{% set step3_done = missions|length > 0 %}
+{% set all_done = step1_done and step2_done and step3_done %}
+
+<header style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+  <div>
+    <span class="eyebrow">Freight Fleet & Routing</span>
+    <h1 style="margin:2px 0 4px">Missions & truck profiles</h1>
+    <p style="margin:0;color:var(--muted)">Manage your truck fleet specs and dispatch missions that dictate autonomous broker negotiations.</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="button ghost" href="/freight/settings">Settings & templates</a>
+    <a class="button" href="/freight">Open loads workspace →</a>
+  </div>
+</header>
+
+<!-- ONBOARDING PROGRESS ROADMAP -->
+<div class="freight-onboarding">
+  <div class="onboarding-head">
+    <div class="onboarding-title-wrap">
+      <h3 style="margin:0;font-size:14px;font-weight:750">Freight Setup Journey</h3>
+      <span class="onboarding-badge {{ 'complete' if all_done else '' }}">
+        {{ 'Fleet Ready for Dispatch' if all_done else ('Step 1 of 4: Sender Identity' if not step1_done else ('Step 2 of 4: Add Truck' if not step2_done else 'Step 3 of 4: Create Mission')) }}
+      </span>
+    </div>
+    {% if all_done %}
+    <span style="font-size:12px;color:#16a34a;font-weight:600">✓ All requirements complete · Inbound & outbound automation active</span>
+    {% else %}
+    <span style="font-size:12px;color:var(--muted)">Follow this 4-step sequence to start sending load inquiries</span>
+    {% endif %}
+  </div>
+
+  <div class="stepper-steps">
+    <!-- Step 1 -->
+    <a href="/freight/settings" class="step-card {{ 'done' if step1_done else 'active' }}">
+      <div class="step-num">{{ '✓' if step1_done else '1' }}</div>
+      <div class="step-meta">
+        <h4>1. Email & Identity</h4>
+        <p>Sender name, Gmail & signature</p>
+        <span class="step-status {{ 'done-text' if step1_done else 'active-text' }}">
+          {{ 'Configured ✓' if step1_done else 'Setup required →' }}
+        </span>
+      </div>
+    </a>
+
+    <!-- Step 2 -->
+    <div onclick="switchFreightTab('trucks')" class="step-card {{ 'done' if step2_done else ('active' if step1_done and not step2_done else '') }}" style="cursor:pointer">
+      <div class="step-num">{{ '✓' if step2_done else '2' }}</div>
+      <div class="step-meta">
+        <h4>2. Truck Profile</h4>
+        <p>Specs, dimensions, MC/DOT</p>
+        <span class="step-status {{ 'done-text' if step2_done else ('active-text' if step1_done else 'pending-text') }}">
+          {{ profiles|length ~ ' trucks on file ✓' if step2_done else ('Add truck now →' if step1_done else 'Pending step 1') }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div onclick="switchFreightTab('missions')" class="step-card {{ 'done' if step3_done else ('active' if step2_done and not step3_done else '') }}" style="cursor:pointer">
+      <div class="step-num">{{ '✓' if step3_done else '3' }}</div>
+      <div class="step-meta">
+        <h4>3. Freight Mission</h4>
+        <p>Origin, destinations & rate floor</p>
+        <span class="step-status {{ 'done-text' if step3_done else ('active-text' if step2_done else 'pending-text') }}">
+          {{ missions|length ~ ' active missions ✓' if step3_done else ('Create mission now →' if step2_done else 'Pending step 2') }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <a href="/freight" class="step-card {{ 'done' if all_done else '' }}">
+      <div class="step-num">{{ '✓' if all_done else '4' }}</div>
+      <div class="step-meta">
+        <h4>4. Find Loads</h4>
+        <p>Inquire & AI automated counter</p>
+        <span class="step-status {{ 'done-text' if all_done else 'pending-text' }}">
+          {{ 'Ready to dispatch →' if all_done else 'Requires steps 1-3' }}
+        </span>
+      </div>
+    </a>
+  </div>
+</div>
+
+<!-- SEGMENTED TABS: MISSIONS vs TRUCKS -->
+<div class="freight-tabs-bar">
+  <div class="tabs-segmented">
+    <button type="button" id="tab-btn-missions" class="tab-segment {{ 'active' if active_tab != 'trucks' else '' }}" onclick="switchFreightTab('missions')">
+      <span>🎯 Freight Missions</span>
+      <span class="tab-count">{{ missions|length }}</span>
+    </button>
+    <button type="button" id="tab-btn-trucks" class="tab-segment {{ 'active' if active_tab == 'trucks' else '' }}" onclick="switchFreightTab('trucks')">
+      <span>🚛 Truck Fleet</span>
+      <span class="tab-count">{{ profiles|length }}</span>
+    </button>
+  </div>
+
+  <div id="tab-actions-missions" style="display:{{ 'flex' if active_tab != 'trucks' else 'none' }};gap:8px">
+    {% if not edit_mission %}
+    <button class="primary-btn" onclick="openMissionForm()">+ New dispatch mission</button>
+    {% endif %}
+  </div>
+  <div id="tab-actions-trucks" style="display:{{ 'flex' if active_tab == 'trucks' else 'none' }};gap:8px">
+    {% if not edit_profile %}
+    <button class="primary-btn" onclick="openTruckForm()">+ Add truck profile</button>
+    {% endif %}
+  </div>
+</div>
+
+
+<!-- ========================================== -->
+<!-- VIEW 1: MISSIONS TAB                       -->
+<!-- ========================================== -->
+<div id="view-missions" style="display:{{ 'block' if active_tab != 'trucks' else 'none' }}">
+  <!-- List of Missions -->
+  {% if missions %}
+  <div class="cards-grid">
+    {% for m in missions %}
+    <article class="entity-card {{ 'is-active-border' if m.active else 'is-paused-border' }}">
+      <div>
+        <div class="entity-card-head">
+          <div>
+            <h3 class="entity-title">{{ m.name }}</h3>
+            <div class="route-badge">
+              <span>📍 {{ m.origin_city }}, {{ m.origin_state }}</span>
+              <span style="color:#94a3b8">➔</span>
+              <span>Open Destinations</span>
+            </div>
+          </div>
+          <span class="badge {{ 'running' if m.active else 'paused' }}">{{ 'Active' if m.active else 'Paused' }}</span>
+        </div>
+
+        <!-- Destination chips -->
+        <div class="chips-wrap">
+          {% for d in m.destinations %}
+          <span class="dest-chip">{{ d.label }}{% if d.radius_miles %} · {{ d.radius_miles }} mi radius{% endif %}</span>
+          {% endfor %}
+        </div>
+
+        <!-- Specs & rate envelope -->
+        <div class="spec-pills">
+          <span class="spec-pill">{{ m.equipment_type or 'Any equipment' }}</span>
+          {% if m.trailer_length_ft %}<span class="spec-pill">{{ m.trailer_length_ft }} ft</span>{% endif %}
+          {% if m.origin_deadhead_miles %}<span class="spec-pill">{{ m.origin_deadhead_miles }} mi deadhead max</span>{% endif %}
+          <span class="spec-pill highlight">Floor: {{ '$%.0f'|format(m.floor_total) if m.floor_total else 'No floor' }}</span>
+          {% if m.floor_loaded_rpm %}<span class="spec-pill highlight">Min ${{ '%.2f'|format(m.floor_loaded_rpm) }}/mi</span>{% endif %}
+          {% if m.permissions and (m.permissions.auto_counter or m.permissions.auto_profile_reply or m.permissions.auto_pass) %}
+          <span class="spec-pill" style="background:#dcfce7;color:#15803d;font-weight:700;border:1px solid #bbf7d0">⚡ Auto Mode</span>
+          {% else %}
+          <span class="spec-pill" style="background:#eff6ff;color:#1d4ed8;font-weight:700;border:1px solid #bfdbfe">✋ Approve Mode</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #f1f5f9;margin-top:8px">
+        <span style="font-size:11.5px;color:var(--muted)">
+          {% set assigned_truck = profiles|selectattr('id', 'equalto', m.truck_profile_id)|first %}
+          {% if assigned_truck %}
+          🚛 Assigned: <strong>{{ assigned_truck.name }}</strong>
+          {% else %}
+          <span style="color:#f59e0b">⚠ No truck profile linked</span>
+          {% endif %}
+        </span>
+        <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=missions&mission_id={{ m.id }}">Edit mission</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="panel" style="text-align:center;padding:36px 20px;border-radius:14px;margin-bottom:20px">
+    <div style="font-size:32px;margin-bottom:8px">🎯</div>
+    <h3 style="font-size:16px;margin:0 0 6px">No dispatch missions created yet</h3>
+    <p style="color:var(--muted);max-width:480px;margin:0 auto 16px;font-size:13px">
+      A mission specifies which origin city your truck is departing from, where you want to go, and the negotiation rate floor.
+    </p>
+    {% if not profiles %}
+    <p style="color:#d97706;font-size:12.5px;margin-bottom:14px">
+      💡 Tip: Add at least one truck profile first so you can assign it to your mission.
+    </p>
+    <button class="primary-btn" onclick="switchFreightTab('trucks')">Add your first truck profile →</button>
+    {% else %}
+    <button class="primary-btn" onclick="openMissionForm()">Create your first mission →</button>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- MISSION FORM (Visible when editing or toggled) -->
+  <div id="mission-form-panel" class="form-card" style="display:{{ 'block' if edit_mission or not missions else 'none' }}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)">
+      <div>
+        <h2 style="font-size:17px;margin:0 0 4px">{{ 'Edit dispatch mission' if edit_mission else 'Create new dispatch mission' }}</h2>
+        <p style="margin:0;color:var(--muted)">Set truck assignment, origin, desired destinations, and rate boundaries.</p>
+      </div>
+      {% if missions and not edit_mission %}
+      <button type="button" class="button ghost" onclick="closeMissionForm()">Close form</button>
+      {% elif edit_mission %}
+      <a class="button ghost" href="/freight/missions?tab=missions">Cancel edit</a>
+      {% endif %}
+    </div>
+
+    <form action="/freight/missions/save" method="post" class="stack">
+      <input type="hidden" name="id" value="{{ edit_mission.id if edit_mission else '' }}">
+
+      <!-- SECTION 1: TRUCK & ROUTE BASICS -->
+      <div class="form-section-title">
+        <span>📍 1. Truck & Route Assignment</span>
+      </div>
+      <div class="form-grid-2">
+        <label>
+          Mission name
+          <input name="name" required value="{{ edit_mission.name if edit_mission else '' }}" placeholder="e.g. Phoenix to Dallas — Dry Van">
+        </label>
+
+        <label>
+          Assign truck profile
+          <select id="mission-truck-select" name="truck_profile_id" onchange="onTruckSelect(this.value)">
+            <option value="">No truck selected (specify manually below)</option>
+            {% for p in profiles %}
+            <option value="{{ p.id }}" {% if edit_mission and edit_mission.truck_profile_id == p.id %}selected{% endif %}>
+              {{ p.name }} ({{ p.current_city }}, {{ p.current_state }} · {{ p.equipment_type }})
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>
+          Origin city
+          <input id="input-origin-city" name="origin_city" value="{{ edit_mission.origin_city if edit_mission else '' }}" placeholder="e.g. Phoenix">
+        </label>
+
+        <label>
+          Origin state
+          <input id="input-origin-state" name="origin_state" maxlength="2" value="{{ edit_mission.origin_state if edit_mission else '' }}" placeholder="AZ" style="text-transform:uppercase">
+        </label>
+
+        <label>
+          Origin deadhead allowance (miles)
+          <input type="number" name="origin_deadhead_miles" value="{{ edit_mission.origin_deadhead_miles if edit_mission else 0 }}">
+        </label>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label>
+            Pickup available from
+            <input type="date" name="pickup_start" value="{{ edit_mission.pickup_start if edit_mission else '' }}">
+          </label>
+          <label>
+            Available through
+            <input type="date" name="pickup_end" value="{{ edit_mission.pickup_end if edit_mission else '' }}">
+          </label>
+        </div>
+      </div>
+
+      <!-- SECTION 2: EQUIPMENT SPECS -->
+      <div class="form-section-title">
+        <span>🚛 2. Equipment Specifications</span>
+      </div>
+      <div class="form-grid-3">
+        <label>
+          Equipment type
+          <input id="input-equipment-type" name="equipment_type" value="{{ edit_mission.equipment_type if edit_mission else '' }}" placeholder="Dry van, Reefer, Flatbed">
+        </label>
+
+        <label>
+          Trailer length (ft)
+          <input id="input-trailer-length" type="number" name="trailer_length_ft" value="{{ edit_mission.trailer_length_ft if edit_mission else 53 }}">
+        </label>
+
+        <label>
+          Max cargo weight (lb)
+          <input id="input-max-weight" type="number" name="max_weight_lbs" value="{{ edit_mission.max_weight_lbs if edit_mission else 45000 }}">
+        </label>
+      </div>
+
+      <!-- SECTION 3: DESIRED DESTINATIONS -->
+      <div class="form-section-title">
+        <span>🎯 3. Target Destinations</span>
+      </div>
+      <div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
+          Add the specific cities, states, or regions this truck is willing to deliver to.
+        </p>
+        <div id="destination-list">
+          {% set destinations = edit_mission.destinations if edit_mission and edit_mission.destinations else [{'label':'','kind':'city','radius_miles':0}] %}
+          {% for d in destinations %}
+          <div class="destination-row">
+            <input name="destination_label" value="{{ d.label }}" placeholder="e.g. Dallas, TX or Southeast" required>
+            <select name="destination_kind">
+              <option value="city" {% if d.kind=='city' %}selected{% endif %}>City</option>
+              <option value="state" {% if d.kind=='state' %}selected{% endif %}>State</option>
+              <option value="region" {% if d.kind=='region' %}selected{% endif %}>Region</option>
+              <option value="anywhere" {% if d.kind=='anywhere' %}selected{% endif %}>Anywhere</option>
+            </select>
+            <div class="input-with-unit">
+              <input type="number" name="destination_radius" value="{{ d.radius_miles or 0 }}" placeholder="0" title="Radius in miles">
+            </div>
+            <button type="button" class="remove-btn remove-destination" title="Remove destination">×</button>
+          </div>
+          {% endfor %}
+        </div>
+        <button type="button" class="button secondary" style="font-size:12px;padding:6px 14px;margin-top:6px" id="add-destination">+ Add another destination</button>
+      </div>
+
+      <!-- SECTION 4: NEGOTIATION ENVELOPE -->
+      <div class="form-section-title">
+        <span>💵 4. Rate Envelope & Negotiation Bounds</span>
+      </div>
+      <div class="form-grid-4">
+        <label>
+          Minimum floor total ($)
+          <div class="input-with-unit has-prefix">
+            <span class="input-unit-prefix">$</span>
+            <input type="number" step=".01" name="floor_total" value="{{ edit_mission.floor_total if edit_mission else '' }}" placeholder="2000">
+          </div>
+        </label>
+
+        <label>
+          Target total pay ($)
+          <div class="input-with-unit has-prefix">
+            <span class="input-unit-prefix">$</span>
+            <input type="number" step=".01" name="target_total" value="{{ edit_mission.target_total if edit_mission else '' }}" placeholder="2500">
+          </div>
+        </label>
+
+        <label>
+          Min loaded RPM ($/mi)
+          <div class="input-with-unit has-prefix">
+            <span class="input-unit-prefix">$</span>
+            <input type="number" step=".01" name="floor_loaded_rpm" value="{{ edit_mission.floor_loaded_rpm if edit_mission else '' }}" placeholder="2.50">
+          </div>
+        </label>
+
+        <label>
+          Target all-in RPM ($/mi)
+          <div class="input-with-unit has-prefix">
+            <span class="input-unit-prefix">$</span>
+            <input type="number" step=".01" name="target_all_in_rpm" value="{{ edit_mission.target_all_in_rpm if edit_mission else '' }}" placeholder="2.85">
+          </div>
+        </label>
+
+        <label>
+          Fixed counter step ($)
+          <div class="input-with-unit has-prefix">
+            <span class="input-unit-prefix">$</span>
+            <input type="number" step=".01" name="counter_amount" value="{{ edit_mission.counter_amount if edit_mission else '' }}" placeholder="150">
+          </div>
+        </label>
+
+        <label>
+          Maximum counter rounds
+          <input type="number" min="1" max="10" name="maximum_counter_rounds" value="{{ edit_mission.maximum_counter_rounds if edit_mission else 3 }}">
+        </label>
+
+        <label>
+          Min all-in RPM ($/mi)
+          <div class="input-with-unit has-prefix">
+            <span class="input-unit-prefix">$</span>
+            <input type="number" step=".01" name="floor_all_in_rpm" value="{{ edit_mission.floor_all_in_rpm if edit_mission else '' }}" placeholder="2.20">
+          </div>
+        </label>
+      </div>
+
+      <!-- SECTION 5: AI NEGOTIATION MODE -->
+      {% set is_auto_mode = not edit_mission or not edit_mission.permissions or edit_mission.permissions.auto_counter or edit_mission.permissions.auto_profile_reply or edit_mission.permissions.auto_pass %}
+      <div class="form-section-title">
+        <span>🤖 5. Agent Negotiation Mode</span>
+      </div>
+      <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+        Choose whether the AI agent communicates autonomously within your boundaries, or generates drafts for your approval.
+      </p>
+
+      <div class="mode-grid">
+        <!-- AUTO MODE -->
+        <label id="mode-card-auto" class="mode-card {{ 'is-selected-auto' if is_auto_mode else '' }}" onclick="selectExecutionMode('auto')">
+          <input type="radio" name="execution_mode" value="auto" {{ 'checked' if is_auto_mode else '' }}>
+          <div class="mode-icon auto">⚡</div>
+          <div class="mode-content">
+            <div class="mode-header">
+              <span class="mode-title">Auto Mode</span>
+              <span class="mode-badge auto">Hands-Off</span>
+            </div>
+            <p class="mode-desc">The agent autonomously replies to broker emails—answering saved truck specs, negotiating counters within your envelope, and passing when below floor.</p>
+            <span class="mode-sub">⚡ Fastest broker response time</span>
+          </div>
+        </label>
+
+        <!-- APPROVE MODE -->
+        <label id="mode-card-approve" class="mode-card {{ 'is-selected-approve' if not is_auto_mode else '' }}" onclick="selectExecutionMode('approve')">
+          <input type="radio" name="execution_mode" value="approve" {{ 'checked' if not is_auto_mode else '' }}>
+          <div class="mode-icon approve">✋</div>
+          <div class="mode-content">
+            <div class="mode-header">
+              <span class="mode-title">Approve Mode</span>
+              <span class="mode-badge approve">Review First</span>
+            </div>
+            <p class="mode-desc">The agent generates drafts for every reply and counter-offer in <code>Draft Ready</code>. Zero emails are sent without you clicking "Send".</p>
+            <span class="mode-sub">🛡️ Full dispatcher oversight</span>
+          </div>
+        </label>
+      </div>
+
+      <div class="safety-guardrail-note">
+        <span style="font-size:18px">🛡️</span>
+        <div>
+          <strong>Safety Protection Always Active:</strong> Sensitive broker events (Rate Confirmations, driver PII requests, and phone calls) <em>always pause for review</em> in both modes.
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;padding-top:16px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
+        <label class="check" style="margin:0">
+          <input type="checkbox" name="active" {% if not edit_mission or edit_mission.active %}checked{% endif %}>
+          <span style="font-weight:700">Mission active for broker outreach</span>
+        </label>
+        <div style="display:flex;gap:10px">
+          {% if edit_mission %}
+          <a class="button ghost" href="/freight/missions?tab=missions">Cancel</a>
+          {% else %}
+          <button type="button" class="button ghost" onclick="closeMissionForm()">Cancel</button>
+          {% endif %}
+          <button class="primary-btn" style="padding:10px 24px">{{ 'Update mission' if edit_mission else 'Save mission' }}</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<!-- ========================================== -->
+<!-- VIEW 2: TRUCK FLEET TAB                    -->
+<!-- ========================================== -->
+<div id="view-trucks" style="display:{{ 'block' if active_tab == 'trucks' else 'none' }}">
+  <!-- List of Trucks -->
+  {% if profiles %}
+  <div class="cards-grid">
+    {% for p in profiles %}
+    <article class="entity-card {{ 'is-active-border' if p.active else 'is-paused-border' }}">
+      <div>
+        <div class="entity-card-head">
+          <div>
+            <h3 class="entity-title">{{ p.name }}</h3>
+            <div class="route-badge">
+              <span>📍 Base: {{ p.current_city or 'Unset' }}, {{ p.current_state or 'Unset' }}</span>
+            </div>
+          </div>
+          <span class="badge {{ 'running' if p.active else 'paused' }}">{{ 'Active' if p.active else 'Inactive' }}</span>
+        </div>
+
+        <div class="spec-pills">
+          <span class="spec-pill highlight">{{ p.trailer_length_ft or 53 }} ft {{ p.equipment_type }}</span>
+          {% if p.max_weight_lbs %}<span class="spec-pill">Max {{ '{:,}'.format(p.max_weight_lbs) }} lbs</span>{% endif %}
+          {% if p.team_status %}<span class="spec-pill" style="text-transform:capitalize">{{ p.team_status }} team</span>{% endif %}
+          {% if p.mc_number %}<span class="spec-pill">MC #{{ p.mc_number }}</span>{% endif %}
+          {% if p.dot_number %}<span class="spec-pill">DOT #{{ p.dot_number }}</span>{% endif %}
+        </div>
+
+        {% if p.dispatcher_name or p.dispatcher_phone %}
+        <div style="font-size:12px;color:var(--muted);margin-top:10px">
+          Dispatcher: <strong>{{ p.dispatcher_name or 'Dispatch' }}</strong> {% if p.dispatcher_phone %}({{ p.dispatcher_phone }}){% endif %}
+        </div>
+        {% endif %}
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #f1f5f9;margin-top:8px">
+        <span style="font-size:11px;color:var(--muted)">
+          Shareable: {{ p.shareable_fields|join(', ') if p.shareable_fields else 'None checked' }}
+        </span>
+        <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=trucks&profile_id={{ p.id }}">Edit truck</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="panel" style="text-align:center;padding:36px 20px;border-radius:14px;margin-bottom:20px">
+    <div style="font-size:32px;margin-bottom:8px">🚛</div>
+    <h3 style="font-size:16px;margin:0 0 6px">No truck profiles created yet</h3>
+    <p style="color:var(--muted);max-width:480px;margin:0 auto 16px;font-size:13px">
+      Add your vehicle dimensions, equipment type, and authority credentials so the AI can represent your fleet accurately to brokers.
+    </p>
+    <button class="primary-btn" onclick="openTruckForm()">Add your first truck profile →</button>
+  </div>
+  {% endif %}
+
+  <!-- TRUCK PROFILE FORM -->
+  <div id="truck-form-panel" class="form-card" style="display:{{ 'block' if edit_profile or not profiles else 'none' }}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)">
+      <div>
+        <h2 style="font-size:17px;margin:0 0 4px">{{ 'Edit truck profile' if edit_profile else 'Add new truck profile' }}</h2>
+        <p style="margin:0;color:var(--muted)">Vehicle specifications, authority numbers, and dispatcher contacts.</p>
+      </div>
+      {% if profiles and not edit_profile %}
+      <button type="button" class="button ghost" onclick="closeTruckForm()">Close form</button>
+      {% elif edit_profile %}
+      <a class="button ghost" href="/freight/missions?tab=trucks">Cancel edit</a>
+      {% endif %}
+    </div>
+
+    <form action="/freight/profiles/save" method="post" class="stack">
+      <input type="hidden" name="id" value="{{ edit_profile.id if edit_profile else '' }}">
+
+      <div class="form-section-title">
+        <span>🚛 1. Vehicle Identity & Base Location</span>
+      </div>
+      <div class="form-grid-3">
+        <label>
+          Truck profile name
+          <input name="name" required value="{{ edit_profile.name if edit_profile else '' }}" placeholder="e.g. Unit 104 — Dry Van">
+        </label>
+
+        <label>
+          Current / Base city
+          <input name="current_city" value="{{ edit_profile.current_city if edit_profile else '' }}" placeholder="e.g. Phoenix">
+        </label>
+
+        <label>
+          State
+          <input maxlength="2" name="current_state" value="{{ edit_profile.current_state if edit_profile else '' }}" placeholder="AZ" style="text-transform:uppercase">
+        </label>
+      </div>
+
+      <div class="form-section-title">
+        <span>📐 2. Trailer & Capacity Specifications</span>
+      </div>
+      <div class="form-grid-4">
+        <label>
+          Equipment type
+          <input name="equipment_type" value="{{ edit_profile.equipment_type if edit_profile else 'Dry van' }}" placeholder="Dry van, Reefer, Flatbed">
+        </label>
+
+        <label>
+          Trailer length (ft)
+          <input type="number" name="trailer_length_ft" value="{{ edit_profile.trailer_length_ft if edit_profile else 53 }}">
+        </label>
+
+        <label>
+          Max weight (lb)
+          <input type="number" name="max_weight_lbs" value="{{ edit_profile.max_weight_lbs if edit_profile else 45000 }}">
+        </label>
+
+        <label>
+          Team driver status
+          <select name="team_status">
+            <option value="">Not set / Solo</option>
+            <option value="solo" {% if edit_profile and edit_profile.team_status=='solo' %}selected{% endif %}>Solo Driver</option>
+            <option value="team" {% if edit_profile and edit_profile.team_status=='team' %}selected{% endif %}>True Team (2 drivers)</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="form-section-title">
+        <span>📋 3. Motor Carrier Authority & Dispatch</span>
+      </div>
+      <div class="form-grid-4">
+        <label>
+          MC number
+          <input name="mc_number" value="{{ edit_profile.mc_number if edit_profile else '' }}" placeholder="e.g. 1234567">
+        </label>
+
+        <label>
+          USDOT number
+          <input name="dot_number" value="{{ edit_profile.dot_number if edit_profile else '' }}" placeholder="e.g. 9876543">
+        </label>
+
+        <label>
+          Dispatcher name
+          <input name="dispatcher_name" value="{{ edit_profile.dispatcher_name if edit_profile else '' }}" placeholder="e.g. Emily Sylva">
+        </label>
+
+        <label>
+          Dispatcher direct phone
+          <input name="dispatcher_phone" value="{{ edit_profile.dispatcher_phone if edit_profile else '' }}" placeholder="e.g. (800) 555-0199">
+        </label>
+      </div>
+
+      <div class="form-section-title">
+        <span>🔒 4. Facts Agent May Disclose to Brokers</span>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        Check only the facts that the AI agent is allowed to quote in email replies without asking you.
+      </p>
+      <div style="display:flex;gap:20px;flex-wrap:wrap">
+        {% for field,label in [('equipment_type','Equipment type'),('team_status','Team driver status'),('mc_number','MC number'),('dot_number','USDOT number')] %}
+        <label class="check" style="font-weight:600">
+          <input type="checkbox" name="shareable_fields" value="{{ field }}" {% if edit_profile and field in edit_profile.shareable_fields %}checked{% elif not edit_profile and field in ['equipment_type', 'team_status'] %}checked{% endif %}>
+          <span>{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;padding-top:16px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
+        <label class="check" style="margin:0">
+          <input type="checkbox" name="active" {% if not edit_profile or edit_profile.active %}checked{% endif %}>
+          <span style="font-weight:700">Truck profile active</span>
+        </label>
+        <div style="display:flex;gap:10px">
+          {% if edit_profile %}
+          <a class="button ghost" href="/freight/missions?tab=trucks">Cancel</a>
+          {% else %}
+          <button type="button" class="button ghost" onclick="closeTruckForm()">Cancel</button>
+          {% endif %}
+          <button class="primary-btn" style="padding:10px 24px">{{ 'Update truck profile' if edit_profile else 'Save truck profile' }}</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// JSON profiles for dynamic auto-population
+const profilesData = {{ profiles|tojson|safe }};
+
+function switchFreightTab(tab) {
+  const isTrucks = tab === 'trucks';
+  document.getElementById('view-missions').style.display = isTrucks ? 'none' : 'block';
+  document.getElementById('view-trucks').style.display = isTrucks ? 'block' : 'none';
+  
+  document.getElementById('tab-btn-missions').classList.toggle('active', !isTrucks);
+  document.getElementById('tab-btn-trucks').classList.toggle('active', isTrucks);
+
+  const actM = document.getElementById('tab-actions-missions');
+  const actT = document.getElementById('tab-actions-trucks');
+  if (actM) actM.style.display = isTrucks ? 'none' : 'flex';
+  if (actT) actT.style.display = isTrucks ? 'flex' : 'none';
+
+  // Update URL without full refresh
+  const url = new URL(window.location);
+  url.searchParams.set('tab', tab);
+  window.history.replaceState({}, '', url);
+}
+
+function selectExecutionMode(mode) {
+  const radios = document.querySelectorAll('input[name="execution_mode"]');
+  radios.forEach(r => {
+    r.checked = (r.value === mode);
+  });
+  const autoCard = document.getElementById('mode-card-auto');
+  const approveCard = document.getElementById('mode-card-approve');
+  if (autoCard && approveCard) {
+    if (mode === 'auto') {
+      autoCard.classList.add('is-selected-auto');
+      approveCard.classList.remove('is-selected-approve');
+    } else {
+      approveCard.classList.add('is-selected-approve');
+      autoCard.classList.remove('is-selected-auto');
+    }
+  }
+}
+
+function openMissionForm() {
+  document.getElementById('mission-form-panel').style.display = 'block';
+  document.getElementById('mission-form-panel').scrollIntoView({ behavior: 'smooth' });
+}
+function closeMissionForm() {
+  document.getElementById('mission-form-panel').style.display = 'none';
+}
+
+function openTruckForm() {
+  document.getElementById('truck-form-panel').style.display = 'block';
+  document.getElementById('truck-form-panel').scrollIntoView({ behavior: 'smooth' });
+}
+function closeTruckForm() {
+  document.getElementById('truck-form-panel').style.display = 'none';
+}
+
+function onTruckSelect(truckId) {
+  if (!truckId) return;
+  const truck = profilesData.find(p => String(p.id) === String(truckId));
+  if (!truck) return;
+  
+  const eqEl = document.getElementById('input-equipment-type');
+  const lenEl = document.getElementById('input-trailer-length');
+  const wtEl = document.getElementById('input-max-weight');
+  const cityEl = document.getElementById('input-origin-city');
+  const stateEl = document.getElementById('input-origin-state');
+  
+  if (eqEl && truck.equipment_type) eqEl.value = truck.equipment_type;
+  if (lenEl && truck.trailer_length_ft) lenEl.value = truck.trailer_length_ft;
+  if (wtEl && truck.max_weight_lbs) wtEl.value = truck.max_weight_lbs;
+  if (cityEl && !cityEl.value && truck.current_city) cityEl.value = truck.current_city;
+  if (stateEl && !stateEl.value && truck.current_state) stateEl.value = truck.current_state;
+}
+
+function bindRemove(){
+  document.querySelectorAll('.remove-destination').forEach(b => {
+    b.onclick = () => {
+      const rows = document.querySelectorAll('.destination-row');
+      if (rows.length > 1) {
+        b.closest('.destination-row').remove();
+      }
+    };
+  });
+}
+
+document.getElementById('add-destination')?.addEventListener('click', () => {
+  const container = document.getElementById('destination-list');
+  const rowHtml = `
+    <div class="destination-row">
+      <input name="destination_label" placeholder="e.g. Dallas, TX or Southeast" required>
+      <select name="destination_kind">
+        <option value="city">City</option>
+        <option value="state">State</option>
+        <option value="region">Region</option>
+        <option value="anywhere">Anywhere</option>
+      </select>
+      <div class="input-with-unit">
+        <input type="number" name="destination_radius" value="0" placeholder="0" title="Radius in miles">
+      </div>
+      <button type="button" class="remove-btn remove-destination" title="Remove destination">×</button>
+    </div>
+  `;
+  container.insertAdjacentHTML('beforeend', rowHtml);
+  bindRemove();
+});
+
+bindRemove();
+</script>
+{% endblock %}

@@ -1,0 +1,735 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 22px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .settings-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .settings-btn-link {
+    background: #ffffff;
+    border: 1px solid var(--line, #e2e8f0);
+    color: var(--muted, #64748b);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 7px;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .settings-btn-link:hover {
+    color: var(--ink-heading, #0f172a);
+    background: #f8fafc;
+    border-color: #cbd5e1;
+  }
+
+  /* Accordion details/summary */
+  details.settings-section {
+    background: #ffffff;
+    border: 1px solid var(--line, #e2e8f0);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+    overflow: hidden;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  details.settings-section[open] {
+    border-color: #cbd5e1;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.04), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
+  }
+  summary.settings-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+    background: #ffffff;
+    list-style: none;
+    transition: background 0.15s ease;
+    gap: 16px;
+  }
+  summary.settings-summary::-webkit-details-marker {
+    display: none;
+  }
+  summary.settings-summary:hover {
+    background: #f8fafc;
+  }
+  details.settings-section[open] > summary.settings-summary {
+    border-bottom: 1px solid var(--line, #e2e8f0);
+    background: #fbfcfe;
+  }
+  
+  .summary-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+  .summary-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .summary-icon.business { background: #f0fdf4; border: 1px solid #bbf7d0; }
+  .summary-icon.pingram  { background: #e0f2fe; border: 1px solid #bae6fd; }
+  .summary-icon.gmail    { background: #fef3c7; border: 1px solid #fde68a; }
+  .summary-icon.senders  { background: #ede9fe; border: 1px solid #ddd6fe; }
+  .summary-icon.test     { background: #f3f4f6; border: 1px solid #e5e7eb; }
+
+  .summary-title-wrap {
+    min-width: 0;
+  }
+  .summary-title {
+    margin: 0;
+    font-size: 15.5px;
+    font-weight: 600;
+    color: var(--ink-heading, #0f172a);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .summary-subtitle {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: var(--muted, #64748b);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .summary-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .summary-badges {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .summary-badge {
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+    white-space: nowrap;
+  }
+  .summary-badge.highlight {
+    background: #e0f2fe;
+    color: #0369a1;
+    border-color: #bae6fd;
+    font-weight: 600;
+  }
+  .summary-badge.green {
+    background: #f0fdf4;
+    color: #15803d;
+    border-color: #bbf7d0;
+    font-weight: 600;
+  }
+
+  .summary-chevron {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #94a3b8;
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  details.settings-section[open] .summary-chevron {
+    transform: rotate(180deg);
+  }
+
+  .section-body {
+    padding: 22px;
+  }
+  .section-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 22px;
+    background: #fcfdfe;
+    border-top: 1px solid var(--line, #e2e8f0);
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  /* Sender styles */
+  .sender-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .sender-avatar.pingram {
+    background: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+  }
+  .sender-avatar.gmail {
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+  }
+  .sender-cell {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+  }
+  .sender-info strong {
+    display: block;
+    color: var(--ink-heading);
+    font-size: 13px;
+    line-height: 1.3;
+  }
+  .sender-info small {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .provider-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .provider-badge.pingram {
+    background: #f0fdf4;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
+  }
+  .provider-badge.gmail {
+    background: #f8fafc;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+  }
+</style>
+
+<header class="settings-header">
+  <div>
+    <span class="eyebrow">Configuration</span>
+    <h1 style="margin:2px 0 4px;">Settings</h1>
+    <p>Manage scheduling, business context, and independently branded sender accounts.</p>
+  </div>
+  <div class="settings-controls">
+    <button type="button" class="settings-btn-link" onclick="toggleAllSections(true)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+      Expand all
+    </button>
+    <button type="button" class="settings-btn-link" onclick="toggleAllSections(false)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12h8"/></svg>
+      Collapse all
+    </button>
+  </div>
+</header>
+
+<!-- Main Settings Form (Business Profile, Pingram Limits, Gmail Schedule) -->
+<form action="/settings" method="post" id="settings-form">
+  <!-- Section 1: Business Profile & AI Knowledge Base -->
+  <details class="settings-section" id="sec-business">
+    <summary class="settings-summary">
+      <div class="summary-left">
+        <div class="summary-icon business">🏢</div>
+        <div class="summary-title-wrap">
+          <h2 class="summary-title">Business Profile & AI Context</h2>
+          <p class="summary-subtitle">Company profile, default signature, and AI copy generation knowledge base</p>
+        </div>
+      </div>
+      <div class="summary-right">
+        <div class="summary-badges">
+          {% if app_settings.sender_business %}
+            <span class="summary-badge highlight">{{ app_settings.sender_business }}</span>
+          {% endif %}
+          <span class="summary-badge">{{ app_settings.sender_name or 'Default Rep' }}</span>
+        </div>
+        <svg class="summary-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </div>
+    </summary>
+    <div class="section-body">
+      <p style="margin:0 0 16px; color:var(--muted); font-size:13px;">These values are used for previews and as defaults. Each representative can override name, email, reply-to, and signature.</p>
+      <div class="form-grid">
+        <label>Default sender name<input name="sender_name" value="{{app_settings.sender_name or ''}}"></label>
+        <label>Default sender email<input type="email" name="sender_email" value="{{app_settings.sender_email or ''}}"></label>
+        <label>Default reply-to<input type="email" name="reply_to" value="{{app_settings.reply_to or ''}}"></label>
+        <label>Business name<input name="sender_business" value="{{app_settings.sender_business or ''}}"></label>
+        <label>Business website<input name="sender_business_url" value="{{app_settings.sender_business_url or ''}}"></label>
+        <label>Product name<input name="product_name" value="{{app_settings.product_name or ''}}"></label>
+        <label>Product URL<input name="product_url" value="{{app_settings.product_url or ''}}"></label>
+        <label>Booking link<input name="booking_link" value="{{app_settings.booking_link or ''}}"></label>
+        <label>Callback number<input name="callback_number" value="{{app_settings.callback_number or ''}}"></label>
+        <label>Client count<input type="number" name="client_count" value="{{app_settings.client_count or 20}}"></label>
+        <label>Client noun<input name="client_noun" value="{{app_settings.client_noun or 'clients'}}"></label>
+        <label class="wide">Default signature<textarea name="email_signature">{{app_settings.email_signature or ''}}</textarea></label>
+        <label class="wide">Business context & AI knowledge base<textarea name="business_context" rows="7" placeholder="Business information, product features, value propositions, contractor pain points, pricing, case studies, and competitor advantages.">{{app_settings.business_context or ''}}</textarea><small>Used by the AI copywriter whenever it drafts or improves a template.</small></label>
+      </div>
+    </div>
+    <div class="section-footer">
+      <small style="color:var(--muted);">Used for email previews, fallbacks, and AI copywriting prompt context.</small>
+      <button type="submit" class="button">Save business settings</button>
+    </div>
+  </details>
+
+  <!-- Section 2: Pingram Domain & Conveyor Belt Limits -->
+  <details class="settings-section" id="sec-pingram">
+    <summary class="settings-summary">
+      <div class="summary-left">
+        <div class="summary-icon pingram">⚡</div>
+        <div class="summary-title-wrap">
+          <h2 class="summary-title">Pingram Domain & Conveyor Belt Limits</h2>
+          <p class="summary-subtitle">Sequential 24/7 rotation and cadence for contractorops.ai representatives</p>
+        </div>
+      </div>
+      <div class="summary-right">
+        <div class="summary-badges">
+          <span class="summary-badge highlight">{{ app_settings.pingram_daily_cap or 30 }} emails/rep/day</span>
+          <span class="summary-badge">{{ app_settings.pingram_min_delay or 5 }}–{{ app_settings.pingram_max_delay or 20 }}m spacing</span>
+          <span class="summary-badge green">24/7 continuous</span>
+        </div>
+        <svg class="summary-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </div>
+    </summary>
+    <div class="section-body">
+      <p style="font-size:13px; color:var(--muted); margin:0 0 16px;">Controls daily limits and spacing for all representatives on your domain (<code>contractorops.ai</code>). Runs 24/7 continuously with randomized gaps so representatives take turns smoothly.</p>
+      <div class="form-grid">
+        <label class="wide">Daily cap per Pingram sender
+          <input type="number" min="1" name="pingram_daily_cap" value="{{app_settings.pingram_daily_cap or 30}}">
+          <small>With 10 active reps at 30 each, your domain will send up to <strong>300 emails/day</strong> max.</small>
+        </label>
+        <label>Min spacing (minutes)<input type="number" min="1" name="pingram_min_delay" value="{{app_settings.pingram_min_delay or 5}}"></label>
+        <label>Max spacing (minutes)<input type="number" min="1" name="pingram_max_delay" value="{{app_settings.pingram_max_delay or 20}}"></label>
+      </div>
+      <div style="background:#f8fafc; border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-top:16px; font-size:12.5px; color:var(--muted);">
+        <strong style="color:var(--ink-heading); display:block; margin-bottom:4px;">Domain protection:</strong>
+        Limiting each rep to 30–50 emails/day keeps your domain reputation clean and prevents Google & Microsoft spam filters from flagging <code>contractorops.ai</code>.
+      </div>
+    </div>
+    <div class="section-footer">
+      <small style="color:var(--muted);">Changing Pingram limits will automatically redistribute queued outreach safely.</small>
+      <button type="submit" class="button">Save Pingram limits</button>
+    </div>
+  </details>
+
+  <!-- Section 3: Gmail Sending Schedule -->
+  <details class="settings-section" id="sec-gmail">
+    <summary class="settings-summary">
+      <div class="summary-left">
+        <div class="summary-icon gmail">✉️</div>
+        <div class="summary-title-wrap">
+          <h2 class="summary-title">Gmail Sending Schedule</h2>
+          <p class="summary-subtitle">Business hours sending window, timezone, and daily caps for Gmail inboxes</p>
+        </div>
+      </div>
+      <div class="summary-right">
+        <div class="summary-badges">
+          <span class="summary-badge highlight">{{ app_settings.daily_cap or 20 }} emails/sender/day</span>
+          <span class="summary-badge">{{ app_settings.send_start or '09:00' }}–{{ app_settings.send_end or '17:00' }}</span>
+          <span class="summary-badge">{{ app_settings.timezone or 'America/New_York' }}</span>
+        </div>
+        <svg class="summary-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </div>
+    </summary>
+    <div class="section-body">
+      <div class="form-grid">
+        <label>Time zone<input name="timezone" value="{{app_settings.timezone or 'America/New_York'}}"></label>
+        <label>Daily cap per Gmail sender<input type="number" min="1" name="daily_cap" value="{{app_settings.daily_cap or 20}}"><small>Four enabled senders at 20 each can send up to 80/day.</small></label>
+        <label>Window starts<input type="time" name="send_start" value="{{app_settings.send_start or '09:00'}}"></label>
+        <label>Window ends<input type="time" name="send_end" value="{{app_settings.send_end or '17:00'}}"></label>
+        <label>Min delay (minutes)<input type="number" min="1" name="min_delay_minutes" value="{{app_settings.min_delay_minutes or 3}}"></label>
+        <label>Max delay (minutes)<input type="number" min="1" name="max_delay_minutes" value="{{app_settings.max_delay_minutes or 15}}"></label>
+        <label>Resend block days<input type="number" min="1" name="resend_block_days" value="{{app_settings.resend_block_days or 90}}"></label>
+      </div>
+      <div class="checks" style="margin-top:14px;">{% for n,d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}<label><input type="checkbox" name="send_days" value="{{n}}" {% if n in app_settings.send_days %}checked{% endif %}>{{d}}</label>{% endfor %}</div>
+    </div>
+    <div class="section-footer">
+      <small style="color:var(--muted);">Gmail senders send exclusively during these selected hours and days.</small>
+      <button type="submit" class="button">Save Gmail schedule</button>
+    </div>
+  </details>
+</form>
+
+<!-- Section 4: Sender Accounts (Pingram Reps & Gmail Inboxes) -->
+<details class="settings-section" id="sec-senders">
+  <summary class="settings-summary">
+    <div class="summary-left">
+      <div class="summary-icon senders">👥</div>
+      <div class="summary-title-wrap">
+        <h2 class="summary-title">Sender Accounts</h2>
+        <p class="summary-subtitle">Manage representative personas on contractorops.ai and connected Gmail accounts</p>
+      </div>
+    </div>
+    <div class="summary-right">
+      <div class="summary-badges">
+        <span class="summary-badge highlight">⚡ {{ gmail_senders|selectattr('provider', 'equalto', 'pingram')|selectattr('active')|list|length }} Pingram</span>
+        <span class="summary-badge">✉ {{ gmail_senders|rejectattr('provider', 'equalto', 'pingram')|selectattr('active')|list|length }} Gmail</span>
+      </div>
+      <svg class="summary-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+      <div class="tabs" style="margin-bottom:0;">
+        <button type="button" class="tab sender-tab active" data-filter="all" onclick="filterSenders('all', this)">All ({{ gmail_senders|length }})</button>
+        <button type="button" class="tab sender-tab" data-filter="pingram" onclick="filterSenders('pingram', this)">Pingram Reps ({{ gmail_senders|selectattr('provider', 'equalto', 'pingram')|list|length }})</button>
+        <button type="button" class="tab sender-tab" data-filter="gmail" onclick="filterSenders('gmail', this)">Gmail Inboxes ({{ gmail_senders|rejectattr('provider', 'equalto', 'pingram')|list|length }})</button>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="text" id="sender-search" placeholder="Search by name or email…" oninput="searchSenders(this.value)" style="padding:7px 12px; font-size:12px; width:220px; border-radius:8px; border:1px solid var(--line); background:#ffffff;">
+        <button type="button" class="button" onclick="document.getElementById('add-sender-dialog').showModal()" style="padding:7px 14px; font-size:12px;">
+          ＋ Add sender
+        </button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sender / Persona</th>
+            <th>From Address</th>
+            <th>Provider & Mode</th>
+            <th>Reply-To</th>
+            <th>Status</th>
+            <th style="text-align:right;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sender in gmail_senders %}
+            <tr class="sender-row" data-provider="{{ sender.provider or 'gmail' }}" data-search="{{ sender.display_name }} {{ sender.email }} {{ sender.reply_to }} {{ sender.signature }}">
+              <td>
+                <div class="sender-cell">
+                  <div class="sender-avatar {{ 'pingram' if sender.provider == 'pingram' else 'gmail' }}">
+                    {{ (sender.display_name or sender.email)[:1]|upper }}
+                  </div>
+                  <div class="sender-info">
+                    <strong>{{ sender.display_name or 'Outreach Rep' }}</strong>
+                    <small title="{{ sender.signature }}">{{ (sender.signature or '').split('\n')[0] or sender.email }}</small>
+                  </div>
+                </div>
+              </td>
+              <td>
+                <code style="font-family:'JetBrains Mono',monospace; font-size:12px; background:#f8fafc; padding:2px 6px; border-radius:5px; border:1px solid #e2e8f0;">{{ sender.email }}</code>
+              </td>
+              <td>
+                {% if sender.provider == 'pingram' %}
+                  <span class="provider-badge pingram">
+                    <span>⚡</span> Pingram · Conveyor belt
+                  </span>
+                {% else %}
+                  <span class="provider-badge gmail">
+                    <span>✉</span> Gmail · Send window
+                  </span>
+                {% endif %}
+              </td>
+              <td>
+                <span style="color:var(--muted); font-size:12px;">{{ sender.reply_to or sender.email }}</span>
+              </td>
+              <td>
+                <span class="badge {{ 'running' if sender.active else 'paused' }}">
+                  {{ 'Active' if sender.active else 'Disabled' }}
+                </span>
+              </td>
+              <td style="text-align:right;">
+                <button type="button" class="button secondary small" onclick="document.getElementById('edit-sender-{{sender.id}}').showModal()" style="padding:4px 10px; font-size:12px;">
+                  Edit
+                </button>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="empty">No senders configured yet.</td></tr>
+          {% endfor %}
+          <tr id="senders-empty-row" style="display:none;">
+            <td colspan="6" class="empty">No senders match your filter.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="section-footer">
+    <span>💡 <strong>Conveyor Belt:</strong> Pingram representatives rotate automatically on the single domain conveyor belt (5–20m gaps). Gmail accounts send during business hours.</span>
+    <button type="button" class="button link" onclick="document.getElementById('add-sender-dialog').showModal()" style="font-size:12px; font-weight:600; color:#0284c7;">＋ Add another sender account</button>
+  </div>
+</details>
+
+<!-- Section 5: Send a Test Email -->
+<details class="settings-section" id="sec-test">
+  <summary class="settings-summary">
+    <div class="summary-left">
+      <div class="summary-icon test">🧪</div>
+      <div class="summary-title-wrap">
+        <h2 class="summary-title">Send a Test Email</h2>
+        <p class="summary-subtitle">Send a real test email from any active sender to verify formatting and delivery</p>
+      </div>
+    </div>
+    <div class="summary-right">
+      <div class="summary-badges">
+        <span class="summary-badge">Quick test</span>
+      </div>
+      <svg class="summary-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </div>
+  </summary>
+  <div class="section-body">
+    <form action="/settings/test-email" method="post" class="inline" style="gap:10px;">
+      <select name="gmail_sender_id" required style="min-width:280px;">
+        {% for sender in gmail_senders if sender.active %}
+          <option value="{{sender.id}}">
+            {{sender.display_name}} &middot; {{sender.email}} ({% if sender.provider == 'pingram' %}Pingram{% else %}Gmail{% endif %})
+          </option>
+        {% endfor %}
+      </select>
+      <input type="email" name="to" placeholder="you@example.com" required style="min-width:240px;">
+      <button type="submit" class="secondary">Send test email</button>
+    </form>
+  </div>
+</details>
+
+<!-- Edit Senders Modals -->
+{% for sender in gmail_senders %}
+  <dialog id="edit-sender-{{sender.id}}">
+    <form action="/settings/gmail-senders/{{sender.id}}" method="post" class="stack">
+      <div class="dialog-head">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div class="sender-avatar {{ 'pingram' if sender.provider == 'pingram' else 'gmail' }}">
+            {{ (sender.display_name or sender.email)[:1]|upper }}
+          </div>
+          <div>
+            <h2 style="margin:0; font-size:18px;">Edit {{ sender.display_name or 'Sender' }}</h2>
+            <small style="color:var(--muted); font-size:12px;">
+              {{ sender.email }} · {% if sender.provider == 'pingram' %}Pingram representative (contractorops.ai){% else %}Gmail / Google Workspace account{% endif %}
+            </small>
+          </div>
+        </div>
+        <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
+      </div>
+
+      <div class="form-grid" style="margin-top:18px;">
+        <label>Display name
+          <input name="display_name" value="{{sender.display_name}}" required>
+          <small>Sender name shown in email client and signature greeting</small>
+        </label>
+        <label>Email address
+          <input type="email" name="email" value="{{sender.email}}" required>
+          <small>{% if sender.provider == 'pingram' %}Must be an @contractorops.ai address{% else %}Gmail or Workspace address{% endif %}</small>
+        </label>
+        <label>Reply-to address
+          <input type="email" name="reply_to" value="{{sender.reply_to}}">
+          <small>Where client replies are routed</small>
+        </label>
+        {% if sender.provider != 'pingram' %}
+          <label>App password
+            <input type="password" name="app_password" placeholder="Leave blank to keep current password">
+            <small>16-character Google App Password</small>
+          </label>
+        {% endif %}
+        <label class="wide">Email signature
+          <textarea name="signature" rows="5" placeholder="Name&#10;Role @ Company">{{sender.signature}}</textarea>
+          <small>Rendered into outreach templates via <code>{{ '{{signature}}' }}</code> tag</small>
+        </label>
+        <div class="wide" style="padding-top:4px;">
+          <label class="check">
+            <input type="checkbox" name="active" {% if sender.active %}checked{% endif %}>
+            <span><strong>Available for outreach</strong> &mdash; Include this sender in automated campaigns and rotation</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top:20px; display:flex; justify-content:flex-end; gap:8px;">
+        <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit">Save changes</button>
+      </div>
+    </form>
+  </dialog>
+{% endfor %}
+
+<!-- Add Sender Modal Dialog -->
+<dialog id="add-sender-dialog">
+  <form action="/settings/gmail-senders" method="post" class="stack">
+    <div class="dialog-head">
+      <div>
+        <h2 style="margin:0; font-size:18px;">Add new sender</h2>
+        <small style="color:var(--muted); font-size:12px;">Add a Pingram representative on your domain (no password needed) or a Gmail account</small>
+      </div>
+      <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
+    </div>
+
+    <div class="form-grid" style="margin-top:18px;">
+      <label class="wide">Provider
+        <select name="provider" id="add_sender_provider" onchange="toggleSenderProvider(this.value)">
+          <option value="pingram">Pingram (contractorops.ai &mdash; 24/7 domain conveyor belt)</option>
+          <option value="gmail">Gmail / Google Workspace (business hours &mdash; app password required)</option>
+        </select>
+      </label>
+      <label>Sender name
+        <input name="display_name" id="add_sender_name" placeholder="e.g. Laura" required>
+      </label>
+      <label>Email address
+        <input type="email" name="email" id="add_sender_email" placeholder="laura@contractorops.ai" required>
+      </label>
+      <label>Reply-to
+        <input type="email" name="reply_to" id="add_sender_reply_to" placeholder="outreach@contractorops.ai">
+      </label>
+      <label id="add_sender_pass_wrap" style="display:none;">App password
+        <input type="password" name="app_password" id="add_sender_password" placeholder="16-character app password">
+      </label>
+      <label class="wide">Email signature
+        <textarea name="signature" rows="4" placeholder="Laura&#10;Partnerships @ ContractorOps"></textarea>
+      </label>
+    </div>
+
+    <div class="actions" style="margin-top:20px; display:flex; justify-content:flex-end; gap:8px;">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" id="add_sender_btn">Add Pingram sender</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Accordion state persistence
+  const SECTION_IDS = ['sec-business', 'sec-pingram', 'sec-gmail', 'sec-senders', 'sec-test'];
+
+  function initSections() {
+    let savedState = {};
+    try {
+      savedState = JSON.parse(localStorage.getItem('outreach_settings_sections') || '{}');
+    } catch (e) {
+      savedState = {};
+    }
+
+    SECTION_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (savedState[id] !== undefined) {
+        el.open = savedState[id];
+      } else {
+        // Defaults: Senders open by default, others closed to reduce clutter
+        el.open = (id === 'sec-senders');
+      }
+      el.addEventListener('toggle', () => {
+        saveSectionsState();
+      });
+    });
+  }
+
+  function saveSectionsState() {
+    const state = {};
+    SECTION_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) state[id] = el.open;
+    });
+    try {
+      localStorage.setItem('outreach_settings_sections', JSON.stringify(state));
+    } catch (e) {}
+  }
+
+  function toggleAllSections(expand) {
+    SECTION_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.open = expand;
+    });
+    saveSectionsState();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSections);
+  } else {
+    initSections();
+  }
+
+  function toggleSenderProvider(val) {
+    const isGmail = val === 'gmail';
+    const passWrap = document.getElementById('add_sender_pass_wrap');
+    const passInput = document.getElementById('add_sender_password');
+    const emailInput = document.getElementById('add_sender_email');
+    const replyInput = document.getElementById('add_sender_reply_to');
+    const nameInput = document.getElementById('add_sender_name');
+    const btn = document.getElementById('add_sender_btn');
+    
+    if (isGmail) {
+      passWrap.style.display = 'block';
+      passInput.required = true;
+      emailInput.placeholder = 'alex@gmail.com';
+      replyInput.placeholder = 'Defaults to Gmail address';
+      nameInput.placeholder = 'e.g. Alex Johnson';
+      btn.textContent = 'Add Gmail sender';
+    } else {
+      passWrap.style.display = 'none';
+      passInput.required = false;
+      passInput.value = '';
+      emailInput.placeholder = 'laura@contractorops.ai';
+      replyInput.placeholder = 'outreach@contractorops.ai';
+      nameInput.placeholder = 'e.g. Laura';
+      btn.textContent = 'Add Pingram sender';
+    }
+  }
+
+  function filterSenders(type, btn) {
+    document.querySelectorAll('.sender-tab').forEach(el => el.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    applySenderFilter();
+  }
+
+  function searchSenders(query) {
+    applySenderFilter();
+  }
+
+  function applySenderFilter() {
+    const activeTab = document.querySelector('.sender-tab.active');
+    const type = activeTab ? activeTab.dataset.filter : 'all';
+    const query = (document.getElementById('sender-search')?.value || '').toLowerCase().trim();
+    const rows = document.querySelectorAll('.sender-row');
+    let visibleCount = 0;
+    rows.forEach(row => {
+      const provider = (row.dataset.provider || 'gmail').toLowerCase();
+      const text = (row.dataset.search || '').toLowerCase();
+      const matchesType = (type === 'all' || provider === type);
+      const matchesQuery = (!query || text.includes(query));
+      if (matchesType && matchesQuery) {
+        row.style.display = '';
+        visibleCount++;
+      } else {
+        row.style.display = 'none';
+      }
+    });
+    const emptyMsg = document.getElementById('senders-empty-row');
+    if (emptyMsg) {
+      emptyMsg.style.display = (visibleCount === 0) ? '' : 'none';
+    }
+  }
+</script>
+{% endblock %}
+

@@ -1,0 +1,13 @@
+.env
+.venv
+node_modules
+launch_and_marketing
+__pycache__
+*.pyc
+data/*.db
+data/*.db-wal
+data/*.db-shm
+raw_screenshots*
+raw_videos*
+.git
+.DS_Store

@@ -1,0 +1,312 @@
+{% extends "base.html" %}{% block content %}<header><div><span class="eyebrow">{{'Freight' if vertical == 'freight' else 'Messaging'}}</span><h1>{{'Freight templates' if vertical == 'freight' else 'Email templates'}}</h1><p>Editable, reusable copy with safe variables.</p></div><a class="button" href="/templates?vertical={{vertical}}&edit=new">New template</a></header>
+<style>
+  .template-filter-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .template-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .template-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 9999px;
+    border: 1px solid #e2e8f0;
+    background: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .template-tab-btn:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #0f172a;
+  }
+  .template-tab-btn.active {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+  }
+  .template-tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 700;
+    background: #f1f5f9;
+    color: #475569;
+  }
+  .template-tab-btn.active .template-tab-count {
+    background: rgba(255, 255, 255, 0.25);
+    color: #ffffff;
+  }
+  .template-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 13px;
+    background: #ffffff;
+    box-sizing: border-box;
+  }
+  .template-search-input:focus {
+    outline: none;
+    border-color: #0284c7;
+    box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+  }
+  .template-card {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .template-card:hover {
+    border-color: #cbd5e1;
+  }
+  .badge-hvac {
+    background: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+  }
+  .badge-remodel {
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fde68a;
+  }
+  .badge-gen {
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+  }
+</style>
+
+<div class="grid-templates">
+<section class="panel">
+  <div class="template-filter-bar">
+    <input type="search" id="tpl-search" class="template-search-input" placeholder="🔍 Search templates by title or subject..." oninput="filterTemplates()">
+    {% if vertical != 'freight' %}<div class="template-tabs">
+      <button type="button" class="template-tab-btn active" data-filter="all" onclick="setTemplateFilter('all', this)">
+        All <span class="template-tab-count">{{ templates|length }}</span>
+      </button>
+      <button type="button" class="template-tab-btn" data-filter="hvac" onclick="setTemplateFilter('hvac', this)">
+        ❄️ HVAC <span class="template-tab-count" id="count-hvac">0</span>
+      </button>
+      <button type="button" class="template-tab-btn" data-filter="remodel" onclick="setTemplateFilter('remodel', this)">
+        🔨 Remodelers <span class="template-tab-count" id="count-remodel">0</span>
+      </button>
+      <button type="button" class="template-tab-btn" data-filter="general" onclick="setTemplateFilter('general', this)">
+        📋 General <span class="template-tab-count" id="count-general">0</span>
+      </button>
+    </div>{% endif %}
+  </div>
+
+  <div class="template-list" id="template-list-wrap">
+    {% for t in templates %}
+    {% set cat = 'hvac' if (t.name or '').startswith('HVAC') else ('remodel' if (t.name or '').startswith('Remodelers') else 'general') %}
+    <article class="template-card {{'active-template' if edit and edit.id == t.id else ''}}" data-category="{{cat}}" data-name="{{t.name|lower}}" data-subject="{{t.subject|lower}}">
+      <div>
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+          <span class="badge {{ 'badge-hvac' if cat == 'hvac' else ('badge-remodel' if cat == 'remodel' else 'badge-gen') }}">
+            {{ t.angle_tag or 'general' }}
+          </span>
+          {% if t.type == 'html' %}
+          <span class="badge" style="background:#fdf2f8;color:#be185d;border:1px solid #fbcfe8;">HTML</span>
+          {% endif %}
+        </div>
+        <h3 style="margin:2px 0 4px;font-size:14px;font-weight:700;">{{t.name}}</h3>
+        <p style="font-size:13px;color:#64748b;margin:0;">{{t.subject}}</p>
+      </div>
+      <div class="row">
+        <form method="post" action="/templates/{{t.id}}/preview"><button class="secondary" style="padding:4px 10px;font-size:12px;">Preview</button></form>
+        <a class="button ghost" href="/templates?vertical={{vertical}}&edit={{t.id}}" style="padding:4px 10px;font-size:12px;">Edit</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+<section class="panel sticky">
+<div class="panel-head">
+  <h2>{{'Edit' if edit and edit.id!='new' else 'Create'}} template</h2>
+  <a class="button ghost" href="/templates?vertical={{vertical}}&edit=new" style="font-size:11px;padding:4px 8px;">Clear form</a>
+</div>
+
+{% if vertical != 'freight' %}<!-- AI Copywriter Assistant Widget -->
+<div class="ai-box">
+  <div class="ai-header">
+    <div class="ai-title">
+      <span>✨</span>
+      <span>{{'AI Template Improver' if edit and edit.id!='new' else 'AI Template Generator'}}</span>
+    </div>
+    <span class="badge ai-badge">{{'Improve mode' if edit and edit.id!='new' else 'New template mode'}}</span>
+  </div>
+  <p class="ai-desc">
+    {{'Give instructions to polish this template (punchier, shorter, warmer hook, stronger CTA).' if edit and edit.id!='new' else 'Describe the angle or offer. AI will generate a high-converting cold email with dynamic variables.'}}
+  </p>
+  <div class="ai-input-wrap">
+    <textarea id="ai-instructions" rows="2" placeholder="{{'e.g., Shorten by 30%, make it sound more like a casual note from a founder, make the CTA softer' if edit and edit.id!='new' else 'e.g., Target roofing contractors struggling with estimate turnaround; casual tone, soft ask for demo'}}"></textarea>
+  </div>
+  <div class="ai-chips">
+    <span class="chip" onclick="setAiPrompt('Make it punchier, conversational, and under 75 words')">Short & punchy</span>
+    <span class="chip" onclick="setAiPrompt('Founder story angle: building it because my own family struggled with operations')">Founder story</span>
+    <span class="chip" onclick="setAiPrompt('Quick casual question asking how they currently handle new lead follow-ups')">Question opener</span>
+    <span class="chip" onclick="setAiPrompt('Focus on stopping lost revenue from slow estimates and proposals')">Estimate bottleneck</span>
+  </div>
+  <div id="ai-error" class="ai-error" style="display:none;"></div>
+  <div class="ai-actions">
+    <button type="button" id="ai-btn" class="button ai-btn" onclick="triggerAiGeneration()">
+      <span id="ai-btn-text">{{'✨ Polish this Template with AI' if edit and edit.id!='new' else '✨ Generate Template with AI'}}</span>
+      <span id="ai-spinner" class="spinner" style="display:none;"></span>
+    </button>
+  </div>
+</div>
+{% endif %}
+
+<form method="post" action="/templates/save" class="stack" id="template-form">
+  <input type="hidden" name="id" value="{{edit.id if edit and edit.id!='new' else ''}}">
+  <input type="hidden" name="vertical" value="{{vertical}}">
+  <label>Name<input id="f-name" name="name" value="{{edit.name if edit and edit.id!='new' else ''}}" required></label>
+  <label>Angle tag<input id="f-tag" name="angle_tag" value="{{edit.angle_tag if edit and edit.id!='new' else ''}}" placeholder="e.g. founder_story, problem_solution, question"></label>
+  <label>Subject<input id="f-subject" name="subject" value="{{edit.subject if edit and edit.id!='new' else ''}}" required></label>
+  <label>Format<select id="f-type" name="type"><option value="plain">Plain text</option><option value="html" {% if edit and edit.type=='html' %}selected{% endif %}>HTML + plain alternative</option></select></label>
+  <label>Body<textarea id="f-body" name="body" rows="13" required>{{edit.body if edit and edit.id!='new' else ''}}</textarea></label>
+  <label class="check"><input type="checkbox" name="active" {% if not edit or edit.active %}checked{% endif %}> Active</label>
+  <button>Save template</button>
+</form>
+
+<details>
+  <summary>Available dynamic variables</summary>
+  <code>{% if vertical == 'freight' %}{{'{{origin}} {{destination}} {{pickup_date}} {{equipment}} {{truck_location}} {{mc_number}} {{dot_number}} {{broker_company}} {{dat_reference}} {{loaded_miles}} {{deadhead_miles}} {{posted_rate}} {{all_in_rpm}} {{signature}}'}}{% else %}{{'{{person_name}} {{short_name}} {{owner_first_name}} {{category}} {{city}} {{state}} {{sender_name}} {{product_name}} {{product_url}} {{booking_link}} {{callback_number}} {{client_count}} {{client_noun}} {{signature}}'}}{% endif %}</code>
+  {% if vertical != 'freight' %}<p style="font-size:12px;color:var(--text-muted);margin-top:6px;"><strong>Tip:</strong> <code>{{'{{person_name}}'}}</code> uses the contact's name if known or inferred from their email (e.g. <em>roy@gconstruct.com</em> &rarr; <strong>Roy</strong>), and automatically falls back to <code>{{'{{short_name}}'}}</code> if not inferable.</p>{% endif %}
+</details>
+</section>
+</div>
+
+<script>
+let currentTemplateFilter = 'all';
+
+function setTemplateFilter(category, btn) {
+  currentTemplateFilter = category;
+  document.querySelectorAll('.template-tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  filterTemplates();
+}
+
+function filterTemplates() {
+  const query = (document.getElementById('tpl-search').value || '').toLowerCase().trim();
+  const cards = document.querySelectorAll('.template-card');
+  
+  cards.forEach(card => {
+    const cat = card.dataset.category || 'general';
+    const name = card.dataset.name || '';
+    const subject = card.dataset.subject || '';
+    
+    const matchesCategory = (currentTemplateFilter === 'all' || cat === currentTemplateFilter);
+    const matchesSearch = !query || name.includes(query) || subject.includes(query);
+    
+    if (matchesCategory && matchesSearch) {
+      card.style.display = '';
+    } else {
+      card.style.display = 'none';
+    }
+  });
+}
+
+function updateTemplateTabCounts() {
+  const cards = document.querySelectorAll('.template-card');
+  let hvac = 0, remodel = 0, general = 0;
+  cards.forEach(c => {
+    const cat = c.dataset.category;
+    if (cat === 'hvac') hvac++;
+    else if (cat === 'remodel') remodel++;
+    else general++;
+  });
+  const elH = document.getElementById('count-hvac');
+  const elR = document.getElementById('count-remodel');
+  const elG = document.getElementById('count-general');
+  if (elH) elH.innerText = hvac;
+  if (elR) elR.innerText = remodel;
+  if (elG) elG.innerText = general;
+}
+
+document.addEventListener('DOMContentLoaded', updateTemplateTabCounts);
+if (document.readyState !== 'loading') updateTemplateTabCounts();
+
+function setAiPrompt(text) {
+  const el = document.getElementById('ai-instructions');
+  el.value = text;
+  el.focus();
+}
+
+async function triggerAiGeneration() {
+  const btn = document.getElementById('ai-btn');
+  const btnText = document.getElementById('ai-btn-text');
+  const spinner = document.getElementById('ai-spinner');
+  const errBox = document.getElementById('ai-error');
+  const instructions = document.getElementById('ai-instructions').value;
+  
+  const isEdit = "{{'1' if edit and edit.id!='new' else '0'}}" === "1";
+  const nameInput = document.getElementById('f-name');
+  const tagInput = document.getElementById('f-tag');
+  const subjectInput = document.getElementById('f-subject');
+  const bodyInput = document.getElementById('f-body');
+  const typeSelect = document.getElementById('f-type');
+  
+  errBox.style.display = 'none';
+  btn.disabled = true;
+  btnText.innerText = isEdit ? 'Polishing template...' : 'Generating email...';
+  if (spinner) spinner.style.display = 'inline-block';
+  
+  try {
+    const res = await fetch('/templates/ai-generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: isEdit ? 'improve' : 'generate',
+        instructions: instructions,
+        existing_name: nameInput.value,
+        existing_angle_tag: tagInput.value,
+        existing_subject: subjectInput.value,
+        existing_body: bodyInput.value
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      throw new Error(data.error || 'Failed to generate');
+    }
+    
+    if (data.name && (!nameInput.value || !isEdit)) nameInput.value = data.name;
+    if (data.angle_tag && (!tagInput.value || !isEdit)) tagInput.value = data.angle_tag;
+    if (data.subject) subjectInput.value = data.subject;
+    if (data.body) bodyInput.value = data.body;
+    if (data.type && typeSelect) typeSelect.value = data.type;
+    
+    // Visual flash highlight
+    [subjectInput, bodyInput].forEach(el => {
+      el.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease';
+      el.style.borderColor = '#22c55e';
+      el.style.boxShadow = '0 0 0 3px rgba(34, 197, 94, 0.35)';
+      setTimeout(() => {
+        el.style.boxShadow = '';
+        el.style.borderColor = '';
+      }, 1600);
+    });
+  } catch (err) {
+    errBox.innerText = err.message;
+    errBox.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btnText.innerText = isEdit ? '✨ Polish this Template with AI' : '✨ Generate Template with AI';
+    if (spinner) spinner.style.display = 'none';
+  }
+}
+</script>
+{% endblock %}

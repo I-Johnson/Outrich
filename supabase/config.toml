@@ -1,0 +1,4 @@
+project_id = "outreach"
+
+[functions.send-gmail]
+verify_jwt = true
