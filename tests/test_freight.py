@@ -9,7 +9,7 @@ os.environ["DB_PATH"] = "/tmp/outreach-freight-test.db"
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 
 from app.adapters.base import SendResult
-from app.core.freight import classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, parse_destinations, recover_uncertain_freight_sends, send_draft, set_thread_state, verify_load_facts
+from app.core.freight import SensitiveOutboundConfirmationRequired, classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, mission_price_comparison, parse_destinations, recover_uncertain_freight_sends, reevaluate_verified_load, seed_freight_template, send_draft, sensitive_outbound_fields, set_thread_state, verify_load_facts
 from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import SQLiteStore, new_id, now_iso
 
@@ -25,8 +25,33 @@ class FreightEconomicsTests(unittest.TestCase):
         self.assertEqual(result["rate"], 2400)
         self.assertEqual(result["loaded_rpm"], 3.0)
 
+    def test_comparison_waits_for_every_mission_floor(self):
+        mission = {"floor_total": 2000, "floor_loaded_rpm": 2.5, "floor_all_in_rpm": 2.2}
+        load = {"current_offer": 2600}
+        comparison = mission_price_comparison(load, mission)
+        self.assertIsNone(comparison["minimum_total"])
+        self.assertEqual(comparison["known_floor"], 2000)
+        self.assertEqual(comparison["missing"], ["loaded miles"])
+        load.update({"loaded_miles": 1000, "loaded_miles_verified": True})
+        comparison = mission_price_comparison(load, mission)
+        self.assertEqual(comparison["missing"], ["deadhead miles"])
+        load.update({"deadhead_miles": 200, "deadhead_miles_verified": True})
+        comparison = mission_price_comparison(load, mission)
+        self.assertEqual(comparison["minimum_total"], 2640)
+        self.assertEqual(comparison["difference"], -40)
+
 
 class FreightPolicyTests(unittest.TestCase):
+    def test_sensitive_initial_email_fields_are_detected(self):
+        fields = sensitive_outbound_fields(
+            "Truck available",
+            "MC 123456\nCall dispatch at (602) 555-0199. We can send the COI after booking.",
+        )
+        self.assertIn("authority ID (MC/USDOT)", fields)
+        self.assertIn("phone number", fields)
+        self.assertIn("insurance or financial document", fields)
+        self.assertEqual(sensitive_outbound_fields("Truck available", "53 ft dry van available near Phoenix."), [])
+
     def test_protected_reply_stops_on_call_and_rate_confirmation(self):
         result = classify_reply("Rate confirmation attached. Please give me a call.")
         self.assertEqual(result["kind"], "protected")
@@ -83,6 +108,15 @@ class FreightPolicyTests(unittest.TestCase):
 
 
 class FreightSettingsAndSendTests(unittest.TestCase):
+    def test_default_first_touch_template_omits_authority_ids(self):
+        with tempfile.TemporaryDirectory() as temp:
+            storage = SQLiteStore(os.path.join(temp, "template.db"))
+            storage.init()
+            seed_freight_template(storage)
+            template = storage.list("email_templates", {"vertical": "freight"}, order="", limit=10)[0]
+            self.assertNotIn("mc_number", template["body"].lower())
+            self.assertNotIn("dot_number", template["body"].lower())
+
     def test_dry_run_preserves_unique_thread_message_ids(self):
         from app.adapters.gmail_adapter import GmailProvider
         sender = GmailProvider("carrier@example.com", "test-password")
@@ -187,6 +221,7 @@ class FreightConversationTests(unittest.TestCase):
             "origin_city": "Phoenix", "origin_state": "AZ", "equipment_type": "dry van",
             "destination_city": "Dallas", "destination_state": "TX", "pickup_date": "2026-09-23",
             "loaded_miles": 1000, "deadhead_miles": 100, "weight_lbs": 40000,
+            "origin_confirmed": "yes", "equipment_confirmed": "yes", "pickup_date_confirmed": "yes",
             "schedule_confirmed": "yes",
             **overrides,
         }
@@ -209,12 +244,59 @@ class FreightConversationTests(unittest.TestCase):
         events = self.storage.list("freight_negotiation_events", {"thread_id": self.thread_id}, order="", limit=100)
         self.assertEqual(sum(event["event_type"] == "counter" for event in events), 2)
 
+    def test_total_floor_does_not_bypass_unresolved_per_mile_floor(self):
+        self.storage.update("freight_missions", self.mission_id, {"floor_loaded_rpm": 2.5})
+        result = self.inbound("Rate is $4,000")
+        self.assertEqual(result["action"], "alert")
+        self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_offer"], 4000)
+        self.assertTrue(self.storage.list("freight_alerts", {"thread_id": self.thread_id, "kind": "miles_unverified"}, order="", limit=1))
+
+    def test_reprocessing_after_manual_save_preserves_confirmed_facts(self):
+        self.inbound("Pickup 09/23, delivery to Dallas, TX. 1,068 miles, weight 40,000 lbs. Rate- 4,000.00")
+        verify_load_facts(self.load_id, self.verified_facts(loaded_miles=850, deadhead_miles=75, weight_lbs=35000), self.storage)
+        latest = self.storage.list("freight_messages", {"thread_id": self.thread_id, "direction": "in"}, order="created_at desc", limit=1)[0]
+        reevaluate_verified_load(self.thread_id, latest, self.storage)
+        load = self.storage.get("freight_loads", self.load_id)
+        self.assertEqual(load["loaded_miles"], 850)
+        self.assertEqual(load["deadhead_miles"], 75)
+        self.assertEqual(load["weight_lbs"], 35000)
+        self.assertTrue(load["schedule_verified"])
+
+    def test_save_facts_endpoint_rechecks_reply_without_invalid_state(self):
+        from fastapi.testclient import TestClient
+        from app import main
+
+        self.inbound("Pickup 09/23, delivery to Dallas, TX. 1,068 miles, weight 40,000 lbs. Rate- 4,000.00")
+        with patch.object(main, "store", self.raw):
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            response = client.post(
+                f"/freight/loads/{self.load_id}/facts",
+                data=self.verified_facts(loaded_miles=850, deadhead_miles=75, weight_lbs=35000),
+                follow_redirects=False,
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("Load%20details%20saved%20and%20broker%20reply%20rechecked", response.headers["location"])
+        load = self.storage.get("freight_loads", self.load_id)
+        self.assertEqual(load["loaded_miles"], 850)
+        self.assertEqual(load["weight_lbs"], 35000)
+
     def test_profile_answer_does_not_consume_a_counter(self):
         result = self.inbound("Is this a true team with a 53 ft dry van?")
         self.assertEqual(result["action"], "draft")
         self.send(result["draft"])
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "waiting")
+
+    def test_draft_with_authority_id_requires_explicit_confirmation(self):
+        draft = self.storage.insert("freight_drafts", {
+            "id": new_id(), "thread_id": self.thread_id, "subject": "Re: Truck available",
+            "body_text": "MC 123456 is on file.", "reason": "profile_fact_reply",
+            "policy_snapshot": {}, "in_reply_to_message_id": self.storage.get("freight_threads", self.thread_id)["last_message_id"],
+            "status": "pending", "created_at": now_iso(), "updated_at": now_iso(),
+        })
+        with self.assertRaises(SensitiveOutboundConfirmationRequired):
+            send_draft(draft["id"], self.storage)
 
     def test_phone_time_weight_and_unverified_rpm_do_not_trigger_counters(self):
         self.assertEqual(self.inbound("Reach me at 555-0100")["action"], "alert")
@@ -356,6 +438,18 @@ class FreightConversationTests(unittest.TestCase):
         with patch.object(main, "store", self.raw), patch.object(freight_core, "store", self.raw):
             client = TestClient(main.app)
             client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            # Test partial facts update (e.g. user only enters miles and weight without destination or schedule checkbox)
+            partial_res = client.post(f"/freight/loads/{self.load_id}/facts", data={
+                "origin_city": "Phoenix", "origin_state": "AZ",
+                "loaded_miles": "850", "weight_lbs": "35000",
+            }, follow_redirects=False)
+            self.assertEqual(partial_res.status_code, 303)
+            load_mid = self.storage.get("freight_loads", self.load_id)
+            self.assertEqual(load_mid["loaded_miles"], 850)
+            self.assertEqual(load_mid["weight_lbs"], 35000)
+            self.assertTrue(load_mid["loaded_miles_verified"])
+            self.assertFalse(load_mid["origin_verified"])
+
             response = client.post(f"/freight/loads/{self.load_id}/facts", data={
                 "origin_city": "Phoenix", "origin_state": "AZ", "equipment_type": "dry van",
                 "destination_city": "Dallas", "destination_state": "TX", "pickup_date": "2026-09-23",
@@ -370,6 +464,9 @@ class FreightConversationTests(unittest.TestCase):
             page = client.get(f"/freight?load_id={self.load_id}")
             self.assertEqual(page.status_code, 200)
             self.assertIn("Reopen negotiation", page.text)
+            self.assertIn("Selected mission", page.text)
+            self.assertIn("Desired delivery", page.text)
+            self.assertIn("Truck weight limit", page.text)
 
     def test_freight_missions_and_settings_navigation(self):
         from fastapi.testclient import TestClient

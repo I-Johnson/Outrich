@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -27,7 +28,7 @@ from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
-from app.core.freight import evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, parse_destinations, poll_freight_replies, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts
+from app.core.freight import SensitiveOutboundConfirmationRequired, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
@@ -139,7 +140,7 @@ def page(request: Request, name: str, **context):
     return templates.TemplateResponse(request=request, name=name, context=context)
 
 
-FREIGHT_NEEDS_YOU = {"draft_ready", "needs_attention", "offer_review", "protected_review", "accepted_pending_review", "mismatch", "send_uncertain"}
+FREIGHT_NEEDS_YOU = {"draft_ready", "needs_attention", "offer_review", "protected_review", "accepted_pending_review", "mismatch", "send_uncertain", "confirmation_required"}
 FREIGHT_DONE = {"booked", "closed", "passed"}
 
 
@@ -382,6 +383,10 @@ def _optional_int(value) -> int | None:
     return int(number) if number is not None else None
 
 
+def _first_touch_fingerprint(preview: dict) -> str:
+    return hashlib.sha256(f"{preview.get('subject', '')}\0{preview.get('body', '')}".encode()).hexdigest()
+
+
 @app.get("/freight", response_class=HTMLResponse)
 def freight_dashboard(request: Request, load_id: str = ""):
     db = freight_store(request)
@@ -406,10 +411,18 @@ def freight_dashboard(request: Request, load_id: str = ""):
         load["profile"] = profile_map.get(str(profile_id)) or {}
         load["thread"] = thread
         load["economics"] = load_economics(load)
+        load["comparison"] = mission_price_comparison(load, mission)
         load["alerts"] = alerts_by_thread.get(str(thread.get("id")), [])
         load["draft"] = drafts_by_thread.get(str(thread.get("id")))
         load["group"] = freight_group(load)
     selected = next((row for row in loads if str(row["id"]) == str(load_id)), None) or (loads[0] if loads else None)
+    confirmation_preview = None
+    if selected and selected.get("status") == "confirmation_required":
+        try:
+            confirmation_preview = prepare_first_touch(str(selected["id"]), storage=db)
+            confirmation_preview["fingerprint"] = _first_touch_fingerprint(confirmation_preview)
+        except Exception as exc:
+            confirmation_preview = {"error": str(exc)}
     messages = []
     if selected and selected.get("thread"):
         raw_messages = db.list("freight_messages", {"thread_id": selected["thread"]["id"]}, order="created_at asc", limit=500)
@@ -425,6 +438,7 @@ def freight_dashboard(request: Request, load_id: str = ""):
         messages=messages, missions=missions, profiles=profiles, freight_templates=freight_templates,
         default_template=default_template,
         gmail_senders=gmail_senders, freight_settings=freight_settings, open_alerts=open_alerts, mail_cursors=cursors,
+        confirmation_preview=confirmation_preview,
     )
 
 
@@ -713,9 +727,33 @@ async def freight_load_send(request: Request):
     db.insert("freight_loads", row)
     try:
         send_first_touch(load_id, storage=db)
+    except SensitiveOutboundConfirmationRequired as exc:
+        db.update("freight_loads", load_id, {"status": "confirmation_required", "updated_at": now_iso()})
+        return RedirectResponse(f"/freight?load_id={load_id}&notice={quote('Review sensitive information before sending: ' + ', '.join(exc.fields))}", 303)
     except Exception as exc:
         return RedirectResponse(f"/freight?load_id={load_id}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
     return RedirectResponse(f"/freight?load_id={load_id}&notice=Load+email+sent", 303)
+
+
+@app.post("/freight/loads/{load_id}/send-confirmed")
+async def freight_load_send_confirmed(request: Request, load_id: str):
+    db = freight_store(request)
+    load = db.get("freight_loads", load_id)
+    if not load:
+        raise HTTPException(404, "Load not found")
+    if load.get("status") != "confirmation_required":
+        return RedirectResponse(f"/freight?load_id={load_id}&notice=This+load+does+not+need+a+sensitive+send+confirmation", 303)
+    form = await request.form()
+    if str(form.get("confirm_sensitive") or "").lower() not in {"yes", "on", "true", "1"}:
+        return RedirectResponse(f"/freight?load_id={load_id}&notice=Confirm+the+sensitive+information+before+sending", 303)
+    try:
+        preview = prepare_first_touch(load_id, storage=db)
+        if str(form.get("confirmation_fingerprint") or "") != _first_touch_fingerprint(preview):
+            return RedirectResponse(f"/freight?load_id={load_id}&notice=The+message+changed.+Review+the+updated+preview+before+sending", 303)
+        send_first_touch(load_id, storage=db, confirm_sensitive=True)
+    except Exception as exc:
+        return RedirectResponse(f"/freight?load_id={load_id}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
+    return RedirectResponse(f"/freight?load_id={load_id}&notice=Confirmed+and+sent", 303)
 
 
 @app.post("/freight/drafts/{draft_id}/send")
@@ -731,7 +769,8 @@ async def freight_draft_send(request: Request, draft_id: str):
         return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Reply+cannot+be+empty", 303)
     db.update("freight_drafts", draft_id, {"body_text": body_text, "updated_at": now_iso()})
     try:
-        send_draft(draft_id, storage=db)
+        # Clicking Approve & send is the user's explicit confirmation.
+        send_draft(draft_id, storage=db, confirm_sensitive=True)
     except ValueError as exc:
         return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
     return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Reply+sent", 303)
@@ -763,6 +802,7 @@ async def freight_thread_state(thread_id: str, request: Request):
 async def freight_load_facts(load_id: str, request: Request):
     db = freight_store(request)
     form = await request.form()
+    rechecked = False
     try:
         verify_load_facts(load_id, dict(form), storage=db)
         # After facts are verified, resolve open fact alerts and re-evaluate inbound message if present
@@ -774,11 +814,11 @@ async def freight_load_facts(load_id: str, request: Request):
                     db.update("freight_alerts", al["id"], {"status": "resolved", "resolved_at": now_iso()})
             inbound_msgs = db.list("freight_messages", {"thread_id": th["id"], "direction": "in"}, order="created_at desc", limit=1)
             if inbound_msgs:
-                set_thread_state(th["id"], "waiting", storage=db)
-                evaluate_inbound(th, inbound_msgs[0], storage=db)
+                rechecked = reevaluate_verified_load(th["id"], inbound_msgs[0], storage=db).get("action") != "skipped"
     except ValueError as exc:
         return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(str(exc))}", 303)
-    return RedirectResponse(f"/freight?load_id={load_id}&notice=Load+facts+verified+and+re-evaluated", 303)
+    notice = "Load details saved and broker reply rechecked" if rechecked else "Load details saved"
+    return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(notice)}", 303)
 
 
 @app.post("/freight/threads/{thread_id}/reply")
@@ -810,7 +850,8 @@ async def freight_thread_reply(thread_id: str, request: Request):
     if thread.get("state") in {"needs_attention", "mismatch", "protected_review", "offer_review", "closed"}:
         set_thread_state(thread_id, "negotiating", storage=db)
     try:
-        send_draft(draft_id, storage=db)
+        # A manually composed reply is already an explicit user action.
+        send_draft(draft_id, storage=db, confirm_sensitive=True)
     except Exception as exc:
         return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Send+failed:+{quote(str(exc)[:160])}", 303)
     return RedirectResponse(f"/freight?load_id={thread.get('load_id','')}&notice=Reply+sent+to+broker", 303)

@@ -35,12 +35,35 @@ MC_QUESTION = re.compile(r"\b(mc(?:\s*number|\s*#)?|dot(?:\s*number|\s*#)?)\b", 
 NUMBER_CANDIDATE = re.compile(r"(?<![\w])(?P<currency>\$)?\s*(?P<amount>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?![\w])")
 PHONE_NUMBER = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}(?!\d)|(?<!\d)\d{3}[\s.-]\d{4}(?!\d)")
 DATE_NUMBER = re.compile(r"(?<!\d)(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)(?!\d)")
+AUTHORITY_ID = re.compile(r"\b(?:MC(?:\s*(?:number|#))?|USDOT|DOT(?:\s*(?:number|#))?)\s*[:#-]?\s*\d{4,10}\b", re.I)
+SENSITIVE_OUTBOUND = {
+    "authority ID (MC/USDOT)": AUTHORITY_ID,
+    "phone number": PHONE_NUMBER,
+    "driver identity information": re.compile(r"\b(?:cdl|commercial driver's license|driver(?:'s)? license|date of birth|\bdob\b|social security|\bssn\b|driver details|driver information|driver info)\b", re.I),
+    "insurance or financial document": re.compile(r"\b(?:insurance certificate|certificate of insurance|\bcoi\b|w-?9|bank(?:ing)? details?|routing number|account number|factoring|void(?:ed)? check)\b", re.I),
+    "vehicle identifier": re.compile(r"\b(?:vin|vehicle identification number|license plate|plate number|tractor number|trailer number)\b", re.I),
+}
 RATE_CUE = re.compile(r"(?:\brate(?:\s+is)?|\ball[\s-]*in|\boffer(?:ing)?|\bpay(?:ing)?|\b(?:can|could|would)\s+(?:you\s+|we\s+)?(?:do|meet(?:\s+at)?)|[?&]?\bhow\s+about|\bwhat\s+about|\bmeet\s+(?:you\s+)?at|\bcan\s+do|\bget\s+you|\bsqueeze\s+it\s+to|\b(?:best|max(?:imum)?)(?:\s+is)?|\bat\b)\s*[:=\-]?\s*$", re.I)
 TIME_CUE = re.compile(r"\b(?:pickup|pick\s*up|delivery|deliver|appointment|appt|eta|tonight|tomorrow)\b.{0,24}\b(?:at|by)\s*$", re.I)
 IDENTIFIER_CUE = re.compile(r"\b(?:mc|dot|reference|ref|load\s*(?:#|number|id)|po\s*(?:#|number))\s*[:#-]?\s*$", re.I)
 CLOSED_REPLY = re.compile(r"\b(?:load\s+(?:is\s+)?covered|already\s+booked|no\s+longer\s+available|factoring\s+(?:was\s+)?denied|never\s+mind\s*[.!]\s*(?:factoring\s+(?:was\s+)?denied|sorry)|we(?:'ll|\s+will)\s+pass)\b", re.I)
 REQUIRED_EQUIPMENT = re.compile(r"\b(?:need|requires?|must\s+(?:be|have)|has\s+to\s+be)\s+(?:a\s+|an\s+|\d+\s*(?:ft|foot)\s+)?(dry\s*van|reefer|flatbed|step\s*deck|power\s*only)\b|\b(dry\s*van|reefer|flatbed|step\s*deck|power\s*only)\s+(?:only|required|needed)\b", re.I)
 DESTINATION_MENTION = re.compile(r"\b(?:deliver(?:y)?\s+(?:to|in)|going\s+to|to)\s+([A-Za-z][A-Za-z .'-]{1,35}?),\s*([A-Z]{2})\b", re.I)
+
+
+class SensitiveOutboundConfirmationRequired(ValueError):
+    """Raised before an initial email containing sensitive data can be sent."""
+
+    def __init__(self, load_id: str, fields: list[str]):
+        self.load_id = load_id
+        self.fields = fields
+        super().__init__("Confirm sharing: " + ", ".join(fields))
+
+
+def sensitive_outbound_fields(subject: str, body: str) -> list[str]:
+    """Return human-readable categories requiring explicit first-send confirmation."""
+    text = f"{subject}\n{body}"
+    return [label for label, pattern in SENSITIVE_OUTBOUND.items() if pattern.search(text)]
 
 
 def _number(value: Any) -> float | None:
@@ -79,6 +102,39 @@ def load_economics(load: dict[str, Any], offer: float | None = None) -> dict[str
     }
 
 
+def mission_price_comparison(load: dict[str, Any], mission: dict[str, Any]) -> dict[str, Any]:
+    """Compare an offer with every configured mission floor, without guessing miles."""
+    rate = load_economics(load)["rate"]
+    loaded = _number(load.get("loaded_miles")) if load.get("loaded_miles_verified") else None
+    deadhead = _number(load.get("deadhead_miles")) if load.get("deadhead_miles_verified") else None
+    total_floor = _number(mission.get("floor_total"))
+    loaded_rpm_floor = _number(mission.get("floor_loaded_rpm"))
+    all_in_rpm_floor = _number(mission.get("floor_all_in_rpm"))
+    missing: list[str] = []
+    floors = [total_floor] if total_floor is not None else []
+    if loaded_rpm_floor is not None:
+        if loaded:
+            floors.append(loaded * loaded_rpm_floor)
+        else:
+            missing.append("loaded miles")
+    if all_in_rpm_floor is not None:
+        if not loaded:
+            if "loaded miles" not in missing:
+                missing.append("loaded miles")
+        elif deadhead is None:
+            missing.append("deadhead miles")
+        else:
+            floors.append((loaded + deadhead) * all_in_rpm_floor)
+    minimum_total = max(floors) if floors and not missing else None
+    return {
+        "rate": rate,
+        "minimum_total": minimum_total,
+        "known_floor": max(floors) if floors else None,
+        "missing": missing,
+        "difference": rate - minimum_total if rate is not None and minimum_total is not None else None,
+    }
+
+
 def parse_destinations(labels: list[str], kinds: list[str], radii: list[str]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     allowed = {"city", "state", "region", "anywhere"}
@@ -102,9 +158,18 @@ def seed_freight_template(storage=None) -> None:
     body = (
         "Hi,\n\nI am interested in the load you posted. "
         "I have a {{equipment}} available near {{truck_location}}.\n\n"
-        "MC {{mc_number}}\nPlease send the pickup, delivery, miles, weight, and rate.\n\n{{signature}}"
+        "Please send the pickup, delivery, miles, weight, and rate.\n\n{{signature}}"
     )
     if current:
+        # Migrate the original seeded template only when it is still untouched;
+        # custom templates remain intact and are covered by the send gate.
+        legacy_body = (
+            "Hi,\n\nI am interested in the load you posted. "
+            "I have a {{equipment}} available near {{truck_location}}.\n\n"
+            "MC {{mc_number}}\nPlease send the pickup, delivery, miles, weight, and rate.\n\n{{signature}}"
+        )
+        if current.get("body") == legacy_body:
+            storage.update("email_templates", current["id"], {"body": body, "updated_at": now_iso()})
         return
     stamp = now_iso()
     storage.insert("email_templates", {
@@ -212,7 +277,7 @@ def _load_bundle(load_id: str, storage=None) -> tuple[dict, dict, dict, dict, di
     return load, mission, profile, template, cfg
 
 
-def send_first_touch(load_id: str, storage=None) -> dict[str, Any]:
+def prepare_first_touch(load_id: str, storage=None) -> dict[str, Any]:
     storage = storage or store
     load, mission, profile, template, cfg = _load_bundle(load_id, storage)
     if not valid_email(load.get("broker_email", "")):
@@ -228,6 +293,26 @@ def send_first_touch(load_id: str, storage=None) -> dict[str, Any]:
     missing = sorted(set(subject_missing + body_missing))
     if missing:
         raise ValueError(f"Complete the profile/load fields required by the template: {', '.join(missing)}")
+    return {
+        "load": load, "mission": mission, "profile": profile, "template": template,
+        "cfg": cfg, "sender": sender, "sender_cfg": sender_cfg, "subject": subject,
+        "body": body, "sensitive_fields": sensitive_outbound_fields(subject, body),
+    }
+
+
+def send_first_touch(load_id: str, storage=None, *, confirm_sensitive: bool = False) -> dict[str, Any]:
+    storage = storage or store
+    prepared = prepare_first_touch(load_id, storage)
+    load = prepared["load"]
+    cfg = prepared["cfg"]
+    template = prepared["template"]
+    sender = prepared["sender"]
+    sender_cfg = prepared["sender_cfg"]
+    subject = prepared["subject"]
+    body = prepared["body"]
+    sensitive_fields = prepared["sensitive_fields"]
+    if sensitive_fields and not confirm_sensitive:
+        raise SensitiveOutboundConfirmationRequired(load_id, sensitive_fields)
     message_id = make_msgid(domain=(sender.get("email") or "gmail.com").split("@")[-1])
     provider = get_provider("gmail", cfg, str(sender["id"]), sender)
     result = provider.send(
@@ -420,34 +505,50 @@ def set_thread_state(thread_id: str, state: str, storage=None) -> dict:
 
 
 def verify_load_facts(load_id: str, values: dict[str, Any], storage=None) -> dict:
-    """A dispatcher confirms load facts after the broker replies, outside the fast first-send flow."""
+    """A dispatcher confirms or updates load facts after the broker replies."""
     storage = storage or store
     load = storage.get("freight_loads", load_id)
     if not load:
         raise ValueError("Freight load not found")
     mission = storage.get("freight_missions", load.get("mission_id")) or {}
     profile = storage.get("freight_truck_profiles", load.get("truck_profile_id")) or {}
-    origin_city = str(values.get("origin_city") or "").strip()
-    origin_state = str(values.get("origin_state") or "").strip().upper()
+
+    origin_city = str(values.get("origin_city") or load.get("origin_city") or "").strip()
+    origin_state = str(values.get("origin_state") or load.get("origin_state") or "").strip().upper()
+    origin_unchanged = origin_city == (load.get("origin_city") or "") and origin_state == (load.get("origin_state") or "")
     city = str(values.get("destination_city") or "").strip()
     state = str(values.get("destination_state") or "").strip().upper()
-    if not origin_city or len(origin_state) != 2:
+
+    if origin_city and origin_state and len(origin_state) != 2:
         raise ValueError("Enter the broker's pickup city and two-letter state")
-    if not city or len(state) != 2:
-        raise ValueError("Enter the broker's destination city and two-letter state")
+
+    destination_verified = False
+    if city or state:
+        if not city or len(state) != 2:
+            raise ValueError("Enter the broker's destination city and two-letter state")
+        destination_match = _destination_matches(mission, city, state)
+        has_radius = any(_number(item.get("radius_miles")) for item in mission.get("destinations") or [])
+        if destination_match is False and not has_radius:
+            raise ValueError("Destination is outside this mission; choose a matching mission")
+        destination_verified = True
+    else:
+        city = load.get("destination_city") or "Open destinations"
+        state = load.get("destination_state") or ""
+        destination_verified = bool(load.get("destination_verified")) and (city != "Open destinations")
+
     equipment = str(values.get("equipment_type") or "").strip()
     saved_equipment = str(profile.get("equipment_type") or mission.get("equipment_type") or "").strip()
-    if not equipment or not saved_equipment:
-        raise ValueError("Confirm the broker's equipment and complete the truck profile")
-    if equipment.casefold() != saved_equipment.casefold():
-        raise ValueError("Broker equipment differs from the truck profile; use a matching profile or mission")
-    destination_match = _destination_matches(mission, city, state)
-    has_radius = any(_number(item.get("radius_miles")) for item in mission.get("destinations") or [])
-    if destination_match is False and not has_radius:
-        raise ValueError("Destination is outside this mission; choose a matching mission")
+    equipment_verified = False
+    if equipment:
+        if saved_equipment and equipment.casefold() != saved_equipment.casefold():
+            raise ValueError("Broker equipment differs from the truck profile; use a matching profile or mission")
+        equipment_verified = bool(values.get("equipment_confirmed")) or (bool(load.get("equipment_verified")) and equipment == (load.get("equipment_type") or ""))
+    else:
+        equipment = load.get("equipment_type") or saved_equipment or ""
+        equipment_verified = bool(load.get("equipment_verified"))
+
     pickup_text = str(values.get("pickup_date") or "").strip()
-    if (mission.get("pickup_start") or mission.get("pickup_end")) and not pickup_text:
-        raise ValueError("Confirm the broker's pickup date")
+    pickup_verified = False
     if pickup_text:
         try:
             pickup = datetime.fromisoformat(pickup_text).date()
@@ -457,11 +558,17 @@ def verify_load_facts(load_id: str, values: dict[str, Any], storage=None) -> dic
             raise ValueError("Enter a valid pickup date") from exc
         if (start and pickup < start) or (end and pickup > end):
             raise ValueError("Pickup date is outside this mission's window")
-    if not values.get("schedule_confirmed"):
-        raise ValueError("Confirm the broker's pickup and delivery schedule fits this truck")
+        pickup_verified = bool(values.get("pickup_date_confirmed")) or (bool(load.get("pickup_date_verified")) and pickup_text == (load.get("pickup_date") or ""))
+    else:
+        pickup_text = load.get("pickup_date") or ""
+        pickup_verified = bool(load.get("pickup_date_verified"))
+
+    schedule_confirmed = bool(values.get("schedule_confirmed")) or bool(load.get("schedule_verified"))
+
     loaded = _number(values.get("loaded_miles"))
     deadhead = _number(values.get("deadhead_miles"))
     weight = _number(values.get("weight_lbs"))
+
     if loaded is not None and loaded <= 0:
         raise ValueError("Loaded miles must be positive")
     if deadhead is not None and deadhead < 0:
@@ -471,15 +578,29 @@ def verify_load_facts(load_id: str, values: dict[str, Any], storage=None) -> dic
     max_weight = _number(profile.get("max_weight_lbs")) or _number(mission.get("max_weight_lbs"))
     if max_weight and weight and weight > max_weight:
         raise ValueError("Broker load weight exceeds this truck's limit")
+
+    final_loaded = loaded if loaded is not None else load.get("loaded_miles")
+    final_deadhead = deadhead if deadhead is not None else load.get("deadhead_miles")
+    final_weight = weight if weight is not None else load.get("weight_lbs")
+
     updates = {
-        "origin_city": origin_city, "origin_state": origin_state, "origin_verified": True,
-        "destination_city": city, "destination_state": state, "destination_verified": True,
-        "equipment_type": equipment, "equipment_verified": True,
-        "pickup_date": pickup_text or None, "pickup_date_verified": bool(pickup_text),
-        "schedule_verified": True,
-        "loaded_miles": loaded, "loaded_miles_verified": loaded is not None,
-        "deadhead_miles": deadhead, "deadhead_miles_verified": deadhead is not None,
-        "weight_lbs": weight, "updated_at": now_iso(),
+        "origin_city": origin_city,
+        "origin_state": origin_state,
+        "origin_verified": bool(origin_city and origin_state) and (bool(values.get("origin_confirmed")) or (origin_unchanged and bool(load.get("origin_verified")))),
+        "destination_city": city,
+        "destination_state": state,
+        "destination_verified": destination_verified,
+        "equipment_type": equipment,
+        "equipment_verified": equipment_verified,
+        "pickup_date": pickup_text or None,
+        "pickup_date_verified": pickup_verified,
+        "schedule_verified": schedule_confirmed,
+        "loaded_miles": final_loaded,
+        "loaded_miles_verified": final_loaded is not None,
+        "deadhead_miles": final_deadhead,
+        "deadhead_miles_verified": final_deadhead is not None,
+        "weight_lbs": final_weight,
+        "updated_at": now_iso(),
     }
     return storage.update("freight_loads", load_id, updates)
 
@@ -557,28 +678,28 @@ def _pickup_date_from_text(text: str, mission: dict):
         return None
 
 
-def _enrich_load_facts(load: dict, mission: dict, classification: dict, text: str, storage=None) -> dict:
+def _enrich_load_facts(load: dict, mission: dict, classification: dict, text: str, storage=None, *, preserve_verified: bool = False) -> dict:
     storage = storage or store
     updates: dict[str, Any] = {}
-    if re.search(r"\b(?:pickup|pick\s*up|delivery|deliver|appt|appointment|eta)\b", text, re.I):
+    if re.search(r"\b(?:pickup|pick\s*up|delivery|deliver|appt|appointment|eta)\b", text, re.I) and not (preserve_verified and load.get("schedule_verified")):
         updates["schedule_verified"] = False
     weights = [fact["value"] for fact in classification["numeric_facts"] if fact["unit"] == "weight"]
-    if len(set(weights)) == 1:
+    if len(set(weights)) == 1 and not (preserve_verified and load.get("weight_lbs") is not None):
         updates["weight_lbs"] = weights[0]
     miles = [fact["value"] for fact in classification["numeric_facts"] if fact["unit"] == "miles"]
-    if len(set(miles)) == 1:
+    if len(set(miles)) == 1 and not (preserve_verified and load.get("loaded_miles_verified")):
         updates["loaded_miles"] = miles[0]
         updates["loaded_miles_verified"] = True
     deadhead = [fact["value"] for fact in classification["numeric_facts"] if fact["unit"] == "deadhead_miles"]
-    if len(set(deadhead)) == 1:
+    if len(set(deadhead)) == 1 and not (preserve_verified and load.get("deadhead_miles_verified")):
         updates["deadhead_miles"] = deadhead[0]
         updates["deadhead_miles_verified"] = True
     destination = _destination_from_text(text)
-    if destination:
+    if destination and not (preserve_verified and load.get("destination_verified")):
         updates["destination_city"], updates["destination_state"] = destination
         updates["destination_verified"] = _destination_matches(mission, *destination) is True
     pickup_date = _pickup_date_from_text(text, mission)
-    if pickup_date:
+    if pickup_date and not (preserve_verified and load.get("pickup_date_verified")):
         updates["pickup_date"] = pickup_date.isoformat()
         try:
             start = datetime.fromisoformat(mission["pickup_start"]).date() if mission.get("pickup_start") else None
@@ -718,7 +839,7 @@ def _finish_permitted_draft(draft: dict, mission: dict, storage=None) -> dict[st
         return {"action": "alert", "draft": storage.get("freight_drafts", draft["id"]), "warning": summary}
 
 
-def evaluate_inbound(thread: dict, message: dict, storage=None) -> dict[str, Any]:
+def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_verified_facts: bool = False) -> dict[str, Any]:
     storage = storage or store
     thread = storage.get("freight_threads", thread["id"]) or thread
     prior_state = thread.get("state") or "waiting"
@@ -774,7 +895,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None) -> dict[str, Any
         _set_stage(thread, load, "needs_attention", storage)
         return {"action": "alert", "classification": classification, "summary": summary}
 
-    load = _enrich_load_facts(load, mission, classification, text, storage)
+    load = _enrich_load_facts(load, mission, classification, text, storage, preserve_verified=preserve_verified_facts)
     mismatches = _mismatch_reasons(text, load, mission, profile)
     if mismatches:
         summary = " ".join(mismatches)
@@ -860,8 +981,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None) -> dict[str, Any
         storage.update("freight_loads", load["id"], {"current_offer": offer, "updated_at": now_iso()})
         rpm_policy = any(_number(mission.get(field)) for field in ("floor_loaded_rpm", "floor_all_in_rpm", "target_all_in_rpm"))
         all_in_policy = any(_number(mission.get(field)) for field in ("floor_all_in_rpm", "target_all_in_rpm"))
-        has_total_floor = _number(mission.get("floor_total")) is not None
-        if not has_total_floor and ((rpm_policy and not load.get("loaded_miles_verified")) or (all_in_policy and not load.get("deadhead_miles_verified"))):
+        if (rpm_policy and not load.get("loaded_miles_verified")) or (all_in_policy and not load.get("deadhead_miles_verified")):
             summary = "Miles needed for the mission's per-mile limits are unverified. Review loaded and deadhead miles before negotiating."
             _create_alert(thread["id"], "miles_unverified", summary, storage)
             _set_stage(thread, load, "needs_attention", storage)
@@ -913,7 +1033,22 @@ def evaluate_inbound(thread: dict, message: dict, storage=None) -> dict[str, Any
     return {"action": "alert", "classification": classification, "summary": summary}
 
 
-def send_draft(draft_id: str, storage=None) -> dict[str, Any]:
+def reevaluate_verified_load(thread_id: str, message: dict, storage=None) -> dict[str, Any]:
+    """Resume a thread after manual fact confirmation and reconsider its latest reply."""
+    storage = storage or store
+    thread = storage.get("freight_threads", thread_id)
+    if not thread:
+        raise ValueError("Freight thread not found")
+    load = storage.get("freight_loads", thread["load_id"])
+    if not load:
+        raise ValueError("Freight load not found")
+    if thread.get("state") in {"closed", "booked"}:
+        return {"action": "skipped", "reason": "thread_closed_or_booked"}
+    _set_stage(thread, load, "waiting", storage)
+    return evaluate_inbound(thread, message, storage, preserve_verified_facts=True)
+
+
+def send_draft(draft_id: str, storage=None, *, confirm_sensitive: bool = False) -> dict[str, Any]:
     storage = storage or store
     draft = storage.get("freight_drafts", draft_id)
     if not draft or draft.get("status") != "pending":
@@ -924,6 +1059,9 @@ def send_draft(draft_id: str, storage=None) -> dict[str, Any]:
         raise ValueError("This thread needs review or is closed; reopen it before sending a draft")
     if draft.get("in_reply_to_message_id") and thread.get("last_message_id") != draft["in_reply_to_message_id"]:
         raise ValueError("A newer broker reply arrived; review it before sending this draft")
+    sensitive_fields = sensitive_outbound_fields(draft.get("subject") or thread.get("subject", ""), draft.get("body_text") or "")
+    if sensitive_fields and not confirm_sensitive:
+        raise SensitiveOutboundConfirmationRequired(str(load.get("id") or ""), sensitive_fields)
     counter_amount = extract_offer(draft.get("body_text") or "") if str(draft.get("reason") or "").startswith("counter_") else None
     if str(draft.get("reason") or "").startswith("counter_") and counter_amount is None:
         raise ValueError("A counter draft must contain one clear total rate")

@@ -185,6 +185,7 @@
 <details>
   <summary>Available dynamic variables</summary>
   <code>{% if vertical == 'freight' %}{{'{{origin}} {{destination}} {{pickup_date}} {{equipment}} {{truck_location}} {{mc_number}} {{dot_number}} {{broker_company}} {{dat_reference}} {{loaded_miles}} {{deadhead_miles}} {{posted_rate}} {{all_in_rpm}} {{signature}}'}}{% else %}{{'{{person_name}} {{short_name}} {{owner_first_name}} {{category}} {{city}} {{state}} {{sender_name}} {{product_name}} {{product_url}} {{booking_link}} {{callback_number}} {{client_count}} {{client_noun}} {{signature}}'}}{% endif %}</code>
+  {% if vertical == 'freight' %}<p style="font-size:12px;color:#9a6700;margin-top:6px;"><strong>Safety:</strong> MC/USDOT, phone numbers, driver information, insurance, financial data, and vehicle identifiers require explicit confirmation before an initial Freight email is sent.</p>{% endif %}
   {% if vertical != 'freight' %}<p style="font-size:12px;color:var(--text-muted);margin-top:6px;"><strong>Tip:</strong> <code>{{'{{person_name}}'}}</code> uses the contact's name if known or inferred from their email (e.g. <em>roy@gconstruct.com</em> &rarr; <strong>Roy</strong>), and automatically falls back to <code>{{'{{short_name}}'}}</code> if not inferable.</p>{% endif %}
 </details>
 </section>

@@ -161,14 +161,76 @@ body.fx-loads-page .fx-tabs { background: #fff; padding: 0 24px; margin: 0; }
 .fx-alert strong { color: var(--fx-ink-h); display: block; }
 .fx-alert .fx-alert-actions { margin-left: auto; display: flex; gap: 6px; flex: none; }
 .fx-alert .fx-alert-actions form { margin: 0; }
-.fx-reply { background: #fff; border: 1px solid var(--fx-line); border-radius: 14px; margin: 0 24px 20px; overflow: hidden; flex: none; }
+.fx-reply { background: #fff; border: 1px solid var(--fx-line); border-radius: 14px; margin: 0 24px 20px; overflow: hidden; flex: none; transition: box-shadow 0.15s ease; }
 .fx-reply.is-draft { border-color: var(--fx-amber-bd); box-shadow: 0 0 0 4px var(--fx-amber-bg); }
-.fx-reply-h { padding: 12px 16px 10px; border-bottom: 1px solid var(--fx-line-2); display: flex; flex-direction: column; gap: 2px; }
-.fx-reply.is-draft .fx-reply-h { background: #fffcf5; }
+.fx-reply-h { padding: 10px 16px; border-bottom: 1px solid var(--fx-line-2); display: flex; align-items: center; justify-content: space-between; gap: 12px; user-select: none; }
+.fx-reply.is-draft .fx-reply-h { flex-direction: column; align-items: flex-start; gap: 2px; background: #fffcf5; padding: 12px 16px 10px; }
 .fx-reply-h .fx-label { color: var(--fx-amber); }
 .fx-reply-h strong { color: var(--fx-ink-h); font-size: 14px; }
-.fx-reply textarea { border: 0; border-radius: 0; box-shadow: none; padding: 12px 16px; font-size: 13.5px; line-height: 1.6; min-height: 110px; resize: vertical; width: 100%; background: #fff; }
-.fx-reply textarea:focus { box-shadow: inset 0 0 0 2px #c9d7fb; border: 0; }
+.fx-reply-toggle-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; background: #f8fafc; border: 1px solid var(--fx-line); color: var(--fx-muted); border-radius: 6px; padding: 0; cursor: pointer; transition: all 0.15s ease; flex: none; }
+.fx-reply-toggle-btn:hover { background: #f1f5f9; color: var(--fx-ink); border-color: #cbd5e1; }
+.fx-reply-chevron { transition: transform 0.2s ease; transform: rotate(180deg); }
+
+/* Collapsed state: keeps 1 line to write on and send */
+.fx-reply.is-collapsed { box-shadow: none; }
+.fx-reply.is-collapsed .fx-reply-h { padding: 7px 16px 6px; border-bottom: 1px solid var(--fx-line-2); cursor: pointer; background: #fafbfc; }
+.fx-reply.is-collapsed .fx-reply-h:hover { background: #f3f4f6; }
+.fx-reply.is-collapsed .fx-reply-chevron { transform: rotate(0deg); }
+.fx-reply.is-collapsed .fx-reply-body { display: block; }
+.fx-reply.is-collapsed .fx-quick { display: none; }
+.fx-reply.is-collapsed .fx-reply-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  margin: 0;
+}
+.fx-reply.is-collapsed textarea {
+  flex: 1;
+  min-height: 38px;
+  height: 38px;
+  max-height: 38px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  line-height: 20px;
+  border: 1px solid var(--fx-line);
+  border-radius: 8px;
+  resize: none;
+  background: #f8fafc;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: pre;
+  width: auto;
+}
+.fx-reply.is-collapsed textarea:focus {
+  background: #fff;
+  border-color: var(--fx-accent, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  outline: none;
+}
+.fx-reply.is-collapsed .fx-reply-f {
+  display: flex;
+  align-items: center;
+  border-top: none;
+  padding: 0;
+  margin: 0;
+  flex: none;
+  gap: 8px;
+}
+.fx-reply.is-collapsed .fx-reply-f .fx-hint {
+  display: none;
+}
+.fx-reply.is-collapsed .fx-reply-f .fx-btn {
+  height: 38px;
+  padding: 0 14px;
+  white-space: nowrap;
+  border-radius: 8px;
+}
+
+.fx-reply textarea { border: 0; border-radius: 0; box-shadow: none; padding: 12px 16px; font-size: 13.5px; line-height: 1.6; min-height: 110px; resize: vertical; width: 100%; background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+.fx-reply textarea:focus { box-shadow: inset 0 0 0 2px #c9d7fb; border: 0; outline: none; }
 .fx-reply-f { display: flex; align-items: center; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--fx-line-2); flex-wrap: wrap; }
 .fx-reply-f .fx-hint { font-size: 12.5px; color: var(--fx-muted); display: flex; align-items: center; gap: 6px; margin-right: auto; }
 .fx-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0; }
@@ -187,8 +249,17 @@ body.fx-loads-page .fx-tabs { background: #fff; padding: 0 24px; margin: 0; }
 .fx-ladder .fx-mk.ask { color: #6d28d9; } .fx-ladder .fx-mk.ask i { background: #7c3aed; }
 .fx-mini { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 5px 0; }
 .fx-mini span:first-child { color: var(--fx-muted); }
-.fx-mini span:last-child { font-weight: 600; color: var(--fx-ink-h); text-align: right; }
+.fx-mini strong { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.fx-mission-context { border-top: 1px solid var(--fx-line-2); padding-top: 14px; }
+.fx-mission-context h3 a { font-size: 12px; font-weight: 600; }
+.fx-mission-context p { font-size: 12px; line-height: 1.45; margin: 0 0 7px; }
+.fx-form-help { font-size: 12px; line-height: 1.4; margin: -3px 0 2px; }
+.fx-source { color: var(--fx-muted); font-size: 11px; white-space: nowrap; }
 .fx-miss { color: var(--fx-amber) !important; font-weight: 600; font-size: 12px; }
+.fx-miss-btn { background: none; border: none; padding: 1px 6px; font-size: 12px; font-weight: 600; color: var(--fx-amber); border-radius: 4px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; transition: all 0.15s ease; line-height: 1.2; font-family: inherit; }
+.fx-miss-btn:hover { background: var(--fx-amber-bg); color: #b45309; }
+.fx-facts .v.editable { cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; transition: background 0.15s ease; }
+.fx-facts .v.editable:hover { background: #f1f5f9; }
 .fx-facts { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; font-size: 13px; }
 .fx-facts > div { padding: 7px 0; border-bottom: 1px solid var(--fx-line-2); display: flex; align-items: center; min-width: 0; }
 .fx-facts .k { color: var(--fx-muted); padding-right: 8px; }
