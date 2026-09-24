@@ -1,526 +1,277 @@
 {% extends "base.html" %}
-{% block title %}Freight workspace{% endblock %}
-{% block head %}
-<style>
-.freight-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.freight-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.compose-panel {
-  margin-bottom: 20px;
-  background: var(--panel-bg);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--panel-shadow);
-  overflow: hidden;
-}
-.compose-panel summary {
-  padding: 12px 18px;
-  cursor: pointer;
-  font-weight: 700;
-  color: var(--ink-heading);
-  background: #fafbfc;
-  user-select: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.compose-panel summary:hover {
-  background: #f1f5f9;
-}
-.compose-form {
-  padding: 16px 18px;
-  display: grid;
-  grid-template-columns: 1fr 1fr 1.1fr 1.25fr auto;
-  gap: 12px;
-  align-items: end;
-}
+{% block title %}Loads · Freight{% endblock %}
+{% block body_class %}fx-loads-page{% endblock %}
 
-/* Two-column layout: Left = Conversation (prominent), Right = Loads Queue/Table */
-.freight-shell {
-  display: grid;
-  grid-template-columns: minmax(500px, 1.3fr) minmax(420px, 1fr);
-  gap: 20px;
-  align-items: start;
-}
+{% macro status_pill(load) -%}
+  {%- set s = load.status or '' -%}
+  {%- if s == 'draft_ready' or (load.draft and s not in ['booked', 'closed', 'passed']) -%}<span class="fx-pill draft">Draft to approve</span>
+  {%- elif s == 'booked' -%}<span class="fx-pill good">Booked</span>
+  {%- elif s in ['closed', 'passed'] -%}<span class="fx-pill gray">{{ 'Passed' if s == 'passed' else 'Closed' }}</span>
+  {%- elif load.alerts -%}<span class="fx-pill attn" title="{{ load.alerts[0].summary }}">{{ (load.alerts[0].summary or 'Needs attention')|truncate(26, True, '…') }}</span>
+  {%- elif s in ['needs_attention', 'offer_review', 'protected_review', 'accepted_pending_review', 'mismatch', 'send_uncertain'] -%}<span class="fx-pill attn">{{ {'needs_attention': 'Needs attention', 'offer_review': 'Review offer', 'protected_review': 'Needs your review', 'accepted_pending_review': 'Accepted, review', 'mismatch': 'Doesn’t fit mission', 'send_uncertain': 'Check send'}[s] }}</span>
+  {%- elif s == 'waiting' -%}<span class="fx-pill wait">Waiting on broker</span>
+  {%- else -%}<span class="fx-pill wait">{{ s|replace('_', ' ')|capitalize or 'Open' }}</span>
+  {%- endif -%}
+{%- endmacro %}
 
-/* LEFT COLUMN: Conversation */
-.conversation-panel {
-  background: var(--panel-bg);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--panel-shadow);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.convo-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-}
-.convo-route {
-  font-size: 19px;
-  font-weight: 800;
-  color: var(--ink-heading);
-  margin: 2px 0 4px;
-}
-.convo-meta {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--muted);
-  align-items: center;
-}
-.convo-meta-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: #f1f5f9;
-  padding: 2px 8px;
-  border-radius: 6px;
-  color: #334155;
-  font-weight: 600;
-}
+{% macro route(load) -%}
+{{ load.origin_city }}{{ ', ' + load.origin_state if load.origin_state else '' }} → {% if load.destination_city == 'Open destinations' or not load.destination_city %}Open{% else %}{{ load.destination_city }}{{ ', ' + load.destination_state if load.destination_state else '' }}{% endif %}
+{%- endmacro %}
 
-/* Metric pills */
-.convo-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-.convo-metric {
-  padding: 10px 12px;
-  border-radius: 9px;
-  background: #f8fafc;
-  border: 1px solid var(--line);
-}
-.convo-metric strong {
-  display: block;
-  font-size: 15px;
-  font-weight: 800;
-  color: var(--ink-heading);
-}
-.convo-metric span {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-/* Status tags */
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.status.waiting {
-  background: #eff6ff;
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
-}
-.status.draft_ready {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fde68a;
-}
-.status.needs_attention {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fecaca;
-}
-.status.booked {
-  background: #f0fdf4;
-  color: #166534;
-  border: 1px solid #bbf7d0;
-}
-.status.negotiating,.status.passed {background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-.status.mismatch,.status.closed,.status.accepted_pending_review,.status.offer_review,.status.protected_review {background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
-
-/* Email Thread Stream */
-.thread-stream {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin-top: 6px;
-}
-.msg-card {
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  padding: 14px 16px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
-}
-.msg-card.out {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  border-left: 3px solid #3b82f6;
-}
-.msg-card.in {
-  background: #ffffff;
-  border-color: #cbd5e1;
-  border-left: 3px solid #10b981;
-}
-.msg-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-  gap: 8px;
-}
-.msg-sender {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.msg-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 800;
-}
-.msg-card.out .msg-avatar {
-  background: #dbeafe;
-  color: #1e40af;
-}
-.msg-card.in .msg-avatar {
-  background: #d1fae5;
-  color: #065f46;
-}
-.msg-author {
-  font-weight: 750;
-  font-size: 12.5px;
-  color: var(--ink-heading);
-}
-.msg-email-tag {
-  font-size: 11px;
-  color: var(--muted);
-  margin-left: 4px;
-  font-weight: 400;
-}
-.msg-time {
-  font-size: 11px;
-  color: var(--subtle);
-  white-space: nowrap;
-}
-.msg-body {
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Quoted history collapsible */
-.quoted-box {
-  margin-top: 10px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--line);
-}
-.quoted-box summary {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--muted);
-  background: #f1f5f9;
-  padding: 2px 8px;
-  border-radius: 6px;
-  user-select: none;
-  font-weight: 600;
-}
-.quoted-box summary:hover {
-  color: var(--ink-heading);
-  background: #e2e8f0;
-}
-.quoted-content {
-  margin-top: 8px;
-  padding: 8px 12px;
-  background: #f8fafc;
-  border-left: 2px solid #cbd5e1;
-  font-size: 11.5px;
-  color: #64748b;
-  white-space: pre-wrap;
-  font-family: inherit;
-  border-radius: 0 6px 6px 0;
-}
-
-/* AI Counter / Draft Action Box */
-.draft-card {
-  margin-top: 8px;
-  padding: 16px;
-  border-radius: 10px;
-  background: #fffdf5;
-  border: 1px solid #fde68a;
-  box-shadow: 0 2px 6px rgba(217, 119, 6, 0.05);
-}
-.draft-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.draft-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.draft-badge {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fcd34d;
-  padding: 2px 7px;
-  border-radius: 5px;
-  font-size: 10.5px;
-  font-weight: 750;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.draft-reason-pill {
-  font-size: 11.5px;
-  color: #78350f;
-  font-weight: 600;
-}
-.draft-textarea {
-  width: 100%;
-  border: 1px solid #fcd34d;
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 13px;
-  line-height: 1.5;
-  font-family: inherit;
-  background: #ffffff;
-  color: var(--ink-heading);
-  resize: vertical;
-  min-height: 80px;
-}
-.draft-textarea:focus {
-  outline: none;
-  border-color: #d97706;
-  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.15);
-}
-.draft-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 10px;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.draft-policy-hint {
-  font-size: 11.5px;
-  color: #92400e;
-  font-weight: 500;
-}
-.approve-send-btn {
-  background: #0f172a;
-  color: #ffffff;
-  font-weight: 700;
-  padding: 8px 18px;
-  border-radius: 7px;
-  border: none;
-  cursor: pointer;
-  font-size: 12.5px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: background 0.15s ease;
-}
-.approve-send-btn:hover {
-  background: #1e293b;
-}
-
-/* Waiting state banner */
-.waiting-banner {
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: #f0f7ff;
-  border: 1px solid #bfdbfe;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #1e40af;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #3b82f6;
-  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
-  animation: pulse 2s infinite;
-}
-@keyframes pulse {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
-}
-
-/* RIGHT COLUMN: Loads Queue & Table */
-.loads-panel {
-  background: var(--panel-bg);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--panel-shadow);
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.loads-panel-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.loads-panel-title {
-  font-size: 15px;
-  font-weight: 800;
-  color: var(--ink-heading);
-  margin: 0;
-}
-.loads-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-}
-.loads-table {
-  border-collapse: collapse;
-  width: 100%;
-  min-width: 480px;
-  font-size: 11.5px;
-}
-.loads-table th {
-  position: sticky;
-  top: 0;
-  background: #f8fafc;
-  color: #64748b;
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-}
-.loads-table td {
-  padding: 10px;
-  border-bottom: 1px solid #edf0f3;
-  white-space: nowrap;
-  vertical-align: middle;
-}
-.loads-table tr {
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-.loads-table tr:hover {
-  background: #f8fafc;
-}
-.loads-table tr.selected {
-  background: #eff6ff;
-  border-left: 3px solid #2563eb;
-}
-.route-cell {
-  font-weight: 750;
-  color: #0f172a;
-}
-.route-dest {
-  font-weight: 400;
-  color: #64748b;
-}
-.offer-cell {
-  font-weight: 800;
-  color: #0f172a;
-}
-.loads-footer-health {
-  font-size: 11px;
-  color: var(--muted);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 4px;
-}
-
-@media(max-width: 1080px) {
-  .freight-shell {
-    grid-template-columns: 1fr;
-  }
-  .convo-metrics {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .compose-form {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media(max-width: 650px) {
-  .compose-form {
-    grid-template-columns: 1fr;
-  }
-}
-</style>
-{% endblock %}
+{% macro nice_date(d) -%}
+{%- if d -%}{%- set parts = d[:10].split('-') -%}{%- if parts|length == 3 -%}{{ ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parts[1]|int - 1] }} {{ parts[2]|int }}{%- else -%}{{ d }}{%- endif -%}{%- else -%}No date{%- endif -%}
+{%- endmacro %}
 
 {% block content %}
-<header class="freight-header">
+{% set needs = loads|selectattr('group', 'equalto', 'needs')|list %}
+{% set waiting = loads|selectattr('group', 'equalto', 'waiting')|list %}
+{% set done = loads|selectattr('group', 'equalto', 'done')|list %}
+{% set setup_ok = missions and profiles and gmail_senders and freight_settings.default_template_id %}
+<div class="fx-loads-top">
   <div>
-    <span class="eyebrow">Freight agent</span>
-    <h1 style="margin:2px 0 4px">Loads & conversations</h1>
-    <p style="margin:0;color:var(--muted)">Review incoming broker offers, approve AI counter-proposals, and send load inquiries.</p>
+    <h1>Loads</h1>
+    <p class="fx-sub">{% if loads %}{{ needs|length }} need{{ 's' if needs|length == 1 else '' }} you · {{ waiting|length }} waiting on a broker{% else %}Send an inquiry to a broker to start a load.{% endif %}</p>
   </div>
-  <div class="freight-actions">
-    <a class="button ghost" href="/freight/settings">Settings & templates</a>
-    <a class="button ghost" href="/freight/missions">Missions & fleet</a>
-  </div>
-</header>
+  <span class="fx-spacer" style="flex:1"></span>
+  {% if loads %}<label class="fx-search" aria-label="Search loads"><svg class="i sm"><use href="#i-search"/></svg><input id="fx-load-search" type="search" placeholder="Search city or broker" autocomplete="off"></label>{% endif %}
+  <form action="/freight/check-mail" method="post" class="fx-inline-form"><button class="fx-btn" type="submit"><svg class="i sm"><use href="#i-refresh"/></svg>Check Gmail</button></form>
+  <button type="button" class="fx-btn primary" onclick="document.getElementById('fx-inquiry').showModal()" {% if not setup_ok %}disabled title="Finish setup first"{% endif %}><svg class="i sm"><use href="#i-plus"/></svg>New inquiry</button>
+</div>
 
-{% if not missions or not profiles or not gmail_senders or not freight_settings.default_template_id %}
-<div class="notice">
-  Setup needed: 
-  {% if not profiles %}<a href="/freight/missions?tab=trucks">add a truck profile</a>{% endif %}
-  {% if not missions %} · <a href="/freight/missions?tab=missions">create a mission</a>{% endif %}
-  {% if not gmail_senders %} · connect a Gmail sender in Settings{% endif %}
-  · <a href="/freight/settings">configure Freight settings & signature</a>
+{% if not setup_ok %}
+<div style="padding:0 24px 12px;background:#fff">
+  <div class="fx-card fx-setup" style="margin:0">
+    <div class="fx-setup-head"><strong>Finish setup to send your first inquiry</strong></div>
+    <div class="fx-steps">
+      <a href="/freight/settings#gmail" class="fx-step {{ 'done' if gmail_senders else 'current' }}"><b>{% if gmail_senders %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}1.{% endif %} Gmail</b>{{ 'Connected' if gmail_senders else 'Connect the inbox you send from' }}</a>
+      <a href="/freight/missions?tab=trucks" class="fx-step {{ 'done' if profiles else ('current' if gmail_senders else '') }}"><b>{% if profiles %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}2.{% endif %} Truck</b>{{ profiles|length ~ ' on file' if profiles else 'Equipment, MC/DOT' }}</a>
+      <a href="/freight/missions?tab=missions" class="fx-step {{ 'done' if missions else ('current' if gmail_senders and profiles else '') }}"><b>{% if missions %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}3.{% endif %} Mission</b>{{ missions|length ~ ' active' if missions else 'Where it goes, rate floor' }}</a>
+      <a href="/freight/settings#sender" class="fx-step {{ 'done' if freight_settings.default_template_id else ('current' if gmail_senders and profiles and missions else '') }}"><b>{% if freight_settings.default_template_id %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}4.{% endif %} Template</b>{{ 'Default set' if freight_settings.default_template_id else 'Pick a default inquiry' }}</a>
+    </div>
+  </div>
 </div>
 {% endif %}
 
-<!-- Composer Bar -->
-<details class="compose-panel" {% if not loads %}open{% endif %}>
-  <summary>
-    <span>➕</span>
-    <span>Send a new load inquiry</span>
-  </summary>
-  <form action="/freight/loads/send" method="post" class="compose-form">
-    <label>Truck profile
+<nav class="fx-tabs" id="fx-load-tabs" aria-label="Filter loads">
+  <button type="button" data-filter="needs">Needs you <span class="fx-tab-n num">{{ needs|length }}</span></button>
+  <button type="button" data-filter="waiting">Waiting <span class="fx-tab-n num">{{ waiting|length }}</span></button>
+  <button type="button" data-filter="done">Booked &amp; closed <span class="fx-tab-n num">{{ done|length }}</span></button>
+  <button type="button" data-filter="all">All <span class="fx-tab-n num">{{ loads|length }}</span></button>
+</nav>
+
+<div class="fx-work">
+  <!-- Queue -->
+  <section class="fx-queue" aria-label="Load queue">
+    {% for group, label, rows in [('needs', 'Needs you', needs), ('waiting', 'Waiting on broker', waiting), ('done', 'Booked & closed', done)] %}
+    {% if rows %}
+    <div class="fx-qsection" data-group="{{ group }}">
+      <div class="fx-qgroup"><span class="fx-label">{{ label }}</span></div>
+      {% for load in rows %}
+      <a class="fx-qitem {{ 'selected' if selected_load and selected_load.id == load.id else '' }}" href="/freight?load_id={{ load.id }}" data-search="{{ (load.origin_city ~ ' ' ~ load.origin_state ~ ' ' ~ load.destination_city ~ ' ' ~ load.destination_state ~ ' ' ~ load.broker_email ~ ' ' ~ (load.broker_company or ''))|lower }}">
+        <div class="fx-qrow">{{ status_pill(load) }}<span class="fx-qtime">{{ nice_date(load.pickup_date) }}</span></div>
+        <div class="fx-qrow"><div class="fx-qroute">{{ route(load) }}</div><div class="fx-qoffer num {{ '' if load.current_offer else 'fx-subtle' }}">{{ '${:,.0f}'.format(load.current_offer) if load.current_offer else 'No offer' }}</div></div>
+        <div class="fx-qmeta">{{ load.broker_company or load.broker_email }}{% if load.mission.name %} · {{ load.mission.name }}{% endif %}</div>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endfor %}
+    <div class="fx-qempty" id="fx-q-empty" hidden></div>
+    {% if not loads %}<div class="fx-qempty"><strong style="display:block;color:var(--fx-ink-h);margin-bottom:4px">No loads yet</strong>New inquiries and broker replies show up here.</div>{% endif %}
+    {% if mail_cursors %}
+    {% set cur = mail_cursors[0] %}
+    <div class="fx-qfoot {{ 'err' if cur.error else '' }}"><svg class="i sm"><use href="#i-{{ 'alert' if cur.error else 'clock' }}"/></svg><span>{% if cur.error %}Gmail check failed: {{ cur.error }}{% else %}Gmail checked {{ fx_nav.gmail.checked if fx_nav and fx_nav.gmail and fx_nav.gmail.checked else (cur.last_checked_at[:16]|replace('T', ' ') if cur.last_checked_at else 'not yet') }}{% endif %}</span></div>
+    {% endif %}
+  </section>
+
+  <!-- Thread -->
+  <section class="fx-thread" aria-label="Conversation">
+    {% if selected_load %}
+    {% set L = selected_load %}
+    {% set is_auto = not L.mission or not L.mission.permissions or L.mission.permissions.auto_counter or L.mission.permissions.auto_profile_reply or L.mission.permissions.auto_pass %}
+    <div class="fx-thead">
+      <h2>{{ L.origin_city }}{{ ', ' + L.origin_state if L.origin_state else '' }} → {{ L.destination_city }}{{ ', ' + L.destination_state if L.destination_state else '' }}</h2>
+      <div class="fx-row">
+        {{ status_pill(L) }}
+        <span class="fx-chip" title="Broker"><svg class="i sm"><use href="#i-mail"/></svg>{{ L.broker_email }}</span>
+        {% if L.mission.name %}<a class="fx-chip" href="/freight/missions?tab=missions&mission_id={{ L.mission_id }}"><svg class="i sm"><use href="#i-route"/></svg>{{ L.mission.name }}</a>{% endif %}
+        {% if L.mission_id %}<a class="fx-chip {{ 'auto' if is_auto else 'approve' }}" href="/freight/missions?tab=missions&mission_id={{ L.mission_id }}" title="Change how this mission negotiates"><svg class="i sm"><use href="#i-{{ 'bolt' if is_auto else 'hand' }}"/></svg>{{ 'Auto mode' if is_auto else 'Approve mode' }}</a>{% endif %}
+        <span style="flex:1"></span>
+        {% if L.thread.id %}
+        {% if L.status != 'booked' %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="booked"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-check"/></svg>Mark booked</button></form>{% endif %}
+        {% if L.status != 'closed' %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="closed"><button class="fx-btn sm" type="submit">Close</button></form>{% endif %}
+        {% if L.status in ['closed', 'mismatch', 'passed', 'accepted_pending_review', 'offer_review', 'protected_review', 'booked'] %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="negotiating"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-refresh"/></svg>Reopen negotiation</button></form>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="fx-tstream" id="fx-stream">
+      {% for alert in L.alerts %}
+      <div class="fx-alert">
+        <svg class="i"><use href="#i-alert"/></svg>
+        <div>
+          <strong>{{ alert.summary }}</strong>
+          {% if not L.loaded_miles and L.mission.floor_loaded_rpm %}<span class="fx-muted">This mission needs at least ${{ '%.2f'|format(L.mission.floor_loaded_rpm) }}/mi. Add loaded miles so the rate can be checked.</span>{% endif %}
+        </div>
+        <div class="fx-alert-actions">
+          {% if not L.loaded_miles and L.thread.id and L.status not in ['closed', 'booked'] %}<button type="button" class="fx-btn sm" onclick="fxOpenVerify()">Add miles</button>{% endif %}
+          <form action="/freight/alerts/{{ alert.id }}/resolve" method="post"><button class="fx-btn sm ghost" type="submit">Dismiss</button></form>
+        </div>
+      </div>
+      {% else %}
+      {% if L.status == 'needs_attention' %}
+      <div class="fx-alert">
+        <svg class="i"><use href="#i-alert"/></svg>
+        <div>
+          <strong>Review the broker's reply</strong>
+          <span class="fx-muted">{% if not L.loaded_miles and L.mission.floor_loaded_rpm %}Offer {{ '${:,.0f}'.format(L.current_offer) if L.current_offer else 'not given' }}. Your mission needs ${{ '%.2f'|format(L.mission.floor_loaded_rpm) }}/mi, so add loaded miles first.{% else %}Accept, counter, or write your own reply below.{% endif %}</span>
+        </div>
+        {% if not L.loaded_miles and L.thread.id %}<div class="fx-alert-actions"><button type="button" class="fx-btn sm" onclick="fxOpenVerify()">Add miles</button></div>{% endif %}
+      </div>
+      {% endif %}
+      {% endfor %}
+
+      {% for msg in messages %}
+      <article class="fx-msg {{ msg.direction }}">
+        <header>
+          <span class="fx-av">{{ 'B' if msg.direction == 'in' else 'Y' }}</span>
+          <span class="fx-who">{{ 'Broker' if msg.direction == 'in' else 'You' }}</span>
+          <span class="fx-addr">{{ msg.from_email }}</span>
+          <time>{{ msg.formatted_time or msg.created_at[:16] }}</time>
+        </header>
+        <div class="fx-body">{{ msg.clean_body or msg.body_text }}</div>
+        {% if msg.quoted_body %}
+        <details><summary>Show earlier messages</summary><div class="fx-quoted">{{ msg.quoted_body }}</div></details>
+        {% endif %}
+      </article>
+      {% else %}
+      <p class="fx-muted" style="text-align:center;padding:20px 0">No messages in this thread yet.</p>
+      {% endfor %}
+    </div>
+
+    {% if L.draft %}
+    {% set snap = L.draft.policy_snapshot or {} %}
+    <form action="/freight/drafts/{{ L.draft.id }}/send" method="post" class="fx-reply is-draft">
+      <div class="fx-reply-h">
+        <span class="fx-label">Suggested reply{% if L.draft.reason %} · {{ L.draft.reason|replace('_', ' ') }}{% endif %}</span>
+        <strong>{% if snap.counter %}Counter at {{ '${:,.0f}'.format(snap.counter) }}{% else %}Reply ready for your review{% endif %}</strong>
+      </div>
+      <textarea name="body_text" rows="5" required aria-label="Suggested reply text">{{ L.draft.body_text }}</textarea>
+      <div class="fx-reply-f">
+        <span class="fx-hint"><svg class="i sm"><use href="#i-hand"/></svg>Edit if you like. Nothing sends until you approve.</span>
+        <button class="fx-btn primary" type="submit"><svg class="i sm"><use href="#i-send"/></svg>Approve &amp; send</button>
+      </div>
+    </form>
+    {% elif L.status not in ['closed', 'booked'] and L.thread.id %}
+    <div class="fx-reply">
+      <div class="fx-reply-h"><strong>Reply to broker</strong></div>
+      <div class="fx-quick">
+        {% if L.current_offer %}
+        <button type="button" class="fx-btn sm" onclick="setQuickReply('accept', '{{ L.current_offer|int }}')"><svg class="i sm"><use href="#i-check"/></svg>Accept {{ '${:,.0f}'.format(L.current_offer) }}</button>
+        <button type="button" class="fx-btn sm" onclick="setQuickReply('counter', '{{ ((L.current_offer * 1.08) // 50 * 50)|int }}')">Counter {{ '${:,.0f}'.format((L.current_offer * 1.08) // 50 * 50) }}</button>
+        {% endif %}
+        <button type="button" class="fx-btn sm" onclick="setQuickReply('miles')">Ask for miles &amp; details</button>
+        <button type="button" class="fx-btn sm" onclick="setQuickReply('pass')">Pass</button>
+      </div>
+      <form action="/freight/threads/{{ L.thread.id }}/reply" method="post">
+        <textarea id="manual-reply-text" name="body_text" rows="3" required placeholder="Write a reply, or pick a quick reply above" aria-label="Reply text"></textarea>
+        <div class="fx-reply-f">
+          <span class="fx-hint"><svg class="i sm"><use href="#i-mail"/></svg>Sends from your connected Gmail</span>
+          <button class="fx-btn primary" type="submit"><svg class="i sm"><use href="#i-send"/></svg>Send reply</button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="fx-thread-empty">
+      <div class="fx-empty" style="max-width:380px;background:#fff">
+        <strong>{{ 'Pick a load to see the conversation' if loads else 'No loads yet' }}</strong>
+        {{ 'Broker replies and drafts to approve show up here.' if loads else 'Email a broker about a posted load. Their replies and the agent\'s drafts show up here.' }}
+        {% if not loads and setup_ok %}<div><button type="button" class="fx-btn primary" onclick="document.getElementById('fx-inquiry').showModal()"><svg class="i sm"><use href="#i-plus"/></svg>New inquiry</button></div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Context rail -->
+  <div class="fx-rail" aria-label="Load details">
+    {% if selected_load %}
+    {% set L = selected_load %}
+    {% set E = L.economics %}
+    {% set floor = L.mission.floor_total %}
+    {% set snap = (L.draft.policy_snapshot if L.draft else None) or {} %}
+    {% set ask = snap.counter or L.mission.target_total %}
+    <div>
+      <h3>Offer vs your mission</h3>
+      {% if E.rate %}
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><span class="fx-big num">{{ '${:,.0f}'.format(E.rate) }}</span>
+        {% if floor %}{% set diff = E.rate - floor %}<span class="fx-delta {{ 'good' if diff >= 0 else 'bad' }} num">{{ '${:,.0f}'.format(diff|abs) }} {{ 'over' if diff >= 0 else 'under' }} floor</span>{% endif %}
+      </div>
+      {% if floor %}
+      {% set lo = [E.rate, floor, ask or floor]|min * 0.92 %}
+      {% set hi = [E.rate, floor, ask or floor]|max * 1.05 %}
+      {% set span = (hi - lo) or 1 %}
+      <div class="fx-ladder" aria-hidden="true">
+        <div class="fx-track"><i style="width:{{ ((floor - lo) / span * 100)|round(1) }}%"></i></div>
+        <div class="fx-mk" style="left:{{ ((floor - lo) / span * 100)|round(1) }}%"><i></i>Floor {{ '${:,.0f}'.format(floor) }}</div>
+        <div class="fx-mk offer" style="left:{{ ((E.rate - lo) / span * 100)|round(1) }}%"><i></i>Offer</div>
+        {% if ask and ask != floor %}<div class="fx-mk ask" style="left:{{ ((ask - lo) / span * 100)|round(1) }}%"><i></i>{{ 'Ask' if snap.counter else 'Target' }} {{ '${:,.0f}'.format(ask) }}</div>{% endif %}
+      </div>
+      {% endif %}
+      {% else %}
+      <p class="fx-muted">No rate from the broker yet.{% if floor %} Your floor is {{ '${:,.0f}'.format(floor) }}.{% endif %}</p>
+      {% endif %}
+    </div>
+    <div>
+      <h3>Rate per mile</h3>
+      <div class="fx-mini"><span>Loaded RPM</span>{% if E.loaded_rpm %}<span class="num">${{ '%.2f'|format(E.loaded_rpm) }}/mi</span>{% else %}<span class="fx-miss">Needs miles</span>{% endif %}</div>
+      <div class="fx-mini"><span>All-in RPM</span>{% if E.all_in_rpm %}<span class="num">${{ '%.2f'|format(E.all_in_rpm) }}/mi</span>{% else %}<span class="fx-miss">{{ 'Needs miles' if not E.loaded_miles else 'Needs deadhead' }}</span>{% endif %}</div>
+      {% if L.mission.floor_loaded_rpm %}<div class="fx-mini"><span>Mission minimum</span><span class="num">${{ '%.2f'|format(L.mission.floor_loaded_rpm) }}/mi</span></div>{% endif %}
+    </div>
+    <div>
+      <h3>Load details {% if L.thread.id and L.status not in ['closed', 'booked'] %}<button type="button" class="fx-btn sm" onclick="fxOpenVerify()">Verify</button>{% endif %}</h3>
+      <div class="fx-facts">
+        {% set dest_open = L.destination_city == 'Open destinations' or not L.destination_city %}
+        <div class="k">Pickup</div><div class="v">{{ L.origin_city }}{{ ', ' + L.origin_state if L.origin_state else '' }}</div><div class="s"><svg class="i sm"><use href="#i-check"/></svg></div>
+        <div class="k">Delivery</div><div class="v {{ 'none' if dest_open else '' }}">{{ 'Not confirmed' if dest_open else L.destination_city ~ (', ' ~ L.destination_state if L.destination_state else '') }}</div><div class="s">{% if dest_open %}<span class="fx-miss">Missing</span>{% else %}<svg class="i sm"><use href="#i-check"/></svg>{% endif %}</div>
+        <div class="k">Pickup date</div><div class="v {{ '' if L.pickup_date else 'none' }} num">{{ nice_date(L.pickup_date) if L.pickup_date else 'Not given' }}</div><div class="s">{% if L.pickup_date %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-miss">Missing</span>{% endif %}</div>
+        <div class="k">Equipment</div><div class="v {{ '' if L.equipment_type else 'none' }}">{{ L.equipment_type or 'Not given' }}</div><div class="s">{% if L.equipment_type %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-miss">Missing</span>{% endif %}</div>
+        <div class="k">Loaded miles</div><div class="v {{ '' if L.loaded_miles else 'none' }} num">{{ '{:,}'.format(L.loaded_miles|int) if L.loaded_miles else 'Not given' }}</div><div class="s">{% if L.loaded_miles %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-miss">Missing</span>{% endif %}</div>
+        <div class="k">Weight</div><div class="v {{ '' if L.weight_lbs else 'none' }} num">{{ '{:,} lbs'.format(L.weight_lbs|int) if L.weight_lbs else 'Not given' }}</div><div class="s">{% if L.weight_lbs %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-miss">Missing</span>{% endif %}</div>
+        {% if L.profile.name %}<div class="k">Truck</div><div class="v">{{ L.profile.name }}</div><div class="s"></div>{% endif %}
+      </div>
+      {% if L.thread.id and L.status not in ['closed', 'booked'] %}
+      <details id="verify-details-box" style="margin-top:10px">
+        <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Edit load details</summary>
+        <form action="/freight/loads/{{ L.id }}/facts" method="post" class="fx-verify-form">
+          <label>Pickup city<input name="origin_city" value="{{ L.origin_city }}" required></label>
+          <label>State<input name="origin_state" maxlength="2" value="{{ L.origin_state }}" required></label>
+          <label>Delivery city<input name="destination_city" value="{{ '' if L.destination_city == 'Open destinations' else L.destination_city }}" required></label>
+          <label>State<input name="destination_state" maxlength="2" value="{{ L.destination_state }}" required></label>
+          <label>Equipment<input name="equipment_type" value="{{ L.equipment_type }}" required></label>
+          <label>Pickup date<input type="date" name="pickup_date" value="{{ L.pickup_date or '' }}"></label>
+          <label>Loaded miles<input type="number" id="loaded-miles-input" name="loaded_miles" min="1" step="1" value="{{ L.loaded_miles if L.loaded_miles is not none else '' }}"></label>
+          <label>Deadhead miles<input type="number" name="deadhead_miles" min="0" step="1" value="{{ L.deadhead_miles if L.deadhead_miles is not none else '' }}"></label>
+          <label class="wide">Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ L.weight_lbs if L.weight_lbs is not none else '' }}"></label>
+          <label class="check wide"><input type="checkbox" name="schedule_confirmed" value="yes" required> Broker's pickup and delivery times work for this truck</label>
+          <button type="submit" class="fx-btn primary wide" style="justify-content:center">Save load details</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    <div class="fx-note" style="margin-top:auto"><svg class="i sm"><use href="#i-shield"/></svg><span>Rate cons, driver info requests, and phone calls always wait for you, even in Auto mode.</span></div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- New inquiry -->
+<dialog class="fx-dialog" id="fx-inquiry" aria-labelledby="fx-inquiry-title">
+  <div class="fx-dialog-h">
+    <div><h2 id="fx-inquiry-title">New load inquiry</h2><p class="fx-muted">Email a broker about a posted load. Their reply shows up in Loads.</p></div>
+    <button type="button" class="fx-btn sm ghost" aria-label="Close" onclick="this.closest('dialog').close()"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <form action="/freight/loads/send" method="post" class="fx-dialog-body">
+    <label>Truck
       <select name="truck_profile_id" id="truck_select" required>
         <option value="">Choose truck</option>
         {% for p in profiles if p.active %}
@@ -537,310 +288,27 @@
       </select>
     </label>
     <label>Broker email
-      <input type="email" name="broker_email" placeholder="broker@company.com" autocomplete="off" required autofocus>
+      <input type="email" name="broker_email" placeholder="broker@company.com" autocomplete="off" required>
     </label>
-    <label>Subject line <span style="font-weight:400;color:var(--muted);font-size:11px">(optional)</span>
-      <input type="text" name="subject" placeholder="Template: {{ default_template.subject if default_template else 'Truck available — {{equipment}}' }}">
+    <label>Subject <span class="fx-opt">optional</span>
+      <input type="text" name="subject" placeholder="{{ default_template.subject if default_template else 'Truck available — {{equipment}}' }}">
+      <span class="fx-help">Leave blank to use your default template's subject.</span>
     </label>
-    <button class="approve-send-btn" style="height:38px;padding-inline:20px" {% if not missions or not profiles or not gmail_senders %}disabled{% endif %}>Send email</button>
+    <div class="fx-dialog-actions">
+      <button type="button" class="fx-btn ghost" onclick="this.closest('dialog').close()">Cancel</button>
+      <button class="fx-btn primary" type="submit" {% if not setup_ok %}disabled{% endif %}><svg class="i sm"><use href="#i-send"/></svg>Send inquiry</button>
+    </div>
   </form>
-</details>
+</dialog>
+{% endblock %}
 
+{% block scripts %}
 <script>
 document.getElementById('mission_select')?.addEventListener('change', function() {
   const truckId = this.options[this.selectedIndex]?.dataset?.truck;
   const truckSelect = document.getElementById('truck_select');
   if (truckId && truckSelect) truckSelect.value = truckId;
 });
-</script>
-
-<div class="freight-shell">
-  <!-- LEFT COLUMN: Active Conversation & Drafts -->
-  <section class="conversation-panel">
-    {% if selected_load %}
-      <div class="convo-header">
-        <div>
-          <span class="eyebrow">Active Thread</span>
-          <h2 class="convo-route">{{ selected_load.origin_city }}, {{ selected_load.origin_state }} → {{ selected_load.destination_city }}{{ ', ' + selected_load.destination_state if selected_load.destination_state else '' }}</h2>
-          <div class="convo-meta">
-            <span class="convo-meta-badge">✉ {{ selected_load.broker_email }}</span>
-            {% if selected_load.mission.name %}
-            <span class="convo-meta-badge">🎯 {{ selected_load.mission.name }}</span>
-            {% endif %}
-            {% if selected_load.equipment_type %}
-            <span class="convo-meta-badge">🚛 {{ selected_load.equipment_type }}</span>
-            {% endif %}
-            {% set is_load_auto = not selected_load.mission or not selected_load.mission.permissions or selected_load.mission.permissions.auto_counter or selected_load.mission.permissions.auto_profile_reply or selected_load.mission.permissions.auto_pass %}
-            <a href="/freight/missions?tab=missions{% if selected_load.mission_id %}&mission_id={{ selected_load.mission_id }}{% endif %}" class="convo-meta-badge" title="Click to change mission negotiation mode" style="text-decoration:none;{% if is_load_auto %}background:#e0f2fe;color:#0369a1;border-color:#bae6fd{% else %}background:#fef3c7;color:#92400e;border-color:#fde68a{% endif %};font-weight:700">
-              {{ '⚡ Auto Mode' if is_load_auto else '✋ Approve Mode' }}
-            </a>
-          </div>
-        </div>
-        <span class="status {{ selected_load.status }}">
-          {% if selected_load.status == 'waiting' %}waiting on broker{% elif selected_load.status == 'draft_ready' %}draft ready{% else %}{{ selected_load.status|replace('_', ' ') }}{% endif %}
-        </span>
-      </div>
-
-      {% if selected_load.thread.id %}
-      <div style="display:flex;gap:7px;flex-wrap:wrap;margin:8px 0 12px">
-        {% if selected_load.status != 'booked' %}<form action="/freight/threads/{{ selected_load.thread.id }}/state" method="post"><input type="hidden" name="state" value="booked"><button class="secondary" type="submit">Mark booked</button></form>{% endif %}
-        {% if selected_load.status != 'closed' %}<form action="/freight/threads/{{ selected_load.thread.id }}/state" method="post"><input type="hidden" name="state" value="closed"><button class="secondary" type="submit">Close load</button></form>{% endif %}
-        {% if selected_load.status in ['closed', 'mismatch', 'passed', 'accepted_pending_review', 'offer_review', 'protected_review', 'booked'] %}<form action="/freight/threads/{{ selected_load.thread.id }}/state" method="post"><input type="hidden" name="state" value="negotiating"><button class="secondary" type="submit">Reopen negotiation</button></form>{% endif %}
-      </div>
-      {% endif %}
-
-      <!-- Quick Metrics Bar -->
-      <div class="convo-metrics">
-        <div class="convo-metric">
-          <strong>{{ '$%.0f'|format(selected_load.economics.rate) if selected_load.economics.rate else '—' }}</strong>
-          <span>Current offer</span>
-        </div>
-        <div class="convo-metric">
-          <strong>{{ '%.2f'|format(selected_load.economics.loaded_rpm) if selected_load.economics.loaded_rpm else '—' }}</strong>
-          <span>Loaded RPM</span>
-        </div>
-        <div class="convo-metric">
-          <strong>{{ '%.2f'|format(selected_load.economics.all_in_rpm) if selected_load.economics.all_in_rpm else '—' }}</strong>
-          <span>All-in RPM</span>
-        </div>
-        <div class="convo-metric">
-          <strong>{{ selected_load.pickup_date or '—' }}</strong>
-          <span>Pickup Date</span>
-        </div>
-      </div>
-
-      {% if selected_load.thread.id and selected_load.status not in ['closed', 'booked'] %}
-      <details id="verify-details-box" style="margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:9px;background:#fff">
-        <summary style="cursor:pointer;font-weight:650">Verify broker load details</summary>
-        <p style="font-size:12px;color:var(--muted)">Confirm these after the broker replies. The first inquiry needs only a profile, mission, and email.</p>
-        <form action="/freight/loads/{{ selected_load.id }}/facts" method="post" class="form-grid">
-          <label>Pickup city<input name="origin_city" value="{{ selected_load.origin_city }}" required></label>
-          <label>Pickup state<input name="origin_state" maxlength="2" value="{{ selected_load.origin_state }}" required></label>
-          <label>Destination city<input name="destination_city" value="{{ '' if selected_load.destination_city == 'Open destinations' else selected_load.destination_city }}" required></label>
-          <label>Destination state<input name="destination_state" maxlength="2" value="{{ selected_load.destination_state }}" required></label>
-          <label>Broker equipment<input name="equipment_type" value="{{ selected_load.equipment_type }}" required></label>
-          <label>Pickup date<input type="date" name="pickup_date" value="{{ selected_load.pickup_date or '' }}"></label>
-          <label>Loaded miles<input type="number" id="loaded-miles-input" name="loaded_miles" min="1" step="1" value="{{ selected_load.loaded_miles if selected_load.loaded_miles is not none else '' }}"></label>
-          <label>Deadhead miles<input type="number" name="deadhead_miles" min="0" step="1" value="{{ selected_load.deadhead_miles if selected_load.deadhead_miles is not none else '' }}"></label>
-          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ selected_load.weight_lbs if selected_load.weight_lbs is not none else '' }}"></label>
-          <label class="check"><input type="checkbox" name="schedule_confirmed" value="yes" required> Broker pickup and delivery timing fits this truck</label>
-          <button type="submit">Verify load facts</button>
-        </form>
-      </details>
-      {% endif %}
-
-      <!-- Alerts & Attention Banner -->
-      {% if selected_load.alerts %}
-        {% for alert in selected_load.alerts %}
-        <div class="alert-card" style="margin: 8px 0 12px; border-left: 4px solid #f59e0b; background: #fffbeb; padding: 12px 16px; border-radius: 8px;">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-            <div>
-              <strong style="color:#b45309; font-size:13px;">⚠ Action Required: {{ alert.summary }}</strong>
-              {% if not selected_load.loaded_miles and selected_load.mission.floor_loaded_rpm %}
-              <p style="margin:4px 0 0; font-size:12px; color:#78350f;">
-                Your mission requires a minimum rate floor of <strong>${{ '%.2f'|format(selected_load.mission.floor_loaded_rpm) }}/mi</strong>. Confirm loaded miles above so the system can evaluate rate economics.
-              </p>
-              {% endif %}
-            </div>
-            <div style="display:flex; gap:6px; flex-shrink:0;">
-              {% if not selected_load.loaded_miles %}
-              <button type="button" class="button secondary" onclick="document.getElementById('verify-details-box').open = true; document.getElementById('loaded-miles-input').focus();" style="font-size:11.5px; padding:3px 9px;">
-                Confirm Miles
-              </button>
-              {% endif %}
-              <form action="/freight/alerts/{{ alert.id }}/resolve" method="post" style="margin:0">
-                <button class="secondary" style="font-size:11.5px; padding:3px 9px;">Dismiss</button>
-              </form>
-            </div>
-          </div>
-        </div>
-        {% endfor %}
-      {% elif selected_load.status == 'needs_attention' %}
-        <div class="alert-card" style="margin: 8px 0 12px; border-left: 4px solid #f59e0b; background: #fffbeb; padding: 12px 16px; border-radius: 8px;">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-            <div>
-              <strong style="color:#b45309; font-size:13px;">⚠ Attention Needed: Review broker offer & details</strong>
-              <p style="margin:4px 0 0; font-size:12px; color:#78350f;">
-                {% if not selected_load.loaded_miles and selected_load.mission.floor_loaded_rpm %}
-                Broker offered <strong>${{ '%.0f'|format(selected_load.current_offer) if selected_load.current_offer else '—' }}</strong>. Your mission has a <strong>${{ '%.2f'|format(selected_load.mission.floor_loaded_rpm) }}/mi</strong> rate floor, but loaded miles are unverified. Confirm miles or reply manually below.
-                {% else %}
-                Review the broker's response. You can accept, counter, or write a custom reply below.
-                {% endif %}
-              </p>
-            </div>
-            {% if not selected_load.loaded_miles %}
-            <button type="button" class="button secondary" onclick="document.getElementById('verify-details-box').open = true; document.getElementById('loaded-miles-input').focus();" style="font-size:11.5px; padding:3px 9px; flex-shrink:0;">
-              Confirm Miles
-            </button>
-            {% endif %}
-          </div>
-        </div>
-      {% endif %}
-
-      <!-- Messages Thread -->
-      <div class="thread-stream">
-        {% for msg in messages %}
-        <article class="msg-card {{ msg.direction }}">
-          <div class="msg-head">
-            <div class="msg-sender">
-              <span class="msg-avatar">{{ 'B' if msg.direction == 'in' else 'D' }}</span>
-              <div>
-                <span class="msg-author">{{ 'Broker' if msg.direction == 'in' else 'Dispatch (You)' }}</span>
-                <span class="msg-email-tag">&lt;{{ msg.from_email }}&gt;</span>
-              </div>
-            </div>
-            <time class="msg-time">{{ msg.formatted_time or msg.created_at[:16] }}</time>
-          </div>
-          <div class="msg-body">{{ msg.clean_body or msg.body_text }}</div>
-          {% if msg.quoted_body %}
-          <details class="quoted-box">
-            <summary>··· <span>show original thread history</span></summary>
-            <div class="quoted-content">{{ msg.quoted_body }}</div>
-          </details>
-          {% endif %}
-        </article>
-        {% else %}
-        <p style="color:var(--muted);font-style:italic">No messages recorded in this thread yet.</p>
-        {% endfor %}
-      </div>
-
-      <!-- Action Area: AI Draft or Manual Reply Composer -->
-      {% if selected_load.draft %}
-      <form action="/freight/drafts/{{ selected_load.draft.id }}/send" method="post" class="draft-card">
-        <div class="draft-header">
-          <div class="draft-title-wrap">
-            <span class="draft-badge">✦ Suggested reply</span>
-            <span class="draft-reason-pill">{{ selected_load.draft.reason|replace('_', ' ') }}</span>
-          </div>
-          <span style="font-size:11.5px;color:var(--muted)">Review and approve below</span>
-        </div>
-        <textarea name="body_text" rows="4" class="draft-textarea" required>{{ selected_load.draft.body_text }}</textarea>
-        <div class="draft-footer">
-          <div class="draft-policy-hint">
-            {% if selected_load.draft.policy_snapshot.offer %}Broker: ${{ '%.0f'|format(selected_load.draft.policy_snapshot.offer) }}{% endif %}
-            {% if selected_load.draft.policy_snapshot.floor %} · Floor: ${{ '%.0f'|format(selected_load.draft.policy_snapshot.floor) }}{% endif %}
-            {% if selected_load.draft.policy_snapshot.counter %} · Asking: ${{ '%.0f'|format(selected_load.draft.policy_snapshot.counter) }}{% endif %}
-          </div>
-          <button class="approve-send-btn">Approve & Send Email</button>
-        </div>
-      </form>
-      {% elif selected_load.status not in ['closed', 'booked'] %}
-      <!-- Quick Action & Manual Reply Composer -->
-      <div class="draft-card" style="margin-top:14px; border:1px solid #cbd5e1; border-radius:10px; background:#ffffff; box-shadow:0 1px 4px rgba(0,0,0,0.05); padding:16px;">
-        <div class="draft-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-          <div class="draft-title-wrap" style="display:flex; align-items:center; gap:8px;">
-            <span class="draft-badge" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-weight:700;">✉ Reply to Broker</span>
-            {% if selected_load.status == 'needs_attention' %}
-            <span class="draft-reason-pill" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a;">Action needed</span>
-            {% endif %}
-          </div>
-          <span style="font-size:11.5px; color:var(--muted)">Use 1-click prefill or write custom response</span>
-        </div>
-
-        <!-- 1-Click Quick Response Buttons -->
-        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
-          {% if selected_load.current_offer %}
-          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; background:#f0fdf4; border-color:#bbf7d0; color:#15803d; cursor:pointer;" onclick="setQuickReply('accept', '{{ selected_load.current_offer|int }}')">
-            ✓ Accept ${{ '%.0f'|format(selected_load.current_offer) }} & Ask Rate Con
-          </button>
-          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; background:#f0f9ff; border-color:#bae6fd; color:#0369a1; cursor:pointer;" onclick="setQuickReply('counter', '{{ ((selected_load.current_offer * 1.08) // 50 * 50)|int }}')">
-            ↗ Counter ${{ ((selected_load.current_offer * 1.08) // 50 * 50)|int }}
-          </button>
-          {% endif %}
-          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; cursor:pointer;" onclick="setQuickReply('miles')">
-            ❓ Ask for Miles & Details
-          </button>
-          <button type="button" class="button secondary" style="font-size:11.5px; padding:5px 11px; font-weight:600; color:#dc2626; cursor:pointer;" onclick="setQuickReply('pass')">
-            ✕ Pass on Rate
-          </button>
-        </div>
-
-        <form action="/freight/threads/{{ selected_load.thread.id }}/reply" method="post" class="stack" style="gap:10px;">
-          <textarea id="manual-reply-text" name="body_text" rows="3" class="draft-textarea" required placeholder="Type your reply to the broker here..." style="width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font-size:13px; font-family:inherit; box-sizing:border-box;"></textarea>
-          <div class="draft-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-            <span style="font-size:11.5px; color:var(--muted)">
-              Sends directly from your connected dispatch Gmail
-            </span>
-            <button class="approve-send-btn" style="background:#0284c7; border:none; color:#ffffff; padding:8px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer;">Send Reply to Broker →</button>
-          </div>
-        </form>
-      </div>
-      {% endif %}
-
-    {% else %}
-      <div class="empty" style="padding:48px 16px;text-align:center">
-        <p style="font-size:15px;color:var(--muted)">Select a load from the list on the right to view its conversation.</p>
-      </div>
-    {% endif %}
-  </section>
-
-  <!-- RIGHT COLUMN: Loads Queue & Table -->
-  <section class="loads-panel">
-    <div class="loads-panel-head">
-      <div>
-        <h3 class="loads-panel-title">Active Loads & Inquiries</h3>
-        <span style="font-size:11px;color:var(--muted)">{{ loads|length }} total tracked</span>
-      </div>
-      <form action="/freight/check-mail" method="post" style="margin:0">
-        <button class="secondary" style="font-size:11.5px;padding:5px 12px">⚡ Check Gmail now</button>
-      </form>
-    </div>
-
-    <div class="loads-table-wrap">
-      <table class="loads-table">
-        <thead>
-          <tr>
-            <th>Status</th>
-            <th>Route</th>
-            <th>Pickup</th>
-            <th>Offer</th>
-            <th>Broker</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for load in loads %}
-          <tr class="{% if selected_load and selected_load.id == load.id %}selected{% endif %}" onclick="location.href='/freight?load_id={{ load.id }}'">
-            <td>
-              <span class="status {{ load.status }}">
-                {% if load.status == 'waiting' %}waiting{% elif load.status == 'draft_ready' %}draft ready{% else %}{{ load.status|replace('_', ' ') }}{% endif %}
-              </span>
-              {% if load.alerts %}<span title="{{ load.alerts[0].summary }}" style="color:var(--danger);font-weight:bold"> ⚠</span>{% endif %}
-            </td>
-            <td>
-              <div class="route-cell">{{ load.origin_city }}, {{ load.origin_state }}</div>
-              <div class="route-dest">→ {{ load.destination_city }}{{ ', ' + load.destination_state if load.destination_state else '' }}</div>
-            </td>
-            <td>{{ load.pickup_date or '—' }}</td>
-            <td class="offer-cell">
-              {{ '$%.0f'|format(load.current_offer) if load.current_offer else '—' }}
-            </td>
-            <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis" title="{{ load.broker_email }}">
-              {{ load.broker_company or load.broker_email.split('@')[0] }}
-            </td>
-          </tr>
-          {% else %}
-          <tr>
-            <td colspan="5" class="empty" style="text-align:center;padding:24px">No load inquiries yet. Use "+ Send a new load inquiry" above.</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="loads-footer-health">
-      {% if mail_cursors %}
-      <span>Last Gmail check: {{ mail_cursors[0].last_checked_at[:19]|replace('T', ' ') if mail_cursors[0].last_checked_at else 'not checked' }}</span>
-      {% if mail_cursors[0].error %}
-      <span style="color:var(--danger)">Error: {{ mail_cursors[0].error }}</span>
-      {% endif %}
-      {% endif %}
-    </div>
-  </section>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
 function setQuickReply(type, amount) {
   const ta = document.getElementById('manual-reply-text');
   if (!ta) return;
@@ -855,5 +323,43 @@ function setQuickReply(type, amount) {
   }
   ta.focus();
 }
+function fxOpenVerify() {
+  const box = document.getElementById('verify-details-box');
+  if (!box) return;
+  box.open = true;
+  box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  document.getElementById('loaded-miles-input')?.focus();
+}
+(function () {
+  const tabs = document.querySelectorAll('#fx-load-tabs [data-filter]');
+  const sections = document.querySelectorAll('.fx-qsection');
+  const empty = document.getElementById('fx-q-empty');
+  const search = document.getElementById('fx-load-search');
+  const selected = document.querySelector('.fx-qitem.selected')?.closest('.fx-qsection')?.dataset.group;
+  const counts = { needs: {{ needs|length }}, waiting: {{ waiting|length }}, done: {{ done|length }} };
+  const labels = { needs: 'Nothing needs you right now.', waiting: 'No loads waiting on a broker.', done: 'Nothing booked or closed yet.', all: 'No loads match.' };
+  let current = localStorage.getItem('fx-load-filter') || (counts.needs ? 'needs' : 'all');
+  if (current !== 'all' && selected && selected !== current) current = selected;
+  function apply() {
+    const q = (search?.value || '').trim().toLowerCase();
+    let shown = 0;
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.filter === current));
+    sections.forEach(s => {
+      const groupOn = current === 'all' || s.dataset.group === current;
+      let any = false;
+      s.querySelectorAll('.fx-qitem').forEach(item => {
+        const on = groupOn && (!q || item.dataset.search.includes(q));
+        item.hidden = !on; if (on) { any = true; shown++; }
+      });
+      s.hidden = !any;
+    });
+    if (empty) { empty.hidden = shown > 0 || !sections.length; empty.textContent = q ? labels.all : labels[current]; }
+  }
+  tabs.forEach(t => t.addEventListener('click', () => { current = t.dataset.filter; try { localStorage.setItem('fx-load-filter', current); } catch (e) {} apply(); }));
+  search?.addEventListener('input', apply);
+  document.addEventListener('keydown', e => { if (e.key === '/' && search && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); search.focus(); } });
+  apply();
+  const stream = document.getElementById('fx-stream'); if (stream) stream.scrollTop = stream.scrollHeight;
+})();
 </script>
 {% endblock %}
