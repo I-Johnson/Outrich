@@ -3,7 +3,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=20260924-signup">{% block head %}{% endblock %}</head>
+<link rel="stylesheet" href="/static/style.css?v=20260924-gmail">{% block head %}{% endblock %}</head>
 <body>{% set auth_page = request.url.path in ('/login', '/signup', '/admin/login') %}{% set signed_in = request.session.get('uid') or request.session.get('admin') %}{% if signed_in and not auth_page %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
 {% if request.session.get('admin') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
 {% if workspace == 'freight' %}
@@ -12,5 +12,5 @@
 <a href="/" class="{{'active' if request.url.path == '/' else ''}}">Overview</a><a href="/leads" class="{{'active' if request.url.path.startswith('/leads') else ''}}">Leads</a><a href="/scraper" class="{{'active' if request.url.path.startswith('/scraper') else ''}}">Discovery</a><a href="/templates" class="{{'active' if request.url.path.startswith('/templates') else ''}}">Templates</a><a href="/campaigns" class="{{'active' if request.url.path.startswith('/campaigns') else ''}}">Campaigns</a><a href="/pingram-inbox" class="{{'active' if request.url.path.startswith('/pingram-inbox') else ''}}">Pingram Inbox</a><a href="/settings" class="{{'active' if request.url.path.startswith('/settings') else ''}}">Settings</a>
 {% endif %}</nav>
 <div class="aside-foot"><span class="dot {{'live' if not env.DRY_RUN else ''}}"></span>{{'Live sending' if not env.DRY_RUN else 'Dry run'}}<form action="/logout" method="post"><button class="link">Sign out</button></form></div></aside>{% endif %}
-<main class="{{'auth' if not signed_in or auth_page else ''}}">{% if request.query_params.get('notice') %}<div class="notice">{{request.query_params.get('notice')}}</div>{% endif %}{% block content %}{% endblock %}</main>
+<main class="{{'auth' if not signed_in or auth_page else ''}}">{% if request.query_params.get('notice') %}<div class="notice">{{request.query_params.get('notice')}}</div>{% endif %}{% if request.query_params.get('error') and not auth_page %}<div class="error">{{request.query_params.get('error')}}</div>{% endif %}{% block content %}{% endblock %}</main>
 <script src="/static/field-help.js?v=20260923"></script><script>document.querySelectorAll('[data-confirm]').forEach(x=>x.addEventListener('click',e=>{if(!confirm(x.dataset.confirm))e.preventDefault()}));</script>{% block scripts %}{% endblock %}</body></html>

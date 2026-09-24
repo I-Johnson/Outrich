@@ -399,7 +399,8 @@ class FreightConversationTests(unittest.TestCase):
     def test_freight_sender_add_workflow(self):
         from fastapi.testclient import TestClient
         from app import main
-        with patch.object(main, "store", self.raw):
+        from app.core.gmail_check import CheckResult
+        with patch.object(main, "store", self.raw), patch.object(main, "check_gmail_login", return_value=CheckResult(True, "Connected.")):
             client = TestClient(main.app)
             client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
 
@@ -428,7 +429,7 @@ class FreightConversationTests(unittest.TestCase):
                 "auto_select": "on",
             }, follow_redirects=False)
             self.assertEqual(res_add.status_code, 303)
-            self.assertIn("notice=Email+account+connected+and+selected+for+Freight", res_add.headers["location"])
+            self.assertIn("Connection%20tested%20and%20saved", res_add.headers["location"])
 
             # Verify sender saved in store
             senders = [s for s in self.storage.list("gmail_senders") if s.get("email") == "dispatch@myfleet.com"]

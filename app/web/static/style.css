@@ -1189,3 +1189,13 @@ details code {
   .summary { grid-template-columns: 1fr; }
   .summary div { border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* Google app password guide */
+.app-password-guide { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 12px 14px; font-size: 12.5px; color: #0c4a6e; line-height: 1.5; }
+.app-password-guide ol { margin: 8px 0 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 8px; }
+.app-password-guide li { counter-increment: step; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding-left: 26px; position: relative; }
+.app-password-guide li::before { content: counter(step); position: absolute; left: 0; top: 1px; width: 18px; height: 18px; border-radius: 50%; background: #0284c7; color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+.app-password-guide a { color: #0284c7; font-weight: 650; text-decoration: underline; white-space: nowrap; }
+.app-password-guide details { margin-top: 10px; }
+.app-password-guide summary { cursor: pointer; font-weight: 650; }
+.app-password-guide details p { margin: 6px 0 0; }
