@@ -523,6 +523,20 @@
   </section>
 </div>
 
+<!-- ACCOUNT -->
+<section class="panel account-panel" style="margin-top:24px">
+  <div class="panel-head">
+    <div>
+      <h2 style="font-size:16px;margin:0 0 4px">Account</h2>
+      <p style="margin:0;color:var(--muted)">Signed in as {{ request.session.get('email') or request.session.get('admin') or 'your account' }}.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      {% if request.session.get('admin') %}<a class="button ghost" href="/">Open admin workspace</a>{% else %}<a class="button ghost" href="/admin/login">Admin login</a>{% endif %}
+      <form action="/logout" method="post" style="margin:0"><button class="button secondary">Sign out</button></form>
+    </div>
+  </div>
+</section>
+
 <!-- CONNECT GMAIL MODAL DIALOG -->
 <dialog id="add-freight-email-dialog" style="max-width:520px;width:92%;padding:22px">
   <form action="/freight/senders/add" method="post" class="stack" style="gap:14px">
