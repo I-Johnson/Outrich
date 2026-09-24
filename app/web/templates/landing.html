@@ -1,0 +1,283 @@
+{% raw %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Outrich - agents that follow your rules</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Outrich finds verified customers for your business and works every lead by the rules you set. Email is live, phone and SMS are in beta.">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+ --fog:#dce1db;--paper:#eef1ec;--card:#f8f9f6;--ink:#15201c;--ink2:#48544e;--ink3:#77827b;
+ --line:#c6cec5;--pine:#1d4a3e;--pine2:#163a31;--pineInk:#e7efe9;--pineDim:#9fb8ad;
+ --leaf:#2d8a58;--amber:#b87a0c;--amberBg:#f4e6c6;--leafBg:#d6eadb;--soonBg:#e3e6e2;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--fog);color:var(--ink);font:400 17px/1.55 'Instrument Sans',sans-serif;-webkit-font-smoothing:antialiased}
+h1,h2,h3,.disp{font-family:'Bricolage Grotesque',sans-serif;letter-spacing:-.025em;font-weight:600}
+.wrap{max-width:1200px;margin:0 auto;padding:0 40px}
+a{color:inherit;text-decoration:none}
+.btn{display:inline-block;background:var(--pine);color:#fff;padding:14px 22px;border-radius:10px;font-weight:600;font-size:16px}
+.btn.ghost{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--ink)}
+.btn:focus-visible{outline:3px solid var(--leaf);outline-offset:3px}
+/* nav */
+nav{display:flex;align-items:center;justify-content:space-between;padding:26px 0}
+.logo{display:flex;align-items:center;gap:10px;font-family:'Bricolage Grotesque';font-weight:700;font-size:23px;letter-spacing:-.03em}
+.logo i{width:26px;height:26px;border-radius:50%;border:5px solid var(--pine);position:relative;display:block}
+.logo i:after{content:"";position:absolute;right:-9px;bottom:-9px;width:10px;height:5px;background:var(--pine);transform:rotate(45deg);border-radius:3px}
+.links{display:flex;gap:34px;font-size:15px;color:var(--ink2)}
+.navr{display:flex;gap:22px;align-items:center;font-size:15px}
+.navr .btn{padding:10px 18px;font-size:15px}
+/* hero */
+.hero{display:grid;grid-template-columns:1.05fr .95fr;gap:64px;padding:64px 0 96px;align-items:center}
+.hero h1{font-size:64px;line-height:1.02;letter-spacing:-.035em;max-width:620px}
+.hero p.lead{font-size:20px;color:var(--ink2);margin:26px 0 34px;max-width:540px}
+.hero .ctas{display:flex;gap:14px}
+.hero .note{margin-top:22px;font-size:14px;color:var(--ink3)}
+.agent{background:var(--pine);color:var(--pineInk);border-radius:22px;padding:26px;box-shadow:0 30px 60px -30px rgba(21,32,28,.55)}
+.agent .top{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--pineDim)}
+.agent .top b{color:#fff;font-weight:600;font-size:15px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#5fd08f;margin-right:7px;vertical-align:1px}
+.rules{margin:18px 0 20px;background:var(--pine2);border-radius:14px;padding:16px 18px}
+.rules h4{font:600 13px 'Instrument Sans';color:var(--pineDim);margin-bottom:10px}
+.rules li{list-style:none;font-size:15px;padding:6px 0;border-top:1px solid rgba(255,255,255,.07);display:flex;gap:10px}
+.rules li:first-of-type{border-top:0}
+.rules li span{color:var(--pineDim);min-width:18px}
+.msg{background:#fff;color:var(--ink);border-radius:14px;padding:14px 16px;font-size:15px;max-width:88%}
+.msg small{display:block;color:var(--ink3);font-size:12.5px;margin-bottom:4px}
+.msg.in{margin-left:auto;background:#dfe9e3}
+.thread{display:flex;flex-direction:column;gap:10px}
+.applied{font-size:12.5px;color:var(--pineDim);padding-left:4px}
+.applied b{color:#bfe3cc;font-weight:600}
+.ready{margin-top:16px;display:flex;justify-content:space-between;align-items:center;background:#f3d98a;color:#3a2b05;border-radius:12px;padding:12px 16px;font-weight:600;font-size:15px}
+.ready em{font-style:normal;background:var(--ink);color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
+/* sections */
+section{padding:104px 0}
+.sec-head{max-width:640px;margin-bottom:52px}
+.sec-head h2{font-size:48px;line-height:1.06}
+.sec-head p{font-size:19px;color:var(--ink2);margin-top:16px}
+.paper{background:var(--paper)}
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(4,1fr);border-top:2px solid var(--ink)}
+.step{padding:26px 28px 0 0}
+.step .n{font-family:'Bricolage Grotesque';font-weight:600;font-size:15px;color:var(--ink3)}
+.step h3{font-size:24px;margin:10px 0 8px;line-height:1.15}
+.step p{color:var(--ink2);font-size:16px}
+.step.you h3{color:var(--pine)}
+/* rules section */
+.rulesgrid{display:grid;grid-template-columns:.9fr 1.1fr;gap:72px;align-items:start}
+.rulebook{background:var(--card);border-radius:18px;border:1px solid var(--line)}
+.rulebook .row{display:grid;grid-template-columns:150px 1fr;gap:18px;padding:18px 24px;border-top:1px solid var(--line);font-size:16px}
+.rulebook .row:first-child{border-top:0}
+.rulebook .row .who{color:var(--ink3);font-size:14px;padding-top:2px}
+.promises{margin-top:36px;display:grid;gap:22px}
+.promises div{padding-left:18px;border-left:3px solid var(--pine)}
+.promises b{display:block;font-size:17px}
+.promises span{color:var(--ink2);font-size:16px}
+/* verified */
+.ver{display:grid;grid-template-columns:1fr 1fr;gap:72px;align-items:center}
+.list{background:var(--card);border-radius:18px;border:1px solid var(--line);overflow:hidden}
+.list .hd{padding:16px 22px;font-size:14px;color:var(--ink3);display:flex;justify-content:space-between;border-bottom:1px solid var(--line)}
+.ld{display:grid;grid-template-columns:40px 1fr auto;gap:14px;align-items:center;padding:15px 22px;border-bottom:1px solid var(--line)}
+.ld:last-child{border-bottom:0}
+.av{width:40px;height:40px;border-radius:10px;background:var(--fog);display:grid;place-items:center;font-weight:600;font-size:14px;color:var(--ink2)}
+.ld b{font-weight:600;font-size:16px;display:block}
+.ld small{color:var(--ink3);font-size:13.5px}
+.tag{font-size:13px;font-weight:600;padding:5px 10px;border-radius:999px;background:var(--leafBg);color:#1d6a41;white-space:nowrap}
+.ld.out{background:repeating-linear-gradient(135deg,transparent 0 10px,rgba(0,0,0,.025) 10px 20px)}
+.ld.out b{text-decoration:line-through;color:var(--ink3)}
+.ld.out .tag{background:#eadcd8;color:#8a3b2b}
+.verpoints{margin-top:30px;display:grid;gap:14px;font-size:17px}
+.verpoints div{display:flex;gap:12px}
+.verpoints svg{flex:none;margin-top:4px}
+/* who */
+.who h2{font-size:48px;max-width:760px;line-height:1.06}
+.cloud{margin-top:44px;font-family:'Bricolage Grotesque';font-weight:500;font-size:40px;line-height:1.35;letter-spacing:-.02em;color:var(--ink3);max-width:1100px}
+.cloud b{color:var(--ink);font-weight:600}
+.cloud .you{color:var(--pine);font-weight:600;border-bottom:3px solid var(--pine)}
+.who .sub{margin-top:30px;font-size:18px;color:var(--ink2);max-width:640px}
+/* channels */
+.chan{display:grid;grid-template-columns:1.25fr 1fr;gap:20px}
+.chan .big{background:var(--pine);color:var(--pineInk);border-radius:20px;padding:34px;display:flex;flex-direction:column;justify-content:space-between;min-height:340px}
+.chan .big h3{font-size:40px;color:#fff}
+.chan .big p{color:var(--pineDim);font-size:17px;max-width:420px;margin-top:10px}
+.pill{display:inline-block;font:600 13px 'Instrument Sans';padding:5px 11px;border-radius:999px}
+.live{background:#5fd08f;color:#0e3320}
+.beta{background:var(--amberBg);color:#6f4a05}
+.soon{background:var(--soonBg);color:var(--ink2)}
+.inbox{margin-top:26px;display:flex;gap:10px;font-size:14px;color:var(--pineDim)}
+.inbox span{border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:6px 12px}
+.others{display:flex;flex-direction:column;border-radius:20px;background:var(--card);border:1px solid var(--line)}
+.others .c{display:flex;justify-content:space-between;align-items:center;padding:26px 28px;border-top:1px solid var(--line)}
+.others .c:first-child{border-top:0}
+.others h4{font-family:'Bricolage Grotesque';font-weight:600;font-size:24px;letter-spacing:-.02em}
+.others p{color:var(--ink2);font-size:15px}
+/* cta */
+.cta{background:var(--pine);color:#fff;border-radius:28px;padding:72px 64px;display:grid;grid-template-columns:1.3fr .7fr;gap:40px;align-items:end}
+.cta h2{font-size:56px;line-height:1.02;color:#fff}
+.cta p{color:var(--pineDim);font-size:19px;margin-top:18px;max-width:520px}
+.cta .btn{background:#f3d98a;color:#2b2004;font-size:17px;padding:16px 26px}
+.cta .r{text-align:right}
+.cta .r small{display:block;margin-top:14px;color:var(--pineDim);font-size:14px}
+footer{display:flex;justify-content:space-between;padding:40px 0 56px;font-size:14px;color:var(--ink3)}
+footer .fl{display:flex;gap:28px}
+
+.trio{margin-top:40px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.trio div{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 18px}
+.trio .ico{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;background:var(--pine);color:#fff;margin-bottom:14px}
+.trio .ico svg{width:22px;height:22px}
+.trio b{font-size:16px;line-height:1.3;display:block}
+.board{background:var(--pine);border-radius:22px;padding:34px 30px 30px;box-shadow:0 30px 60px -30px rgba(21,32,28,.5)}
+.chips{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+.chip{display:inline-flex;align-items:center;gap:9px;background:#f8f9f6;color:var(--ink);border-radius:999px;padding:10px 16px 10px 12px;font-size:15px;font-weight:500}
+.chip svg{color:var(--pine)}
+.chip.c2,.chip.c5{transform:translateY(6px)}
+.chip.c6{background:#f3d98a;color:#2b2004}.chip.c6 svg{color:#2b2004}
+.lines{display:block;width:100%;height:90px;margin:4px 0}
+.agentpill{margin:0 auto;display:flex;align-items:center;gap:14px;background:var(--pine2);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:16px 22px;width:max-content;color:var(--pineInk)}
+.agentpill b{color:#fff;font-size:17px;display:block}
+.agentpill small{color:var(--pineDim);font-size:14px}
+.av2{width:42px;height:42px;border-radius:50%;background:#5fd08f;color:#0e3320;display:grid;place-items:center}
+.funnel{margin-top:34px;display:grid;gap:12px;max-width:440px}
+.fb{display:grid;grid-template-columns:1fr 44px 70px;align-items:center;gap:12px;position:relative}
+.fb .fl{height:14px;border-radius:7px;background:var(--line);display:block}
+.fb .fl.ok{background:var(--leaf)}.fb .fl.no{background:#c9887a}
+.fb b{font-family:'Bricolage Grotesque';font-size:22px;text-align:right}
+.fb small{color:var(--ink2);font-size:15px}
+@media (max-width:900px){.hero,.rulesgrid,.ver,.chan,.cta{grid-template-columns:1fr}.steps{grid-template-columns:1fr 1fr}.hero h1{font-size:46px}.links{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head>
+<body>
+<div id="s1">
+<div class="wrap">
+<nav>
+ <a class="logo" href="/"><i></i>Outrich</a>
+ <div class="links"><a href="#how">How it works</a><a href="#rules">Rules</a><a href="#verified">Verified leads</a><a href="#channels">Channels</a></div>
+ <div class="navr"><a href="/login">Log in</a><a class="btn" href="/signup">Get started</a></div>
+</nav>
+<div class="hero">
+ <div>
+  <h1>Set the rules. Our agents find customers and work every lead to a close.</h1>
+  <p class="lead">Tell Outrich who you sell to and how you like to do business. It finds real people and businesses, reaches out for you, follows up, and brings you the ones ready to say yes.</p>
+  <div class="ctas"><a class="btn" href="/signup">Get started</a><a class="btn ghost" href="#how">See how it works</a></div>
+  <p class="note">Works with the email you already use. No new inbox to set up.</p>
+ </div>
+ <div class="agent" aria-label="Example of an Outrich agent at work">
+  <div class="top"><b>Agent for Brightline Cleaning</b><span><span class="dot"></span>Working</span></div>
+  <div class="rules">
+   <h4>Your rules</h4>
+   <ul>
+    <li><span>1</span>Offices within 25 miles of Sacramento</li>
+    <li><span>2</span>Offer a free walkthrough first</li>
+    <li><span>3</span>Never quote below $0.12 per sq ft</li>
+    <li><span>4</span>Hand it to me when they ask for a contract</li>
+   </ul>
+  </div>
+  <div class="thread">
+   <div class="msg in"><small>Maria, office manager at Ridgeway Dental</small>Walkthrough went well. Can you do $0.10 a foot if we sign for a year?</div>
+   <div class="applied">Following rule <b>3</b></div>
+   <div class="msg"><small>Your agent</small>We can do $0.12 for a one-year plan, and that includes the windows. Want me to send the agreement?</div>
+   <div class="msg in"><small>Maria</small>Yes, send it over.</div>
+  </div>
+  <div class="ready">Ridgeway Dental is ready to sign <em>Review deal</em></div>
+ </div>
+</div>
+</div>
+</div>
+
+<div id="s2">
+<section id="how" class="paper">
+<div class="wrap">
+ <div class="sec-head"><h2>You decide how it works. The agents do the legwork.</h2><p>No lists to buy, no spreadsheets, no copy-pasting emails at midnight.</p></div>
+ <div class="steps">
+  <div class="step"><div class="n">1</div><h3>Describe your customer</h3><p>"Dental offices near Sacramento." "Produce shippers in Fresno." Plain words are enough.</p></div>
+  <div class="step"><div class="n">2</div><h3>Set your rules</h3><p>Where to look, what to offer, your lowest price, and when to hand things back to you.</p></div>
+  <div class="step"><div class="n">3</div><h3>Agents reach out and follow up</h3><p>Personal messages from your own inbox, with follow-ups until they get an answer.</p></div>
+  <div class="step you"><div class="n">4</div><h3>You close the deal</h3><p>When someone is ready, you get a heads-up with the whole conversation in one place.</p></div>
+ </div>
+</div>
+</section>
+
+<section id="rules">
+<div class="wrap rulesgrid">
+ <div>
+  <div class="sec-head" style="margin-bottom:0"><h2>Agents that play by your rules</h2><p>Write them like you'd brief a new hire.</p></div>
+  <div class="trio">
+   <div><span class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg></span><b>Never breaks a rule</b></div>
+   <div><span class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></span><b>Every message visible</b></div>
+   <div><span class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V5a1.5 1.5 0 013 0v5M11 10V4a1.5 1.5 0 013 0v6M14 10V5.5a1.5 1.5 0 013 0V14c0 4-3 7-6.5 7S5 18.5 4 16l-1.5-3.5a1.5 1.5 0 012.6-1.4L8 14"/></svg></span><b>Big calls come to you</b></div>
+  </div>
+ </div>
+ <div class="board" aria-label="Example rules from different businesses feeding into an agent">
+  <div class="chips">
+   <span class="chip c1"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h11v9H3zM14 9h4l3 3v3h-7"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>Never below $2.40 a mile</span>
+   <span class="chip c2"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V3h9l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>5 to 50 employees only</span>
+   <span class="chip c3"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Inspections Tue to Thu</span>
+   <span class="chip c4"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0114-5l2 2M20 12a8 8 0 01-14 5l-2-2M20 4v5h-5M4 20v-5h5"/></svg>Follow up twice, then stop</span>
+   <span class="chip c5"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Within 25 miles</span>
+   <span class="chip c6"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13h6M9 17h4"/></svg>Contracts go to me</span>
+  </div>
+  <svg class="lines" viewBox="0 0 560 120" preserveAspectRatio="none"><path d="M60 0 C60 70 280 50 280 120M200 0 C200 60 280 60 280 120M360 0 C360 60 280 60 280 120M500 0 C500 70 280 50 280 120" stroke="#9fb8ad" stroke-width="1.5" fill="none" stroke-dasharray="4 5"/></svg>
+  <div class="agentpill"><span class="av2"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg></span><div><b>Your agent</b><small>Checks every message against your rules</small></div></div>
+ </div>
+</div>
+</section>
+</div>
+
+<div id="s3">
+<section id="verified" class="paper">
+<div class="wrap ver">
+ <div>
+  <div class="sec-head" style="margin-bottom:0"><h2>Every lead is verified before it reaches you</h2><p>Real, open, right person. Or it's left out.</p></div>
+  <div class="funnel">
+   <div class="fb"><span class="fl" style="width:100%"></span><b>48</b><small>found</small></div>
+   <div class="fb"><span class="fl ok" style="width:85%"></span><b>41</b><small>verified</small></div>
+   <div class="fb"><span class="fl no" style="width:15%"></span><b>7</b><small>left out</small></div>
+  </div>
+ </div>
+ <div class="list" aria-label="Example lead list">
+  <div class="hd"><span>Dental offices near Sacramento</span></div>
+  <div class="ld"><div class="av">RD</div><div><b>Ridgeway Dental</b><small>Maria Lopez, office manager</small></div><span class="tag">Verified</span></div>
+  <div class="ld"><div class="av">SF</div><div><b>Sunfield Family Dentistry</b><small>Dr. Alan Cho, owner</small></div><span class="tag">Verified</span></div>
+  <div class="ld out"><div class="av">OS</div><div><b>Oakpark Smiles</b><small>Permanently closed in March</small></div><span class="tag">Left out</span></div>
+  <div class="ld"><div class="av">RC</div><div><b>River City Orthodontics</b><small>Priya Nair, practice manager</small></div><span class="tag">Verified</span></div>
+  <div class="ld out"><div class="av">MD</div><div><b>Midtown Dental Group</b><small>Contact no longer works there</small></div><span class="tag">Left out</span></div>
+ </div>
+</div>
+</section>
+
+<section class="who">
+<div class="wrap">
+ <h2>For anyone who sells to someone</h2>
+ <p class="cloud"><b>Trucking</b>, insurance, <b>real estate</b>, roofing, cleaning, <b>marketing agencies</b>, solar, staffing, landscaping, <b>IT services</b>, accounting, wholesale, HVAC, consulting, event venues, <b>home services</b>, and <span class="you">yours</span>.</p>
+ <p class="sub">If you can describe your customer in a sentence, Outrich can go find them.</p>
+</div>
+</section>
+
+<section id="channels" class="paper">
+<div class="wrap">
+ <div class="sec-head"><h2>Reach people where they answer</h2></div>
+ <div class="chan">
+  <div class="big">
+   <div><span class="pill live">Live</span><h3 style="margin-top:18px">Email</h3><p>Connect your inbox and messages go out from you, in your name, with replies landing right back in your inbox.</p></div>
+   <div class="inbox"><span>Gmail</span><span>Google Workspace</span></div>
+  </div>
+  <div class="others">
+   <div class="c"><div><h4>Phone calls</h4><p>Agents call, qualify, and book time with you.</p></div><span class="pill beta">Beta</span></div>
+   <div class="c"><div><h4>Text messages</h4><p>Quick follow-ups by SMS.</p></div><span class="pill beta">Beta</span></div>
+   <div class="c"><div><h4>LinkedIn</h4><p>Connect and message decision makers.</p></div><span class="pill soon">Coming soon</span></div>
+  </div>
+ </div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+ <div class="cta">
+  <div><h2>Your next customer is already out there.</h2><p>Tell Outrich who they are. Your agents will take it from there.</p></div>
+  <div class="r"><a class="btn" href="/signup">Get started</a></div>
+ </div>
+ <footer><span class="logo" style="font-size:18px"><i style="width:20px;height:20px;border-width:4px"></i>Outrich</span><div class="fl"><a href="/login">Log in</a><a href="/signup">Sign up</a></div></footer>
+</div>
+</section>
+</div>
+</body></html>
+{% endraw %}

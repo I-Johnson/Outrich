@@ -118,12 +118,29 @@ class SignupLoginTests(unittest.TestCase):
         self.assertIn("Too+many", response.headers["location"])
 
     def test_signed_out_requests_redirect_to_login(self):
-        for path in ("/", "/freight", "/freight/settings", "/leads"):
+        for path in ("/freight", "/freight/settings", "/leads"):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertTrue(response.headers["location"].startswith("/login"))
-        for path in ("/login", "/signup", "/admin/login", "/health"):
+        for path in ("/", "/login", "/signup", "/admin/login", "/health"):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 200, path)
+
+    def test_landing_page_for_visitors_only(self):
+        page = self.client.get("/")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Set the rules.", page.text)
+        self.assertIn('href="/signup"', page.text)
+        self.assertIn('href="/login"', page.text)
+        self.assertNotIn('href="#"', page.text)
+        self.signup()
+        response = self.client.get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/freight")
+        self.client.post("/logout")
+        self.client.post("/login", data={"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD})
+        admin = self.client.get("/")
+        self.assertEqual(admin.status_code, 200)
+        self.assertNotIn("Set the rules.", admin.text)
 
 
 if __name__ == "__main__":
