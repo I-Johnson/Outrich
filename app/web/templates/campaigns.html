@@ -49,7 +49,7 @@
         <div><span class="eyebrow">New outreach</span><h2>{% if selected_batch %}Campaign for {{selected_batch.filename}}{% else %}Create campaign{% endif %}</h2><p>Choose the audience, content, and Gmail identities.</p></div>
       </div>
 
-      <form method="post" action="/campaigns/save" class="campaign-builder-form">
+      <form method="post" action="/campaigns/save" class="campaign-builder-form" id="campaign-builder-form">
         <label class="campaign-name-field">Campaign name
           <input name="name" value="{% if selected_batch %}Campaign - {{selected_batch.filename}}{% else %}New Outreach Campaign{% endif %}" required>
         </label>
@@ -106,7 +106,7 @@
           <div class="builder-section-body">
             <div class="form-grid">
               <label>Provider
-                <select name="provider" id="provider_select">
+                <select name="provider" id="provider_select" required>
                   <option value="gmail" {% if app_settings.email_provider == 'gmail' %}selected{% endif %}>Gmail</option>
                   <option value="pingram" {% if app_settings.email_provider == 'pingram' %}selected{% endif %}>Pingram</option>
                 </select>
@@ -168,5 +168,21 @@
     providerSelect.addEventListener('change', updateProviderUI);
     updateProviderUI();
   }
+
+  document.getElementById('campaign-builder-form')?.addEventListener('submit', function(event) {
+    const groups = [
+      [[...this.querySelectorAll('input[name="template_ids"]')], 'Select at least one email template.'],
+      [[...this.querySelectorAll('input[name="gmail_accounts"]')].filter(input => input.closest('.sender-choice')?.style.display !== 'none'), 'Select at least one sender identity.']
+    ];
+    for (const [items, message] of groups) {
+      items.forEach(item => item.setCustomValidity(''));
+      if (items.length && !items.some(item => item.checked)) {
+        event.preventDefault();
+        items[0].setCustomValidity(message);
+        items[0].reportValidity();
+        break;
+      }
+    }
+  });
 </script>
 {% endblock %}
