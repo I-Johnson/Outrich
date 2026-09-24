@@ -3,6 +3,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["DATABASE_BACKEND"] = "sqlite"
+os.environ["DB_PATH"] = "/tmp/outreach-agent-test.db"
+os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 os.environ["FREIGHT_AGENT_MODE"] = "rules"
 
 from app.core.agent_test import approve_test_draft, agent_test_state, confirm_test_facts, create_local_test_session, inject_broker_reply, scenario_catalog
