@@ -8,6 +8,7 @@ from app.config import settings
 from app.core.scraper import process_scrape_job
 from app.core.freight import poll_freight_replies, recover_uncertain_freight_sends
 from app.core.sender import reschedule_queued_emails, send_due
+from app.core.tenancy import OwnerStore, freight_owner_ids
 from app.db import now_iso, store
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,15 @@ def tick():
     except Exception: logger.exception("stale job recovery failed")
     try: send_due(limit=10)
     except Exception: logger.exception("email worker tick failed")
-    try: recover_uncertain_freight_sends()
-    except Exception: logger.exception("freight send recovery tick failed")
-    try: poll_freight_replies()
-    except Exception: logger.exception("freight reply monitor tick failed")
+    try: owners = freight_owner_ids(store)
+    except Exception: logger.exception("freight owner lookup failed"); owners = []
+    for owner in owners:
+        # Each customer's drafts, threads and inboxes are processed in their own scope.
+        scoped = OwnerStore(store, owner)
+        try: recover_uncertain_freight_sends(scoped)
+        except Exception: logger.exception("freight send recovery tick failed for %s", owner)
+        try: poll_freight_replies(scoped)
+        except Exception: logger.exception("freight reply monitor tick failed for %s", owner)
     try:
         jobs = store.list("jobs", {"status": "queued", "run_after": ("lte", now_iso())}, order="created_at asc", limit=1)
         if not jobs: return
