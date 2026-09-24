@@ -108,6 +108,42 @@ sender for retries. Each account receives an independent send cursor, delay
 jitter, and daily cap. The original `GMAIL_USER` / `GMAIL_USER_2` environment
 variables remain as compatibility fallbacks only.
 
+### Freight agent test
+
+Open **Freight → Agent test** after signing in to exercise the real freight
+decision engine without email transport. Select an existing truck profile and
+mission, start a local session, and paste broker replies into the page one at a
+time. The page uses the same `evaluate_inbound` path as production. By default,
+Gemini reads the latest broker reply with recent thread context and returns a
+structured interpretation. Rate calculations, mission rules, and send permissions
+are then enforced in code. Set `GEMINI_API_KEY` to enable interpretation;
+`FREIGHT_AGENT_MODE=rules` is an explicit legacy mode for offline development.
+If model interpretation fails, the thread pauses for review. Auto missions record
+permitted agent responses immediately; approve missions leave a draft for the **Approve response**
+button. Nothing is sent to Gmail and no broker mailbox is required.
+Auto Mode requires one exact destination lane and a saved target total or
+target all-in RPM. Use separate missions for lanes such as Florida → New Jersey
+and Florida → Dallas. Approve Mode may leave the target unset; the evaluator
+pauses on a broker offer until the dispatcher sets it. Unknown delivery cities
+and missions covering multiple destinations also pause before price judgment.
+The page shows live checks from the current load and mission. For automatic
+rate replies, confirm the broker's load details in the test page and recheck
+the latest reply; missing details keep a response as a reviewable draft.
+
+The JSON endpoints are:
+
+- `POST /freight/agent-test/start` to start a local test session.
+- `POST /freight/agent-test/message` to evaluate one broker reply.
+- `POST /freight/agent-test/approve` to approve a pending local draft.
+- `POST /freight/agent-test/facts` to confirm load details and re-evaluate the latest reply locally.
+- `POST /freight/agent-test/mission` to add a mission from the test page.
+- `POST /freight/agent-test/reset` to remove the current local test session.
+- `GET /freight/agent-test/state?load_id=...` to read the durable test state.
+
+The corresponding `/api/freight/agent-test/...` aliases are available for API
+clients. `GET /freight/agent-test/scenarios` returns rule-checklist presets;
+these are descriptive examples for API clients and do not change the agent's rules.
+
 ---
 
 ## 🛠️ Useful Commands

@@ -32,6 +32,7 @@ class Settings:
     SERP_API_KEY = os.getenv("SERP_API_KEY", "")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+    FREIGHT_AGENT_MODE = os.getenv("FREIGHT_AGENT_MODE", "model").strip().lower()
     EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "gmail")
     PINGRAM_API_KEY = os.getenv("PINGRAM_API_KEY", "")
     PINGRAM_API_URL = os.getenv("PINGRAM_API_URL", "https://api.pingram.io/email")
