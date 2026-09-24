@@ -95,11 +95,15 @@ class SignupLoginTests(unittest.TestCase):
         self.assertIn('href="/admin/login"', settings.text)
         self.assertIn("driver@example.com", settings.text)
 
-    def test_admin_can_log_in_from_either_page(self):
+    def test_admin_unlock_requires_admin_login_page(self):
         creds = {"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD}
         response = self.client.post("/login", data=creds, follow_redirects=False)
-        self.assertEqual(response.headers["location"], "/")
-        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 200)
+        self.assertEqual(response.headers["location"], "/freight")
+        locked_home = self.client.get("/", follow_redirects=False)
+        self.assertEqual(locked_home.status_code, 303)
+        self.assertEqual(locked_home.headers["location"], "/freight")
+        settings = self.client.get("/freight/settings")
+        self.assertIn('href="/admin/login"', settings.text)
         self.client.post("/logout")
         self.signup()
         self.assertEqual(self.client.get("/admin/login").status_code, 200)
@@ -138,9 +142,9 @@ class SignupLoginTests(unittest.TestCase):
         self.assertEqual(response.headers["location"], "/freight")
         self.client.post("/logout")
         self.client.post("/login", data={"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD})
-        admin = self.client.get("/")
-        self.assertEqual(admin.status_code, 200)
-        self.assertNotIn("Set the rules.", admin.text)
+        admin = self.client.get("/", follow_redirects=False)
+        self.assertEqual(admin.status_code, 303)
+        self.assertEqual(admin.headers["location"], "/freight")
 
 
 if __name__ == "__main__":
