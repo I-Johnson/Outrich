@@ -1,7 +1,8 @@
+import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ["SCHEDULER_ENABLED"] = "false"
 os.environ["DATABASE_BACKEND"] = "sqlite"
@@ -11,7 +12,7 @@ os.environ["FREIGHT_AGENT_MODE"] = "rules"
 
 from app.core.agent_test import approve_test_draft, agent_test_state, confirm_test_facts, create_local_test_session, inject_broker_reply, scenario_catalog
 from app.core.freight import classify_reply
-from app.core.freight_agent import _validated
+from app.core.freight_agent import _validated, interpret_broker_reply
 from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import SQLiteStore, new_id, now_iso
 
@@ -93,8 +94,10 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4500})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
         first = inject_broker_reply(self.storage, load_id, "Rate is $4,000 all in.")
-        self.assertEqual(first["decision"]["action"], "draft")
-        self.assertIn("broker pickup city", first["state"]["auto_send_blockers"])
+        self.assertEqual(first["decision"]["action"], "sent")
+        self.assertIn("delivery city", first["state"]["messages"][-1]["body_text"])
+        self.assertIn("broker pickup city", first["state"]["booking_readiness_blockers"])
+        self.assertEqual(first["state"]["auto_send_blockers"], [])
         confirmed = confirm_test_facts(self.storage, load_id, {
             "origin_city": "Phoenix", "origin_state": "AZ", "origin_confirmed": True,
             "destination_city": "Dallas", "destination_state": "TX",
@@ -107,8 +110,144 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(len(confirmed["state"]["pending_drafts"]), 0)
         repeated = inject_broker_reply(self.storage, load_id, "Could you do $4,100 all in?")
         self.assertEqual(repeated["decision"]["action"], "alert")
-        self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "in"])
+        self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in"])
         self.assertEqual(len(self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)), 1)
+
+    def test_auto_mode_sends_missing_load_details_request(self):
+        self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
+        load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
+        reading = {
+            "kind": "offer", "intent": "offer", "source": "gemini", "summary": "Broker offered $4,000 for Dallas, TX.",
+            "protected": [], "questions": [], "offer": 4000, "rate_per_mile": None, "ambiguous_offer": False,
+            "numeric_facts": [
+                {"unit": "miles", "value": 1000, "evidence": "1000 loaded miles"},
+                {"unit": "deadhead_miles", "value": 100, "evidence": "100 deadhead miles"},
+            ],
+            "origin": None, "destination": {"city": "Dallas", "state": "TX", "evidence": "deliver to Dallas, TX"},
+            "equipment": None, "pickup_date": {"value": "2026-09-24", "evidence": "pickup 9/24"},
+            "pickup_schedule_evidence": "", "delivery_schedule_evidence": "", "required_equipment": None,
+            "suggested_reply": "",
+        }
+        with patch("app.core.freight.settings.FREIGHT_AGENT_MODE", "model"), patch("app.core.freight.interpret_broker_reply", return_value=reading):
+            result = inject_broker_reply(self.storage, load_id, "pickup 9/24, deliver to Dallas, TX, 1000 loaded miles, 100 deadhead miles, can you do $4000")
+        self.assertEqual(result["decision"]["action"], "sent")
+        self.assertEqual(result["decision"]["transport"], "local")
+        self.assertEqual(result["state"]["pending_drafts"], [])
+        self.assertIn("$4,500", result["state"]["messages"][-1]["body_text"])
+        self.assertIn("pickup city and state", result["state"]["messages"][-1]["body_text"])
+        self.assertIn("required trailer", result["state"]["messages"][-1]["body_text"])
+        self.assertIn("load weight", result["state"]["messages"][-1]["body_text"])
+        self.assertIn("pickup appointment time or window", result["state"]["messages"][-1]["body_text"])
+        self.assertEqual(result["state"]["open_alerts"], [])
+        self.assertEqual(result["state"]["drafts"][0]["policy_snapshot"]["counter"], 4500)
+        self.assertEqual(result["state"]["load"]["current_round"], 1)
+        self.storage.update("freight_missions", self.mission_id, {"permissions": {}})
+        manual_id = create_local_test_session(self.storage, {"mission_id": self.mission_id})["load"]["id"]
+        with patch("app.core.freight.settings.FREIGHT_AGENT_MODE", "model"), patch("app.core.freight.interpret_broker_reply", return_value=reading):
+            manual = inject_broker_reply(self.storage, manual_id, "pickup 9/24, deliver to Dallas, TX, 1000 loaded miles, 100 deadhead miles, can you do $4000")
+        self.assertEqual(manual["decision"]["action"], "draft")
+        draft = manual["state"]["pending_drafts"][0]
+        self.assertEqual(draft["reason"], "counter_to_target")
+        self.assertEqual(draft["policy_snapshot"]["counter"], 4500)
+        self.assertEqual(manual["state"]["open_alerts"], [])
+        approved = approve_test_draft(self.storage, draft["id"])
+        self.assertEqual(approved["state"]["load"]["current_round"], 1)
+
+    def test_reload_preserves_approvals_and_reset_cascades_only_this_test(self):
+        from fastapi.testclient import TestClient
+        from app import main
+
+        self.add_mission({"auto_profile_reply": False, "auto_counter": False, "auto_pass": False})
+        started = create_local_test_session(self.storage, {"mission_id": self.mission_id})
+        load_id, thread_id = started["load"]["id"], started["thread"]["id"]
+        result = inject_broker_reply(self.storage, load_id, "Delivery to Dallas, TX. Rate is $4,000 all in.")
+        draft_id = result["state"]["pending_drafts"][0]["id"]
+        self.assertEqual(result["state"]["open_alerts"], [])
+        self.assertTrue(self.storage.list("freight_negotiation_events", {"thread_id": thread_id}))
+        other = create_local_test_session(self.storage, {"mission_id": self.mission_id})
+        with patch.object(main, "store", self.storage.base):
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD})
+            reloaded = client.get("/freight/agent-test/state", params={"load_id": load_id})
+            self.assertEqual(reloaded.status_code, 200)
+            self.assertEqual(reloaded.json()["pending_drafts"][0]["id"], draft_id)
+            reset = client.post("/freight/agent-test/reset", json={"load_id": load_id})
+            self.assertEqual(reset.status_code, 200)
+            self.assertEqual(client.get("/freight/agent-test/state", params={"load_id": load_id}).status_code, 404)
+            self.assertEqual(client.post("/freight/agent-test/approve", json={"draft_id": draft_id}).status_code, 400)
+            fresh = client.post("/freight/agent-test/start", json={"mission_id": self.mission_id}).json()["state"]
+        self.assertIsNone(self.storage.get("freight_threads", thread_id))
+        for table in ("freight_messages", "freight_drafts", "freight_alerts", "freight_negotiation_events"):
+            self.assertEqual(self.storage.list(table, {"thread_id": thread_id}), [], table)
+        self.assertTrue(self.storage.get("freight_loads", other["load"]["id"]))
+        self.assertTrue(self.storage.get("freight_missions", self.mission_id))
+        self.assertTrue(self.storage.get("freight_truck_profiles", self.profile_id))
+        self.assertEqual(fresh["messages"], [])
+        self.assertEqual(fresh["pending_drafts"], [])
+        self.assertEqual(fresh["open_alerts"], [])
+        self.assertIsNone(fresh["load"]["current_offer"])
+        self.assertFalse(fresh["load"]["origin_verified"])
+
+    def test_reset_rejects_real_loads_and_other_owners_tests(self):
+        from fastapi.testclient import TestClient
+        from app import main
+
+        self.add_mission({})
+        local = create_local_test_session(self.storage, {"mission_id": self.mission_id})
+        real = create_local_test_session(self.storage, {"mission_id": self.mission_id})
+        self.storage.update("freight_loads", real["load"]["id"], {"dat_reference": "real-load"})
+        with patch.object(main, "store", self.storage.base):
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD})
+            self.assertEqual(client.post("/freight/agent-test/reset", json={"load_id": real["load"]["id"]}).status_code, 404)
+            other = TestClient(main.app)
+            other.post("/signup", data={"email": "reset-test@example.com", "password": "test-password-123", "name": "Other"})
+            self.assertEqual(other.post("/freight/agent-test/reset", json={"load_id": local["load"]["id"]}).status_code, 404)
+        self.assertTrue(self.storage.get("freight_loads", local["load"]["id"]))
+        self.assertTrue(self.storage.get("freight_loads", real["load"]["id"]))
+
+    def test_model_receives_mission_and_only_allowed_truck_facts_with_verification(self):
+        self.add_mission({"auto_counter": True})
+        self.storage.update("freight_truck_profiles", self.profile_id, {"mc_number": "123456", "dispatcher_phone": "6025550100"})
+        state = create_local_test_session(self.storage, {"mission_id": self.mission_id})
+        response = Mock()
+        response.json.return_value = {"candidates": [{"content": {"parts": [{"text": json.dumps({"intent": "question"})}]}}]}
+        with patch("app.core.freight_agent.settings.GEMINI_API_KEY", "test-key"), patch("app.core.freight_agent.httpx.Client") as client:
+            client.return_value.__enter__.return_value.post.return_value = response
+            interpret_broker_reply("What equipment do you have?", [], state["load"], state["mission"], state["profile"])
+        payload = client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        context = json.loads(payload["contents"][0]["parts"][0]["text"].split("Conversation data:\n", 1)[1])
+        self.assertEqual(context["mission"]["destinations"], state["mission"]["destinations"])
+        self.assertEqual(context["mission"]["origin_city"], "Phoenix")
+        self.assertEqual(context["shareable_truck_facts"], {"equipment_type": "dry van"})
+        self.assertEqual(context["load"]["origin_city"], "Phoenix")
+        self.assertFalse(context["load_fact_verification"]["origin_verified"])
+        self.assertFalse(context["load_fact_verification"]["equipment_verified"])
+        self.assertNotIn("floor_total", context["mission"])
+        self.assertNotIn("123456", json.dumps(context))
+        self.assertNotIn("6025550100", json.dumps(context))
+
+    def test_existing_conversation_uses_updated_mission_rules_and_selected_truck(self):
+        self.add_mission({"auto_counter": False})
+        stamp = now_iso()
+        other_id = new_id()
+        self.storage.insert("freight_truck_profiles", {"id": other_id, "name": "Selected truck", "equipment_type": "dry van",
+            "team_status": "solo", "max_weight_lbs": 42000, "shareable_fields": ["team_status"], "active": True,
+            "created_at": stamp, "updated_at": stamp})
+        state = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": other_id})
+        load_id = state["load"]["id"]
+        self.storage.update("freight_truck_profiles", other_id, {"team_status": "team"})
+        self.storage.update("freight_missions", self.mission_id, {"permissions": {"auto_profile_reply": True}, "target_total": 4800})
+        reply = inject_broker_reply(self.storage, load_id, "Are you a true team?")
+        self.assertEqual(reply["decision"]["action"], "sent")
+        self.assertEqual(reply["state"]["messages"][-1]["body_text"], "Yes, this is a true team.")
+        self.assertEqual(reply["state"]["profile"]["id"], other_id)
+        confirm_test_facts(self.storage, load_id, {"origin_city": "Phoenix", "origin_state": "AZ", "origin_confirmed": True,
+            "destination_city": "Dallas", "destination_state": "TX", "equipment_type": "dry van", "equipment_confirmed": True,
+            "loaded_miles": 1000, "deadhead_miles": 100, "weight_lbs": 40000, "schedule_confirmed": True})
+        offer = inject_broker_reply(self.storage, load_id, "Can do $4,000 all in.")
+        self.assertEqual(offer["decision"]["action"], "draft")
+        self.assertIn("$4,800", offer["state"]["pending_drafts"][0]["body_text"])
 
     def test_page_and_facts_endpoint_show_live_checks(self):
         from fastapi.testclient import TestClient
@@ -274,11 +413,12 @@ class AgentTestWorkspaceTests(unittest.TestCase):
             first = inject_broker_reply(self.storage, load_id, "Can do 4k all in")
             second = inject_broker_reply(self.storage, load_id, "PU Phoenix AZ Friday at 8 AM; delivery Dallas TX Sunday at noon. Dry van, 40k lbs, 1000 loaded miles, 100 DH.")
             final = confirm_test_facts(self.storage, load_id, {"schedule_confirmed": True})
-        self.assertEqual(first["decision"]["action"], "draft")
-        self.assertEqual(second["decision"]["action"], "draft")
-        self.assertIn("$4,500", second["state"]["pending_drafts"][0]["body_text"])
-        self.assertEqual(second["state"]["messages"][-1]["classification"]["active_offer"], 4000)
-        self.assertEqual(final["decision"]["action"], "sent")
+        self.assertEqual(first["decision"]["action"], "sent")
+        self.assertIn("delivery city", first["state"]["messages"][-1]["body_text"])
+        self.assertEqual(second["decision"]["action"], "sent")
+        self.assertIn("$4,500", second["state"]["messages"][-1]["body_text"])
+        self.assertEqual(second["state"]["messages"][-2]["classification"]["active_offer"], 4000)
+        self.assertEqual(final["decision"]["action"], "waiting")
         self.assertEqual(final["state"]["messages"][-1]["body_text"], "Could you do $4,500 all in?")
         self.assertEqual(model.call_count, 2)
         events = self.storage.list("freight_negotiation_events", {"event_type": "offer"}, order="", limit=10)

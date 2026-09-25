@@ -143,7 +143,12 @@ def mission_price_comparison(load: dict[str, Any], mission: dict[str, Any]) -> d
     }
 
 
-def parse_destinations(labels: list[str], kinds: list[str], radii: list[str]) -> list[dict[str, Any]]:
+def parse_destinations(
+    labels: list[str],
+    kinds: list[str],
+    radii: list[str],
+    states: list[str] | None = None,
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     allowed = {"city", "state", "region", "anywhere"}
     for index, raw_label in enumerate(labels):
@@ -153,6 +158,9 @@ def parse_destinations(labels: list[str], kinds: list[str], radii: list[str]) ->
         kind = str(kinds[index] if index < len(kinds) else "city").lower()
         if kind not in allowed:
             kind = "city"
+        state = str(states[index] if states and index < len(states) else "").strip().upper()
+        if kind == "city" and state and "," not in label:
+            label = f"{label}, {state}"
         radius = int(_number(radii[index] if index < len(radii) else 0) or 0)
         result.append({"label": label, "kind": kind, "radius_miles": max(0, radius)})
     return result
@@ -828,7 +836,8 @@ def _counter_value(load: dict, mission: dict, offer: float) -> float | None:
     return round(target_rpm * all_in / 25) * 25 if target_rpm and all_in else None
 
 
-def _auto_send_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
+def _booking_readiness_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
+    """Facts that must be resolved before the carrier commits to the load."""
     blockers: list[str] = []
     if any((mission.get("permissions") or {}).get(key) for key in ("auto_profile_reply", "auto_counter", "auto_pass")):
         lane_issue = auto_lane_issue(mission)
@@ -855,6 +864,52 @@ def _auto_send_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
     if not load.get("deadhead_miles_verified"):
         blockers.append("actual deadhead miles")
     return blockers
+
+
+def _auto_send_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
+    """Configuration problems that make even an automatic rate reply unsafe.
+
+    Broker load-fit details belong to the stricter booking gate. Dispatchers can
+    negotiate while collecting those facts, as long as the configured price
+    policy has the mileage inputs it needs.
+    """
+    blockers: list[str] = []
+    if any((mission.get("permissions") or {}).get(key) for key in ("auto_profile_reply", "auto_counter", "auto_pass")):
+        lane_issue = auto_lane_issue(mission)
+        if lane_issue:
+            blockers.append(lane_issue)
+    if not mission.get("active", True) or not profile.get("active", True):
+        blockers.append("active truck profile and mission")
+    if not (_number(profile.get("max_weight_lbs")) or _number(mission.get("max_weight_lbs"))):
+        blockers.append("truck weight capacity")
+    return blockers
+
+
+def _broker_detail_labels(blockers: list[str], readings: list[dict[str, Any]]) -> list[str]:
+    """Turn booking gaps into questions the broker can actually answer."""
+    requested = [
+        item for item in blockers
+        if item not in {"active truck profile and mission", "truck weight capacity", "actual deadhead miles"}
+    ]
+    if "pickup and delivery schedule" in requested:
+        has_pickup = any(row.get("pickup_schedule_evidence") for row in readings)
+        has_delivery = any(row.get("delivery_schedule_evidence") for row in readings)
+        requested.remove("pickup and delivery schedule")
+        if not has_pickup:
+            requested.append("pickup appointment time or window")
+        if not has_delivery:
+            requested.append("delivery appointment time or window")
+    labels = {
+        "broker pickup city": "pickup city and state",
+        "broker destination": "delivery city and state",
+        "broker equipment": "required trailer",
+        "broker pickup date": "pickup date",
+        "broker load weight": "load weight",
+        "broker loaded miles": "loaded miles",
+        "pickup appointment time or window": "pickup appointment time or window",
+        "delivery appointment time or window": "delivery appointment time or window",
+    }
+    return [labels.get(item, item) for item in requested]
 
 
 def _create_alert(thread_id: str, kind: str, summary: str, storage=None) -> dict:
@@ -924,7 +979,7 @@ def record_test_send(draft_id: str, storage=None) -> dict[str, Any]:
 
 
 def _finish_permitted_draft(draft: dict, mission: dict, storage=None, *, transport: str = "gmail") -> dict[str, Any]:
-    """Auto-send only the narrow reply types explicitly enabled on a mission."""
+    """Auto-send bounded replies explicitly enabled on an active mission."""
     storage = storage or store
     permissions = mission.get("permissions") or {}
     reason = draft.get("reason") or ""
@@ -932,8 +987,10 @@ def _finish_permitted_draft(draft: dict, mission: dict, storage=None, *, transpo
     if not mission.get("active", True) or auto_lane_issue(mission):
         return {"action": "draft", "draft": draft}
     facts_permitted = not policy.get("includes_profile_answers") or permissions.get("auto_profile_reply")
+    auto_mode = any(permissions.get(key) for key in ("auto_profile_reply", "auto_counter", "auto_pass"))
     permitted = (
         (reason == "profile_fact_reply" and permissions.get("auto_profile_reply"))
+        or (reason == "clarify_load_details" and auto_mode and facts_permitted)
         or (reason.startswith("counter_") and permissions.get("auto_counter") and facts_permitted and policy.get("safe_to_auto_send"))
         or (reason == "pass_below_floor" and permissions.get("auto_pass") and facts_permitted and policy.get("safe_to_auto_send"))
     )
@@ -1072,10 +1129,10 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             return {"classification": classification, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
         else:
             summary = f"Broker quoted ${rpm:g} per mile; loaded miles need confirmation before calculating a total."
-            draft = _create_draft(thread["id"], thread["subject"], "Can you confirm the loaded miles and total all-in rate?", "clarify_rate", {"manual_only": True}, message.get("provider_message_id") or "", storage)
-            _create_alert(thread["id"], "rate_per_mile_unverified", summary, storage)
-            _set_stage(thread, load, "needs_attention", storage)
-            return {"action": "draft", "draft": draft, "classification": classification, "summary": summary}
+            policy = {"safe_to_auto_send": True, "auto_send_blockers": [], "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile)}
+            draft = _create_draft(thread["id"], thread["subject"], "Can you confirm the loaded miles and total all-in rate?", "clarify_load_details", policy, message.get("provider_message_id") or "", storage)
+            _set_stage(thread, load, "draft_ready", storage)
+            return {"classification": classification, "summary": summary, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
 
     unknown_amounts = [fact for fact in classification["numeric_facts"] if fact["unit"] == "unknown" and 100 <= fact["value"] <= 100000]
     if offer is None and unknown_amounts:
@@ -1137,10 +1194,10 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             storage.update("freight_loads", load["id"], {"current_offer": offer, "updated_at": now_iso()})
         if not load.get("destination_verified"):
             summary = "Confirm the actual delivery city and state before judging this lane's rate."
-            draft = _create_draft(thread["id"], thread["subject"], "What is the delivery city and state for this load?", "clarify_destination", {"manual_only": True}, message.get("provider_message_id") or "", storage)
-            _create_alert(thread["id"], "destination_needed", summary, storage)
-            _set_stage(thread, load, "needs_attention", storage)
-            return {"action": "draft", "draft": draft, "classification": classification, "summary": summary}
+            policy = {"offer": offer, "counter": None, "safe_to_auto_send": True, "auto_send_blockers": [], "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile)}
+            draft = _create_draft(thread["id"], thread["subject"], "What is the delivery city and state for this load?", "clarify_load_details", policy, message.get("provider_message_id") or "", storage)
+            _set_stage(thread, load, "draft_ready", storage)
+            return {"classification": classification, "summary": summary, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
         if len(mission.get("destinations") or []) != 1 or str((mission.get("destinations") or [{}])[0].get("kind") or "") not in {"city", "state"}:
             summary = "This mission covers multiple or open destinations. Choose a specific lane and its target before deciding on this offer."
             _create_alert(thread["id"], "lane_target_needed", summary, storage)
@@ -1164,6 +1221,11 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
         economics = load_economics(load, offer)
         max_rounds = int(mission.get("maximum_counter_rounds") or 3)
         current_round = _counter_count(thread["id"], load, storage)
+        booking_blockers = _booking_readiness_blockers(load, mission, profile)
+        auto_blockers = _auto_send_blockers(load, mission, profile)
+        previous = storage.list("freight_messages", {"thread_id": thread["id"], "direction": "in"}, order="created_at asc", limit=100)
+        readings = [row.get("classification") or {} for row in previous if row["id"] != message["id"]] + [classification]
+        requested_details = _broker_detail_labels(booking_blockers, readings)
         if floor is None and counter is None:
             summary = "This mission has no usable total or per-mile price boundary. Set one before negotiating."
             _create_alert(thread["id"], "price_policy_missing", summary, storage)
@@ -1176,6 +1238,16 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             body = f"We would need {_money(counter)}."
             reason = "counter_to_target"
         else:
+            if requested_details:
+                body = "Thanks for the rate. Before we confirm, please send the remaining load details: " + ", ".join(requested_details) + "."
+                policy = {
+                    "offer": offer, "floor": floor, "counter": None, "includes_profile_answers": False,
+                    "safe_to_auto_send": not auto_blockers, "auto_send_blockers": auto_blockers,
+                    "booking_readiness_blockers": booking_blockers, **economics,
+                }
+                draft = _create_draft(thread["id"], thread["subject"], body, "clarify_load_details", policy, message.get("provider_message_id") or "", storage)
+                _set_stage(thread, load, "draft_ready", storage)
+                return {"classification": classification, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
             summary = f"Broker offered {_money(offer)}, which meets the configured envelope. Review before accepting."
             _create_alert(thread["id"], "price_at_or_above_target", summary, storage)
             _set_stage(thread, load, "offer_review", storage)
@@ -1185,54 +1257,33 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             _create_alert(thread["id"], "counter_limit", summary, storage)
             _set_stage(thread, load, "needs_attention", storage)
             return {"action": "alert", "classification": classification, "summary": summary}
-        if answers:
-            body = " ".join(answers + [body])
-        blockers = _auto_send_blockers(load, mission, profile)
-        policy = {"offer": offer, "floor": floor, "counter": counter, "includes_profile_answers": bool(answers), "safe_to_auto_send": not blockers, "auto_send_blockers": blockers, **economics}
-        if blockers and classification.get("source") == "gemini":
-            requested = [item for item in blockers if item not in {"active truck profile and mission", "truck weight capacity"}]
-            if "pickup and delivery schedule" in requested:
-                previous = storage.list("freight_messages", {"thread_id": thread["id"], "direction": "in"}, order="created_at asc", limit=100)
-                readings = [row.get("classification") or {} for row in previous if row["id"] != message["id"]] + [classification]
-                has_pickup = any(row.get("pickup_schedule_evidence") for row in readings)
-                has_delivery = any(row.get("delivery_schedule_evidence") for row in readings)
-                requested.remove("pickup and delivery schedule")
-                if not has_pickup:
-                    requested.append("pickup appointment time or window")
-                if not has_delivery:
-                    requested.append("delivery appointment time or window")
-            if requested:
-                groups = {
-                    "broker pickup city": "pickup city and state",
-                    "broker destination": "delivery city and state",
-                    "broker equipment": "required trailer",
-                    "pickup and delivery schedule": "pickup and delivery times",
-                    "broker pickup date": "pickup date",
-                    "broker load weight": "load weight",
-                    "broker loaded miles": "loaded miles",
-                    "actual deadhead miles": "deadhead miles",
-                    "pickup appointment time or window": "pickup appointment time or window",
-                    "delivery appointment time or window": "delivery appointment time or window",
-                }
-                details = [groups.get(item, item) for item in requested]
-                body = " ".join(answers + ["Thanks for the rate. Could you send the remaining load details: " + ", ".join(details) + "?"])
-                reason = "clarify_load_details"
-                policy["manual_only"] = True
-        elif reason.startswith("counter_") and classification.get("source") == "gemini":
+        if reason.startswith("counter_") and classification.get("source") == "gemini":
             try:
-                previous = storage.list("freight_messages", {"thread_id": thread["id"]}, order="created_at asc", limit=100)
-                phrasing = compose_counter_reply(text, [row for row in previous if row["id"] != message["id"]], counter)
-                body = " ".join(answers + [phrasing])
+                history = storage.list("freight_messages", {"thread_id": thread["id"]}, order="created_at asc", limit=100)
+                body = compose_counter_reply(text, [row for row in history if row["id"] != message["id"]], counter)
             except Exception as exc:
                 logger.warning("Counter phrasing failed for thread %s: %s", thread["id"], type(exc).__name__)
+        if answers:
+            body = " ".join(answers + [body])
+        if reason.startswith("counter_") and requested_details:
+            body += " Also, please confirm " + ", ".join(requested_details) + "."
+        policy = {
+            "offer": offer, "floor": floor, "counter": counter, "includes_profile_answers": bool(answers),
+            "safe_to_auto_send": not auto_blockers, "auto_send_blockers": auto_blockers,
+            "booking_readiness_blockers": booking_blockers, **economics,
+        }
         if _already_sent_reply(thread["id"], body, reason, storage):
+            if carried_offer and reason.startswith("counter_"):
+                summary = "Load details recorded. Waiting for the broker to respond to the counter already sent."
+                _set_stage(thread, load, "negotiating", storage)
+                return {"action": "waiting", "classification": classification, "summary": summary}
             summary = "The agent already sent this response. Review the broker's new message before replying again."
             _create_alert(thread["id"], "repeated_reply", summary, storage)
             _set_stage(thread, load, "needs_attention", storage)
             return {"action": "alert", "classification": classification, "summary": summary}
         draft = _create_draft(thread["id"], thread["subject"], body, reason, policy, message.get("provider_message_id") or "", storage)
-        if blockers:
-            _create_alert(thread["id"], "verify_load_facts", f"Review before sending: verify {', '.join(blockers)}.", storage)
+        if auto_blockers:
+            _create_alert(thread["id"], "auto_send_blocked", f"Automatic rate reply paused: {', '.join(auto_blockers)}.", storage)
         _set_stage(thread, load, "draft_ready", storage)
         return {"classification": classification, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
 

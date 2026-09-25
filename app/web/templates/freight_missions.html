@@ -304,7 +304,7 @@
 /* Destination Builder */
 .destination-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1.5fr) 120px 110px 36px;
+  grid-template-columns: minmax(150px, 1.35fr) 80px 120px 110px 36px;
   gap: 8px;
   margin-bottom: 8px;
   align-items: center;
@@ -532,7 +532,7 @@
     grid-template-columns: 1fr;
   }
   .destination-row {
-    grid-template-columns: 1fr 100px 80px 34px;
+    grid-template-columns: 1fr 80px 100px 80px 34px;
   }
 }
 </style>
@@ -695,7 +695,12 @@
           <span style="color:#f59e0b">No truck profile linked</span>
           {% endif %}
         </span>
-        <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=missions&mission_id={{ m.id }}">Edit mission</a>
+        <div style="display:flex;gap:8px;align-items:center">
+          <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=missions&mission_id={{ m.id }}">Edit mission</a>
+          <form action="/freight/missions/{{ m.id }}/delete" method="post" onsubmit="return confirm('Delete this mission? Existing loads will remain but be unlinked from it.')">
+            <button type="submit" class="button ghost" style="font-size:12px;padding:5px 12px;color:#dc2626;border-color:#fecaca">Delete</button>
+          </form>
+        </div>
       </div>
     </article>
     {% endfor %}
@@ -810,13 +815,14 @@
       </div>
       <div>
         <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
-          Add where this truck is willing to deliver. For Auto Mode, use one exact city/state or state code per mission. Create separate missions for Florida → NJ and Florida → Dallas.
+          Add where this truck is willing to deliver. For Auto Mode, enter the destination city and its state (for example, Dallas + TX), or use a two-letter state code. Create separate missions for Florida → NJ and Florida → Dallas.
         </p>
         <div id="destination-list">
           {% set destinations = edit_mission.destinations if edit_mission and edit_mission.destinations else [{'label':'','kind':'city','radius_miles':0}] %}
           {% for d in destinations %}
           <div class="destination-row">
             <input name="destination_label" value="{{ d.label }}" placeholder="e.g. Dallas, TX or Southeast" required>
+            <input name="destination_state" value="{{ d.label.rsplit(', ', 1)[-1] if d.kind == 'city' and ', ' in d.label else '' }}" maxlength="2" placeholder="ST" style="text-transform:uppercase" title="State abbreviation for this city">
             <select name="destination_kind" required>
               <option value="city" {% if d.kind=='city' %}selected{% endif %}>City</option>
               <option value="state" {% if d.kind=='state' %}selected{% endif %}>State code (NJ)</option>
@@ -837,13 +843,13 @@
       <div class="form-section-title">
         <span>4. Rate Envelope & Negotiation Bounds</span>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin:-4px 0 10px">Active missions require at least one minimum rate: total, loaded RPM, or all-in RPM.</p>
+      <p style="font-size:12px;color:var(--muted);margin:-4px 0 10px">Type numbers only; the $ prefix is already shown. Active missions require at least one minimum rate: total, loaded RPM, or all-in RPM.</p>
       <div class="form-grid-4">
         <label>
           Minimum floor total ($)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
-            <input type="number" step=".01" name="floor_total" value="{{ edit_mission.floor_total if edit_mission else '' }}" placeholder="2000">
+            <input type="number" step=".01" name="floor_total" value="{{ edit_mission.floor_total if edit_mission else '' }}" placeholder="e.g. 2000">
           </div>
         </label>
 
@@ -851,7 +857,7 @@
           Target total pay ($)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
-            <input type="number" step=".01" name="target_total" value="{{ edit_mission.target_total if edit_mission else '' }}" placeholder="2500">
+            <input type="number" step=".01" name="target_total" value="{{ edit_mission.target_total if edit_mission else '' }}" placeholder="e.g. 2500">
           </div>
         </label>
 
@@ -859,7 +865,7 @@
           Min loaded RPM ($/mi)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
-            <input type="number" step=".01" name="floor_loaded_rpm" value="{{ edit_mission.floor_loaded_rpm if edit_mission else '' }}" placeholder="2.50">
+            <input type="number" step=".01" name="floor_loaded_rpm" value="{{ edit_mission.floor_loaded_rpm if edit_mission else '' }}" placeholder="e.g. 2.50">
           </div>
         </label>
 
@@ -867,7 +873,7 @@
           Target all-in RPM ($/mi)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
-            <input type="number" step=".01" name="target_all_in_rpm" value="{{ edit_mission.target_all_in_rpm if edit_mission else '' }}" placeholder="2.85">
+            <input type="number" step=".01" name="target_all_in_rpm" value="{{ edit_mission.target_all_in_rpm if edit_mission else '' }}" placeholder="e.g. 2.85">
           </div>
         </label>
 
@@ -875,7 +881,7 @@
           Counter offer total ($)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
-            <input type="number" step=".01" name="counter_amount" value="{{ edit_mission.counter_amount if edit_mission else '' }}" placeholder="150">
+            <input type="number" step=".01" name="counter_amount" value="{{ edit_mission.counter_amount if edit_mission else '' }}" placeholder="e.g. 2250">
           </div>
         </label>
 
@@ -888,7 +894,7 @@
           Min all-in RPM ($/mi)
           <div class="input-with-unit has-prefix">
             <span class="input-unit-prefix">$</span>
-            <input type="number" step=".01" name="floor_all_in_rpm" value="{{ edit_mission.floor_all_in_rpm if edit_mission else '' }}" placeholder="2.20">
+            <input type="number" step=".01" name="floor_all_in_rpm" value="{{ edit_mission.floor_all_in_rpm if edit_mission else '' }}" placeholder="e.g. 2.20">
           </div>
         </label>
       </div>
@@ -997,7 +1003,12 @@
         <span style="font-size:11px;color:var(--muted)">
           Shareable: {{ p.shareable_fields|join(', ') if p.shareable_fields else 'None checked' }}
         </span>
-        <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=trucks&profile_id={{ p.id }}">Edit truck</a>
+        <div style="display:flex;gap:8px;align-items:center">
+          <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=trucks&profile_id={{ p.id }}">Edit truck</a>
+          <form action="/freight/profiles/{{ p.id }}/delete" method="post" onsubmit="return confirm('Delete this truck profile? Existing missions and loads will be unlinked from it.')">
+            <button type="submit" class="button ghost" style="font-size:12px;padding:5px 12px;color:#dc2626;border-color:#fecaca">Delete</button>
+          </form>
+        </div>
       </div>
     </article>
     {% endfor %}
@@ -1238,7 +1249,7 @@ function onTruckSelect(truckId) {
 function bindRemove(){
   document.querySelectorAll('.remove-destination').forEach(b => {
     b.onclick = () => {
-      const rows = document.querySelectorAll('.destination-row');
+  const rows = document.querySelectorAll('.destination-row');
       if (rows.length > 1) {
         b.closest('.destination-row').remove();
       }
@@ -1251,6 +1262,7 @@ document.getElementById('add-destination')?.addEventListener('click', () => {
   const rowHtml = `
     <div class="destination-row">
       <input name="destination_label" placeholder="e.g. Dallas, TX or Southeast" required>
+      <input name="destination_state" maxlength="2" placeholder="ST" style="text-transform:uppercase" title="State abbreviation for this city">
       <select name="destination_kind" required>
         <option value="city">City</option>
         <option value="state">State code (NJ)</option>

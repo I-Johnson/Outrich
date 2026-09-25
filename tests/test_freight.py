@@ -106,6 +106,10 @@ class FreightPolicyTests(unittest.TestCase):
             {"label": "Southeast", "kind": "region", "radius_miles": 0},
         ])
 
+    def test_city_destination_state_is_combined_before_auto_validation(self):
+        result = parse_destinations(["Dallas"], ["city"], ["0"], ["tx"])
+        self.assertEqual(result, [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
+
     def test_auto_mode_requires_one_priced_lane(self):
         mission = {"origin_state": "FL", "destinations": [{"kind": "state", "label": "NJ"}], "target_total": 5000}
         self.assertIsNone(auto_lane_issue(mission))
@@ -243,7 +247,8 @@ class FreightConversationTests(unittest.TestCase):
         first = self.inbound("Pickup 09/23, delivery to Dallas, TX. 1,068 miles, weight 40,000 lbs. Rate- 4,000.00")
         self.assertEqual(first["action"], "draft")
         self.assertEqual(first["draft"]["policy_snapshot"]["offer"], 4000)
-        self.assertFalse(first["draft"]["policy_snapshot"]["safe_to_auto_send"])
+        self.assertTrue(first["draft"]["policy_snapshot"]["safe_to_auto_send"])
+        self.assertIn("broker equipment", first["draft"]["policy_snapshot"]["booking_readiness_blockers"])
         self.send(first["draft"])
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 1)
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4300})
@@ -320,7 +325,7 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.inbound("Cargo weight is at 42,000 lbs")["action"], "alert")
         rpm = self.inbound("Rate is $2.45 per mile")
         self.assertEqual(rpm["action"], "draft")
-        self.assertEqual(rpm["draft"]["reason"], "clarify_rate")
+        self.assertEqual(rpm["draft"]["reason"], "clarify_load_details")
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
         self.assertIsNone(self.storage.get("freight_loads", self.load_id)["current_offer"])
 
@@ -338,8 +343,9 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4000})
         reoffer = self.inbound("Can do $4,000")
-        self.assertEqual(reoffer["action"], "alert")
-        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "offer_review")
+        self.assertEqual(reoffer["action"], "draft")
+        self.assertEqual(reoffer["draft"]["reason"], "clarify_load_details")
+        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "draft_ready")
         self.assertEqual(self.inbound("Load is covered now")["action"], "closed")
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "closed")
 
@@ -373,12 +379,12 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(ratecon["action"], "alert")
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "booked")
 
-    def test_unverified_fit_keeps_auto_counter_as_reviewable_draft(self):
+    def test_auto_mode_requests_unknown_destination_without_approval(self):
         mission = self.storage.get("freight_missions", self.mission_id)
         self.storage.update("freight_missions", self.mission_id, {"permissions": {**mission["permissions"], "auto_counter": True}})
         result = self.inbound("Rate- 4,000")
-        self.assertEqual(result["action"], "draft")
-        self.assertEqual(result["draft"]["reason"], "clarify_destination")
+        self.assertEqual(result["action"], "sent")
+        self.assertEqual(result["draft"]["reason"], "clarify_load_details")
         self.assertIn("delivery city", result["draft"]["body_text"])
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
 
@@ -509,6 +515,36 @@ class FreightConversationTests(unittest.TestCase):
             res_tpl_redirect = client.get("/templates?vertical=freight", follow_redirects=False)
             self.assertEqual(res_tpl_redirect.status_code, 303)
             self.assertIn("/freight/settings?tab=templates", res_tpl_redirect.headers["location"])
+
+    def test_mission_save_accepts_city_and_separate_destination_state(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        with patch.object(main, "store", self.raw), patch.object(main, "search_locations") as geocoder:
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            response = client.post("/freight/missions/save", data={
+                "name": "Phoenix to Dallas",
+                "truck_profile_id": self.profile_id,
+                "origin_city": "Phoenix",
+                "origin_state": "AZ",
+                "equipment_type": "Dry van",
+                "trailer_length_ft": "53",
+                "max_weight_lbs": "45000",
+                "destination_label": "Dallas",
+                "destination_state": "TX",
+                "destination_kind": "city",
+                "destination_radius": "0",
+                "floor_total": "2000",
+                "target_total": "4500",
+                "maximum_counter_rounds": "3",
+                "execution_mode": "auto",
+                "active": "on",
+            }, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("Mission+saved", response.headers["location"])
+        saved = self.raw.list("freight_missions", order="created_at desc", limit=1)[0]
+        self.assertEqual(saved["destinations"], [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
+        geocoder.assert_not_called()
 
     def test_freight_sender_add_workflow(self):
         from fastapi.testclient import TestClient
