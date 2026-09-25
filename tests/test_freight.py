@@ -435,6 +435,13 @@ class FreightConversationTests(unittest.TestCase):
         self.assertIsNone(_find_thread(reply, "1", self.storage))
         reply["In-Reply-To"] = "<first@example.com>"
         self.assertEqual(_find_thread(reply, "1", self.storage)["id"], self.thread_id)
+        # Matching References are not proof that this is the broker. Do not
+        # misroute a different sender's message to an existing load.
+        forged = EmailMessage()
+        forged["From"] = "unrelated@example.net"
+        forged["Subject"] = "Re: Truck available"
+        forged["In-Reply-To"] = "<first@example.com>"
+        self.assertIsNone(_find_thread(forged, "1", self.storage))
 
     def test_uncertain_send_cannot_be_retried_blindly(self):
         result = self.inbound("Is this a true team?")
