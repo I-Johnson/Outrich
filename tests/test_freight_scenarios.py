@@ -98,3 +98,37 @@ class BrokerScenarioBattery(unittest.TestCase):
                 actual = result['decision']['action']
                 self.assertEqual(actual, expected, f'{name}: {body!r}: {result["decision"].get("summary") or result["decision"].get("draft",{}).get("body_text")}')
                 self.assertEqual(result['state']['transport'],'local')
+                if name in {'thread-a-team-2800', 'thread-b-dedicated', 'thread-c-no'}:
+                    self.assertEqual(storage.list('freight_negotiation_events', {'thread_id': result['state']['thread']['id']}, order='', limit=10), [])
+                    self.assertIsNone(result['state']['load']['current_offer'])
+                    if name != 'thread-a-team-2800':
+                        self.assertEqual(result['state']['pending_drafts'], [])
+
+    def test_model_misses_are_stopped_by_source_text_guard(self):
+        cases = [
+            ('Team available? Quoted 2700', 'draft', 'clarify_rate'),
+            ('Dedicated lane requires five trips daily; can you commit to a hook and live-empty return?', 'alert', 'operational_terms'),
+            ('Cannot get to $4,300', 'alert', 'rate_refused'),
+        ]
+        for body, action, reason in cases:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                storage = OwnerStore(SQLiteStore(tmp+'/model-safety.db'), ADMIN_OWNER_ID)
+                storage.init()
+                profile_id, mission_id = new_id(), new_id()
+                stamp = now_iso()
+                storage.insert('freight_truck_profiles', {'id':profile_id, 'name':'Test team', 'current_city':'Phoenix', 'current_state':'AZ', 'equipment_type':'dry van', 'max_weight_lbs':45000, 'team_status':'team', 'shareable_fields':['team_status','equipment_type'], 'active':True, 'created_at':stamp, 'updated_at':stamp})
+                storage.insert('freight_missions', {'id':mission_id, 'name':'Phoenix to Dallas', 'truck_profile_id':profile_id, 'origin_city':'Phoenix', 'origin_state':'AZ', 'equipment_type':'dry van', 'destinations':[{'kind':'city','label':'Dallas, TX','radius_miles':0}], 'floor_total':3900, 'target_total':4500, 'maximum_counter_rounds':2, 'permissions':{'auto_profile_reply':True,'auto_counter':True,'auto_pass':True}, 'active':True, 'created_at':stamp, 'updated_at':stamp})
+                model_guess = {'kind':'offer', 'intent':'offer', 'source':'gemini', 'summary':'Model missed the protected nuance.', 'protected':[], 'questions':[], 'offer':2700 if 'Quoted' in body else 4300 if 'Cannot' in body else None, 'rate_per_mile':None, 'ambiguous_offer':False, 'numeric_facts':[], 'origin':None, 'destination':None, 'equipment':None, 'pickup_date':None, 'required_equipment':None, 'suggested_reply':'What is the delivery city and state?'}
+                with patch('app.core.freight.settings.FREIGHT_AGENT_MODE','gemini'), patch('app.core.freight.interpret_broker_reply', return_value=model_guess):
+                    state = create_local_test_session(storage, {'mission_id':mission_id})
+                    result = inject_broker_reply(storage, state['load']['id'], body)
+                self.assertEqual(result['decision']['action'], action)
+                if action == 'draft':
+                    self.assertEqual(result['decision']['draft']['reason'], reason)
+                    self.assertTrue(result['decision']['draft']['policy_snapshot']['manual_only'])
+                    self.assertIsNone(result['decision']['classification']['offer'])
+                else:
+                    self.assertIn(reason, result['decision']['classification']['protected'])
+                    self.assertEqual(result['state']['pending_drafts'], [])
+                self.assertIsNone(result['state']['load']['current_offer'])
+                self.assertEqual(storage.list('freight_negotiation_events', {'thread_id':result['state']['thread']['id']}, order='', limit=10), [])
