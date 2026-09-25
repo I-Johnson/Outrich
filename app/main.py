@@ -69,6 +69,39 @@ def freight_store(request: Request) -> OwnerStore:
     return OwnerStore(store, owner)
 
 
+def resolve_auto_destination(destinations: list[dict]) -> tuple[list[dict], str | None]:
+    """Normalize an unqualified city when geocoding resolves it unambiguously."""
+    if len(destinations) != 1:
+        return destinations, None
+    destination = destinations[0]
+    if str(destination.get("kind") or "").lower() != "city":
+        return destinations, None
+    label = str(destination.get("label") or "").strip()
+    if not label or "," in label:
+        return destinations, None
+    matches = search_locations(label, limit=6)
+    candidates = {}
+    for match in matches:
+        city = str(match.get("city") or "").strip()
+        state = str(match.get("state") or "").strip().upper()
+        if city.casefold() == label.casefold() and len(state) == 2:
+            candidates[f"{city}, {state}"] = str(match.get("value") or f"{city}, {state}")
+    if len(candidates) == 1:
+        normalized = dict(destination)
+        normalized["label"] = next(iter(candidates.values()))
+        return [normalized], None
+    if len(candidates) > 1:
+        states = ", ".join(sorted(item.rsplit(", ", 1)[-1] for item in candidates))
+        return destinations, f"{label} matches multiple states ({states}); choose the destination state."
+    return destinations, f"I couldn't resolve {label}; enter the city and two-letter state, like Dallas, TX."
+
+
+def mission_validation_redirect(request: Request, data: dict, message: str) -> RedirectResponse:
+    """Keep the user's mission form values visible while they fix one field."""
+    request.session["mission_form_draft"] = data
+    return RedirectResponse("/freight/missions?tab=missions&notice=" + quote(message), 303)
+
+
 def ensure_admin_user():
     """Keep an app_users row for the env admin so owner_id always points at a user."""
     existing = store.get("app_users", ADMIN_OWNER_ID)
@@ -450,11 +483,14 @@ def freight_missions(request: Request, mission_id: str = "", profile_id: str = "
     profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     fsettings = db.get("freight_settings", 1) or {}
     active_tab = tab or ("trucks" if profile_id else "missions")
+    edit_mission = db.get("freight_missions", mission_id) if mission_id else None
+    if not edit_mission and not mission_id:
+        edit_mission = request.session.pop("mission_form_draft", None)
     return page(
         request, "freight_missions.html", workspace="freight", missions=missions, profiles=profiles, fx_nav=freight_nav(db),
         loads=db.list("freight_loads", order="updated_at desc", limit=500),
         freight_settings=fsettings, active_tab=active_tab,
-        edit_mission=db.get("freight_missions", mission_id) if mission_id else None,
+        edit_mission=edit_mission,
         edit_profile=db.get("freight_truck_profiles", profile_id) if profile_id else None,
     )
 
@@ -615,7 +651,9 @@ async def freight_agent_test_mission(request: Request):
         kinds = kinds if isinstance(kinds, list) else [kinds]
         radii = payload.get("destination_radius")
         radii = radii if isinstance(radii, list) else [radii]
-        destinations = parse_destinations(labels, kinds, radii)
+        states = payload.get("destination_state")
+        states = states if isinstance(states, list) else [states]
+        destinations = parse_destinations(labels, kinds, radii, states)
     destinations = [item for item in destinations if isinstance(item, dict) and str(item.get("label") or "").strip()]
     name = str(payload.get("name") or "").strip()
     if not name or not destinations:
@@ -662,6 +700,10 @@ async def freight_agent_test_mission(request: Request):
     if mission["floor_all_in_rpm"] and mission["target_all_in_rpm"] and mission["target_all_in_rpm"] < mission["floor_all_in_rpm"]:
         raise HTTPException(400, "Target all-in RPM cannot be below the minimum all-in RPM")
     if mode == "auto":
+        destinations, destination_issue = resolve_auto_destination(destinations)
+        mission["destinations"] = destinations
+        if destination_issue:
+            raise HTTPException(400, destination_issue)
         lane_issue = auto_lane_issue(mission)
         if lane_issue:
             raise HTTPException(400, lane_issue)
@@ -820,13 +862,34 @@ async def freight_profile_save(request: Request):
     return RedirectResponse(f"/freight/missions?tab=trucks&profile_id={row_id}&notice=Truck+profile+saved", 303)
 
 
+@app.post("/freight/profiles/{profile_id}/delete")
+def freight_profile_delete(request: Request, profile_id: str):
+    db = freight_store(request)
+    profile = db.get("freight_truck_profiles", profile_id)
+    if not profile:
+        return RedirectResponse("/freight/missions?tab=trucks&notice=Truck+profile+not+found", 303)
+    missions = db.list("freight_missions", {"truck_profile_id": profile_id}, order="", limit=1000)
+    loads = db.list("freight_loads", {"truck_profile_id": profile_id}, order="", limit=1000)
+    db.delete("freight_truck_profiles", {"id": profile_id})
+    linked = len(missions) + len(loads)
+    message = "Truck+profile+deleted"
+    if linked:
+        message += "+and+unlinked+from+existing+freight+records"
+    return RedirectResponse("/freight/missions?tab=trucks&notice=" + message, 303)
+
+
 @app.post("/freight/missions/save")
 async def freight_mission_save(request: Request):
     db = freight_store(request)
     form = await request.form()
     row_id = str(form.get("id") or "")
     stamp = now_iso()
-    destinations = parse_destinations(form.getlist("destination_label"), form.getlist("destination_kind"), form.getlist("destination_radius"))
+    destinations = parse_destinations(
+        form.getlist("destination_label"),
+        form.getlist("destination_kind"),
+        form.getlist("destination_radius"),
+        form.getlist("destination_state"),
+    )
     execution_mode = str(form.get("execution_mode") or form.get("mode") or "").strip().lower()
     if execution_mode == "auto":
         permissions = {
@@ -870,27 +933,45 @@ async def freight_mission_save(request: Request):
         "updated_at": stamp,
     }
     if not data["name"] or not destinations:
-        return RedirectResponse("/freight/missions?tab=missions&notice=Mission+name+and+at+least+one+destination+are+required", 303)
+        return mission_validation_redirect(request, data, "Mission name and at least one destination are required")
     floors = [data["floor_total"], data["floor_loaded_rpm"], data["floor_all_in_rpm"]]
     if data["active"] and not any(value is not None and value > 0 for value in floors):
-        return RedirectResponse("/freight/missions?tab=missions&notice=Set+at+least+one+minimum+rate+before+activating+the+mission", 303)
+        return mission_validation_redirect(request, data, "Rate envelope: set at least one minimum rate")
     if data["pickup_start"] and data["pickup_end"] and data["pickup_end"] < data["pickup_start"]:
-        return RedirectResponse("/freight/missions?tab=missions&notice=Available-through+date+must+be+on+or+after+the+start+date", 303)
+        return mission_validation_redirect(request, data, "Pickup window: through date must be on or after the start date")
     if data["floor_total"] and data["target_total"] and data["target_total"] < data["floor_total"]:
-        return RedirectResponse("/freight/missions?tab=missions&notice=Target+total+cannot+be+below+the+minimum+total", 303)
+        return mission_validation_redirect(request, data, "Rate envelope: target total cannot be below the minimum total")
     if data["floor_all_in_rpm"] and data["target_all_in_rpm"] and data["target_all_in_rpm"] < data["floor_all_in_rpm"]:
-        return RedirectResponse("/freight/missions?tab=missions&notice=Target+all-in+RPM+cannot+be+below+the+minimum+all-in+RPM", 303)
+        return mission_validation_redirect(request, data, "Rate envelope: target all-in RPM cannot be below the minimum all-in RPM")
     if data["floor_total"] and data["counter_amount"] and data["counter_amount"] < data["floor_total"]:
-        return RedirectResponse("/freight/missions?tab=missions&notice=Counter+offer+cannot+be+below+the+minimum+total", 303)
+        return mission_validation_redirect(request, data, "Rate envelope: counter offer cannot be below the minimum total")
     if execution_mode == "auto":
+        data["destinations"], destination_issue = resolve_auto_destination(data["destinations"])
+        if destination_issue:
+            return mission_validation_redirect(request, data, "Destination field: " + destination_issue)
         lane_issue = auto_lane_issue(data)
         if lane_issue:
-            return RedirectResponse(f"/freight/missions?tab=missions&notice={quote(lane_issue)}", 303)
+            return mission_validation_redirect(request, data, "Destination field: " + lane_issue)
+    request.session.pop("mission_form_draft", None)
     if row_id:
         db.update("freight_missions", row_id, data)
     else:
         row_id = new_id(); db.insert("freight_missions", {"id": row_id, **data, "created_at": stamp})
     return RedirectResponse(f"/freight/missions?tab=missions&mission_id={row_id}&notice=Mission+saved", 303)
+
+
+@app.post("/freight/missions/{mission_id}/delete")
+def freight_mission_delete(request: Request, mission_id: str):
+    db = freight_store(request)
+    mission = db.get("freight_missions", mission_id)
+    if not mission:
+        return RedirectResponse("/freight/missions?tab=missions&notice=Mission+not+found", 303)
+    loads = db.list("freight_loads", {"mission_id": mission_id}, order="", limit=1000)
+    db.delete("freight_missions", {"id": mission_id})
+    message = "Mission+deleted"
+    if loads:
+        message += "+and+unlinked+from+existing+loads"
+    return RedirectResponse("/freight/missions?tab=missions&notice=" + message, 303)
 
 
 @app.post("/freight/loads/send")

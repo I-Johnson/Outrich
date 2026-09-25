@@ -38,7 +38,9 @@ BOOL_FIELDS = {
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Freight turns and automatic replies can be written within the same second.
+    # Preserve microseconds so "latest message" queries remain deterministic.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def new_id() -> str:

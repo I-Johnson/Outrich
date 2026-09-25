@@ -180,7 +180,7 @@
     <form action="/freight/drafts/{{ L.draft.id }}/send" method="post" class="fx-reply is-draft">
       <div class="fx-reply-h">
         <span class="fx-label">Suggested reply{% if L.draft.reason %} · {{ L.draft.reason|replace('_', ' ') }}{% endif %}</span>
-        <strong>{% if snap.counter %}Counter at {{ '${:,.0f}'.format(snap.counter) }}{% else %}Reply ready for your review{% endif %}</strong>
+        <strong>{% if L.draft.reason == 'clarify_load_details' %}Ask broker for missing load details{% elif snap.counter %}Counter at {{ '${:,.0f}'.format(snap.counter) }}{% else %}Reply ready for your review{% endif %}</strong>
       </div>
       <textarea name="body_text" rows="5" required aria-label="Suggested reply text">{{ L.draft.body_text }}</textarea>
       <div class="fx-reply-f">

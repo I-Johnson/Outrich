@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.freight import (
     _auto_send_blockers,
+    _booking_readiness_blockers,
     evaluate_inbound,
     format_freight_message,
     load_economics,
@@ -216,6 +217,7 @@ def agent_test_state(storage, load_id: str) -> dict[str, Any]:
         "economics": load_economics(load),
         "price_comparison": mission_price_comparison(load, mission),
         "auto_send_blockers": _auto_send_blockers(load, mission, profile),
+        "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile),
         "waiting_for": waiting_for,
         "transport": "local",
     }

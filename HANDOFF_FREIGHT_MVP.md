@@ -69,24 +69,24 @@ Changes already applied for this request:
    - `/templates/{id}/preview` (GET and POST): renders Freight preview with Freight signature without `Missing: signature`.
    - Fast load inquiry send (`/freight/loads/send`) with only `truck_profile_id`, `mission_id`, and `broker_email`: passes validation, auto-populates load details from mission/profile, and dispatches first touch in dry-run mode.
 
-## Local preview currently running
+## Local development
 
-The preview is active with auto-reload:
+Run the app against the shared Supabase database so local and production show
+the same freight data. Keep the scheduler off locally to avoid duplicate work
+with Railway:
 
 `http://127.0.0.1:8000`
 
-Command running:
+Command:
 
 ```bash
-DATABASE_BACKEND=sqlite DB_PATH=/tmp/outreach-freight-preview.db DRY_RUN=false SCHEDULER_ENABLED=false uv run --with-requirements requirements.txt uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+DATABASE_BACKEND=supabase SCHEDULER_ENABLED=false DRY_RUN=true uv run --with-requirements requirements.txt uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Deployment status
 
-- No code was pushed or committed.
-- The Supabase migration has not been applied.
 - No live email was sent during development.
-- The local preview uses dry-run mode and a temporary SQLite database.
+- Local development uses the same Supabase database as production.
 
 ## Main files changed
 
