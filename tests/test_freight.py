@@ -383,9 +383,14 @@ class FreightConversationTests(unittest.TestCase):
         mission = self.storage.get("freight_missions", self.mission_id)
         self.storage.update("freight_missions", self.mission_id, {"permissions": {**mission["permissions"], "auto_counter": True}})
         result = self.inbound("Rate- 4,000")
-        self.assertEqual(result["action"], "sent")
+        # Without a configured Gmail sender, auto-send fails closed. The
+        # clarification remains pending for the dispatcher rather than being
+        # falsely marked sent.
+        self.assertEqual(result["action"], "alert")
+        self.assertIn("Gmail sender is unavailable", result["warning"])
         self.assertEqual(result["draft"]["reason"], "clarify_load_details")
         self.assertIn("delivery city", result["draft"]["body_text"])
+        self.assertEqual(result["draft"]["status"], "pending")
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 0)
 
     def test_verified_fit_allows_one_permitted_auto_counter(self):
