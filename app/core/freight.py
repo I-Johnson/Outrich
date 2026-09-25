@@ -1475,7 +1475,10 @@ def _find_thread(message: Message, sender_account: str, storage=None) -> dict | 
     message_from = parseaddr(message.get("From", ""))[1].lower()
     references = set(" ".join([message.get("In-Reply-To", ""), message.get("References", "")]).split())
     subject = _normalize_subject(message.get("Subject", ""))
-    candidates = [thread for thread in storage.list("freight_threads", {"sender_account": sender_account}, order="updated_at desc", limit=500) if thread.get("state") != "closed"]
+    # Message-ID references do not authenticate the sender. An unrelated party
+    # can quote or guess one; never route their reply into a broker's thread.
+    candidates = [thread for thread in storage.list("freight_threads", {"sender_account": sender_account}, order="updated_at desc", limit=500)
+                  if thread.get("state") != "closed" and message_from == str(thread.get("recipient_email") or "").lower()]
     matched_references = []
     for thread in candidates:
         root = str(thread.get("root_message_id") or "")
