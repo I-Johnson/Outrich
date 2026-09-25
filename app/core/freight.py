@@ -63,6 +63,9 @@ SENSITIVE_OUTBOUND = {
     "insurance or financial document": re.compile(r"\b(?:insurance certificate|certificate of insurance|\bcoi\b|w-?9|bank(?:ing)? details?|routing number|account number|factoring|void(?:ed)? check)\b", re.I),
     "vehicle identifier": re.compile(r"\b(?:vin|vehicle identification number|license plate|plate number|tractor number|trailer number)\b", re.I),
 }
+# A broker describing a price as "quoted" while asking another question has not
+# made a clean new offer. This check runs after model interpretation as well.
+MIXED_QUOTED_RATE = re.compile(r"\bquoted\s+\$?\d[\d,]*(?:\.\d+)?\b", re.I)
 RATE_CUE = re.compile(r"(?:\brate(?:\s+is)?|\ball[\s-]*in|\boffer(?:ing)?|\bpay(?:ing)?|\b(?:can|could|would)\s+(?:you\s+|we\s+)?(?:do|meet(?:\s+at)?)|[?&]?\bhow\s+about|\bwhat\s+about|\bmeet\s+(?:you\s+)?at|\bcan\s+do|\bget\s+you|\bsqueeze\s+it\s+to|\b(?:best|max(?:imum)?)(?:\s+is)?|\bat\b)\s*[:=\-]?\s*$", re.I)
 TIME_CUE = re.compile(r"\b(?:pickup|pick\s*up|delivery|deliver|appointment|appt|eta|tonight|tomorrow)\b.{0,24}\b(?:at|by)\s*$", re.I)
 IDENTIFIER_CUE = re.compile(r"\b(?:mc|dot|reference|ref|load\s*(?:#|number|id)|po\s*(?:#|number))\s*[:#-]?\s*$", re.I)
@@ -1063,9 +1066,12 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
         classification["protected"] = list(dict.fromkeys(classification["protected"] + lexical_protected))
         if classification.get("intent") == "acceptance" and "price_accepted" not in classification["protected"]:
             classification["protected"].append("price_accepted")
+    if MIXED_QUOTED_RATE.search(text) and "?" in text:
+        classification["ambiguous_offer"] = True
+        classification["offer"] = None
+        classification["rate_per_mile"] = None
+        classification["kind"] = "ambiguous_rate"
     storage.update("freight_messages", message["id"], {"classification": classification})
-    if classification.get("offer") is not None and not classification["ambiguous_offer"]:
-        _record_negotiation_event(thread["id"], message["id"], "offer", classification["offer"], {"source": "total_rate"}, storage)
     # A clear close or factoring denial is not an invitation to keep negotiating.
     # Do not override model uncertainty for other messages.
     if classification.get("intent") == "closed" or (classification.get("source") != "gemini" and CLOSED_REPLY.search(text)):
