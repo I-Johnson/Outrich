@@ -30,6 +30,18 @@ PROTECTED_PATTERNS = {
     ),
     "rate_confirmation": re.compile(r"\b(rate[\s_-]*con(?:firmation)?|confirmation attached|sign(?:ed)? confirmation)\b", re.I),
     "price_accepted": re.compile(r"\b(we accept|accepted|that works|rate works|book it|you got it|agreed|deal|confirmed at)\b", re.I),
+    # These terms change the job, payment risk, or truck obligations. A rate
+    # counter alone is not an answer to them, even if the model misses them.
+    "operational_terms": re.compile(
+        r"\b(?:dedicated\s+(?:carrier|lane)|\d+\s+loads?\s+a\s+day|"
+        r"hook\s+and\s+(?:drop|live)|factoring\s+(?:company|denied|won't|will\s+not)|"
+        r"credit\s+rating|\bTWIC\b|oversize\s+permits?|escorts?|"
+        r"self[ -]?load|\bPPE\b|\b(?:two|three|multiple|[2-9])\s+(?:pickups?|drops?)|"
+        r"\d+\s*°?\s*F\b.{0,25}\bcontinuous\b|"
+        r"(?:authority|MC)\s+for\s+at\s+least|home\s+time|"
+        r"cannot\s+legally\s+(?:take|haul)|hazmat\s+endorsement|"
+        r"send\s+(?:photos?|BOL|POD)\b)\b", re.I),
+    "rate_refused": re.compile(r"\b(?:can(?:not|'t)|won't|unable\s+to)\s+(?:get|go|come|do)\s+(?:up\s+)?to\s+\$?\s*\d", re.I),
 }
 TEAM_QUESTION = re.compile(r"\b(true team|team truck|team drivers?|solo or team|is (?:it|this) a team)\b", re.I)
 EQUIPMENT_QUESTION = re.compile(
@@ -403,6 +415,7 @@ def extract_numeric_facts(body: str) -> list[dict[str, Any]]:
         miles_suffix = bool(re.match(r"\s*(?:miles?|mi)\b", after, re.I))
         loaded_miles_suffix = bool(re.match(r"\s*loaded\s+(?:miles?|mi)\b", after, re.I))
         deadhead_cue = bool(re.search(r"\bdeadhead(?:\s+miles?)?\s*[:=-]?\s*$", before, re.I))
+        deadhead_suffix = bool(re.match(r"\s*deadhead\s+(?:miles?|mi)\b", after, re.I))
         unit = "unknown"
         if any(start < date_end and end > date_start for date_start, date_end in dates):
             unit = "date"
@@ -412,8 +425,8 @@ def extract_numeric_facts(body: str) -> list[dict[str, Any]]:
             unit = "time"
         elif weight_suffix:
             unit = "weight"
-        elif miles_suffix or loaded_miles_suffix:
-            unit = "deadhead_miles" if deadhead_cue else "miles"
+        elif miles_suffix or loaded_miles_suffix or deadhead_suffix:
+            unit = "deadhead_miles" if deadhead_cue or deadhead_suffix else "miles"
         elif re.match(r"\s*(?:/\s*(?:loaded\s+)?mi(?:le)?s?|per\s+(?:loaded\s+)?mi(?:le)?|rpm)\b", after, re.I) or re.search(r"\b(?:rpm|per\s+mile)\s*[:=-]?\s*$", before, re.I):
             unit = "rate_per_mile"
         elif IDENTIFIER_CUE.search(before):
@@ -833,7 +846,10 @@ def _counter_value(load: dict, mission: dict, offer: float) -> float | None:
     loaded = _number(load.get("loaded_miles")) if load.get("loaded_miles_verified") else None
     deadhead = _number(load.get("deadhead_miles")) if load.get("deadhead_miles_verified") else None
     all_in = loaded + deadhead if loaded is not None and deadhead is not None else None
-    return round(target_rpm * all_in / 25) * 25 if target_rpm and all_in else None
+    if target_rpm and all_in:
+        # Nearest-$25 rounding must never pull a counter below an active floor.
+        return max(round(target_rpm * all_in / 25) * 25, _required_floor(load, mission) or 0, offer)
+    return None
 
 
 def _booking_readiness_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
@@ -1050,6 +1066,13 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
     storage.update("freight_messages", message["id"], {"classification": classification})
     if classification.get("offer") is not None and not classification["ambiguous_offer"]:
         _record_negotiation_event(thread["id"], message["id"], "offer", classification["offer"], {"source": "total_rate"}, storage)
+    # A clear close or factoring denial is not an invitation to keep negotiating.
+    # Do not override model uncertainty for other messages.
+    if classification.get("intent") == "closed" or (classification.get("source") != "gemini" and CLOSED_REPLY.search(text)):
+        summary = "Broker says the load is unavailable or this conversation is finished."
+        _create_alert(thread["id"], "thread_closed", summary, storage)
+        _set_stage(thread, load, "closed", storage)
+        return {"action": "closed", "classification": classification, "summary": summary}
     protected = classification["protected"]
     if protected:
         labels = {
@@ -1057,18 +1080,14 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             "sensitive_driver_info": "Broker requested sensitive driver information.",
             "rate_confirmation": "Broker mentioned or sent a rate confirmation.",
             "price_accepted": "Broker appears to have accepted or confirmed a price.",
+            "operational_terms": "Broker mentioned special operating or payment terms; dispatcher review required.",
+            "rate_refused": "Broker refused a rate; review before making another offer.",
         }
         summary = " ".join(labels[item] for item in protected)
         _create_alert(thread["id"], protected[0], summary, storage)
         next_state = "booked" if prior_state == "booked" else "accepted_pending_review" if {"rate_confirmation", "price_accepted"} & set(protected) else "protected_review"
         _set_stage(thread, load, next_state, storage)
         return {"action": "alert", "classification": classification, "summary": summary}
-
-    if classification.get("intent") == "closed" or (classification.get("source") != "gemini" and CLOSED_REPLY.search(text)):
-        summary = "Broker says the load is unavailable or this conversation is finished."
-        _create_alert(thread["id"], "thread_closed", summary, storage)
-        _set_stage(thread, load, "closed", storage)
-        return {"action": "closed", "classification": classification, "summary": summary}
 
     if classification.get("intent") == "handoff":
         summary = classification.get("summary") or "Broker requested a human handoff."
