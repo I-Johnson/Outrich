@@ -389,17 +389,17 @@
           Dispatcher: <strong>{{ p.dispatcher_name or 'Dispatch' }}</strong> {% if p.dispatcher_phone %}({{ p.dispatcher_phone }}){% endif %}
         </div>
         {% endif %}
-        <div style="font-size:12px;margin-top:6px">
-          {% if p.availability_status == 'off' %}<span style="color:#dc2626;font-weight:700">Off duty</span>
-          {% elif p.availability_status == 'booked' %}<span style="color:#b45309;font-weight:700">Booked</span>
-          {% else %}<span style="color:#15803d;font-weight:700">Available</span>{% endif %}
-          {% if p.available_from %}<span style="color:var(--muted)"> from {{ p.available_from }}</span>{% endif %}
+        <div style="margin-top:6px">
+          {% if p.availability_status == 'off' %}<span class="fx-avail off">Off duty</span>
+          {% elif p.availability_status == 'booked' %}<span class="fx-avail booked">Booked</span>
+          {% else %}<span class="fx-avail available">Available</span>{% endif %}
+          {% if p.available_from %}<span class="fx-avail until">from {{ p.available_from }}</span>{% endif %}
         </div>
       </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #f1f5f9;margin-top:8px">
         <span style="font-size:11px;color:var(--muted)">
-          Shareable: {{ p.shareable_fields|join(', ') if p.shareable_fields else 'None checked' }}
+          Shareable: {{ p.shareable_labels|join(', ') if p.shareable_labels else 'Nothing shared without asking' }}
         </span>
         <div style="display:flex;gap:8px;align-items:center">
           <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=trucks&profile_id={{ p.id }}">Edit truck</a>

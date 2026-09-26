@@ -999,6 +999,30 @@ class FreightStopsTests(unittest.TestCase):
         self.assertEqual([s['city'] for s in stops], ['Tempe', 'Phoenix', 'Dallas'])
         self.assertTrue(all(s['verified'] for s in stops))
 
+    def test_fcfs_stop_confirms_without_appointment(self):
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': '', 'evidence': 'deliver Dallas FCFS'},
+        ]}, 'msg-1', self.storage)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='', limit=1)[0]
+        confirmed = freight_module.verify_load_stop(stop['id'], {'fcfs': 'yes'}, self.storage)
+        self.assertTrue(confirmed['verified'])
+        self.assertEqual(confirmed['appointment'], 'FCFS')
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        self.assertEqual(freight_module._booking_readiness_blockers(load, mission, profile, self.storage), [])
+
+    def test_manual_add_stop_appends_confirmed(self):
+        load = self._load()
+        added = freight_module.add_load_stop(load['id'], {'kind': 'pickup', 'city': 'Tucson', 'state': 'AZ', 'facility_name': ' Depot ', 'appointment': '', 'fcfs': 'yes'}, self.storage)
+        self.assertTrue(added['verified'])
+        self.assertEqual(added['appointment'], 'FCFS')
+        self.assertEqual(added['seq'], 1)
+        second = freight_module.add_load_stop(load['id'], {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'appointment': 'Tue 1pm'}, self.storage)
+        self.assertEqual(second['seq'], 2)
+        with self.assertRaises(ValueError):
+            freight_module.add_load_stop(load['id'], {'kind': 'pickup', 'city': 'Dallas', 'state': 'Texas'}, self.storage)
+
     def test_verify_load_stop_requires_appointment(self):
         load = self._load()
         freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
