@@ -346,7 +346,11 @@
     {% if L.booking %}
     {% set B = L.booking %}
     <div>
-      <h3>Booking <span class="fx-source" style="margin-left:6px">{{ B.status.replace('_', ' ') }}</span></h3>
+      {% set step_label = {'agreed': 'Step 1 of 3: rate confirmation', 'rate_con_review': 'Step 2 of 3: review the rate con', 'booked': 'Booked', 'cancelled': 'Cancelled'} %}
+      {% if B.status == 'rate_con_review' and B.rate_con_reviewed and not B.driver_handoff_approved %}{% set step_text = 'Step 3 of 3: approve the driver handoff' %}
+      {% elif B.status == 'rate_con_review' and B.rate_con_reviewed and B.driver_handoff_approved %}{% set step_text = 'Ready to book' %}
+      {% else %}{% set step_text = step_label.get(B.status, B.status.replace('_', ' ')) %}{% endif %}
+      <h3>Booking <span class="fx-source" style="margin-left:6px">{{ step_text }}</span></h3>
       <div class="fx-facts">
         <div class="k">Agreed rate</div><div class="v num">${{ '{:,}'.format(B.agreed_rate|int) }}</div><div class="s"><svg class="i sm"><use href="#i-check"/></svg></div>
         {% if B.snapshot.origin %}<div class="k">Route</div><div class="v">{{ B.snapshot.origin }} → {{ B.snapshot.destination }}</div><div class="s"></div>{% endif %}
@@ -369,24 +373,25 @@
       <details style="margin-top:10px">
         <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Enter rate confirmation</summary>
         <form action="/freight/bookings/{{ B.id }}/rate-con" method="post" class="fx-verify-form">
-          <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_amount|int if B.rate_con_amount is not none else '' }}" required></label>
-          <label>Pickup city<input name="pickup_city" placeholder="City"></label>
-          <label>State<input name="pickup_state" maxlength="2" placeholder="AZ"></label>
-          <label>Delivery city<input name="delivery_city" placeholder="City"></label>
-          <label>State<input name="delivery_state" maxlength="2" placeholder="TX"></label>
-          <label>Pickup date<input type="date" name="pickup_date"></label>
-          <label>Equipment<input name="equipment" placeholder="e.g. Dry Van"></label>
-          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1"></label>
+          <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_amount|int if B.rate_con_amount is not none else (B.agreed_rate|int) }}" required></label>
+          <label>Pickup city<input name="pickup_city" placeholder="City" value="{{ L.origin_city or '' }}"></label>
+          <label>State<input name="pickup_state" maxlength="2" placeholder="AZ" value="{{ L.origin_state or '' }}"></label>
+          <label>Delivery city<input name="delivery_city" placeholder="City" value="{{ L.destination_city if L.destination_city != 'Open destinations' else '' }}"></label>
+          <label>State<input name="delivery_state" maxlength="2" placeholder="TX" value="{{ L.destination_state or '' }}"></label>
+          <label>Pickup date<input type="date" name="pickup_date" value="{{ L.pickup_date or '' }}"></label>
+          <label>Equipment<input name="equipment" placeholder="e.g. Dry Van" value="{{ L.equipment_type or '' }}"></label>
+          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ L.weight_lbs|int if L.weight_lbs else '' }}"></label>
           <button type="submit" class="fx-btn primary wide" style="justify-content:center">Compare rate con</button>
         </form>
       </details>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         {% if B.status == 'rate_con_review' and not B.rate_con_reviewed %}
         <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="approve"><button type="submit" class="fx-btn sm primary">Approve rate con{{ ' with differences' if B.rate_con_diffs else '' }}</button></form>
-        <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="reject"><button type="submit" class="fx-btn sm">Send back</button></form>
+        <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="reject"><button type="submit" class="fx-btn sm">Reject / keep negotiating</button></form>
         {% endif %}
         {% if B.rate_con_reviewed and not B.driver_handoff_approved %}
         <form action="/freight/bookings/{{ B.id }}/handoff" method="post"><button type="submit" class="fx-btn sm primary">Approve driver handoff</button></form>
+        <p class="fx-muted" style="font-size:12px;width:100%;margin:2px 0 0">Approving allows the driver name, CDL, and truck VIN to go to this broker. Nothing is sent until you send it.</p>
         {% endif %}
         {% if B.rate_con_reviewed and B.driver_handoff_approved %}
         <form action="/freight/bookings/{{ B.id }}/book" method="post"><button type="submit" class="fx-btn sm primary">Mark booked</button></form>
@@ -461,7 +466,11 @@
       <select name="truck_profile_id" id="truck_select" required>
         <option value="">Choose truck</option>
         {% for p in profiles if p.active %}
+        {% if p.availability_status in ['booked', 'off'] %}
+        <option value="{{p.id}}" disabled>{{p.name}} · {{p.current_city}}, {{p.current_state}} · {{ 'booked on a load' if p.availability_status == 'booked' else 'off duty' }}</option>
+        {% else %}
         <option value="{{p.id}}" {% if loop.first and loop.last %}selected{% endif %}>{{p.name}} · {{p.current_city}}, {{p.current_state}}</option>
+        {% endif %}
         {% endfor %}
       </select>
     </label>
