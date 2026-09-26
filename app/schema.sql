@@ -240,6 +240,23 @@ CREATE TABLE IF NOT EXISTS freight_load_stops (
 );
 CREATE INDEX IF NOT EXISTS freight_load_stops_load_idx ON freight_load_stops(load_id, seq);
 
+CREATE TABLE IF NOT EXISTS freight_bookings (
+  id TEXT PRIMARY KEY,
+  load_id TEXT NOT NULL REFERENCES freight_loads(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES freight_threads(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'agreed' CHECK (status IN ('agreed', 'rate_con_review', 'booked', 'cancelled')),
+  agreed_rate REAL NOT NULL,
+  snapshot TEXT NOT NULL DEFAULT '{}',
+  rate_con_amount REAL,
+  rate_con_diffs TEXT NOT NULL DEFAULT '[]',
+  rate_con_reviewed INTEGER NOT NULL DEFAULT 0,
+  driver_handoff_approved INTEGER NOT NULL DEFAULT 0,
+  source_message_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_bookings_thread_idx ON freight_bookings(thread_id, created_at);
+
 CREATE TABLE IF NOT EXISTS freight_threads (
   id TEXT PRIMARY KEY,
   load_id TEXT NOT NULL REFERENCES freight_loads(id) ON DELETE CASCADE,
