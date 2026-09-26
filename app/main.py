@@ -1004,6 +1004,10 @@ async def freight_load_send(request: Request):
     profile = db.get("freight_truck_profiles", profile_id) if profile_id else None
     if not profile:
         return RedirectResponse("/freight?notice=Choose+a+truck+profile", 303)
+    availability = str(profile.get("availability_status") or "available")
+    if availability in {"booked", "off"}:
+        reason = "booked+on+a+load" if availability == "booked" else "off+duty"
+        return RedirectResponse(f"/freight?notice={quote(profile.get('name') or 'That truck')}+is+{reason};+pick+an+available+truck", 303)
     freight_settings = db.get("freight_settings", 1) or {}
     sender_account = str(freight_settings.get("default_sender_account") or "")
     active_senders = [s for s in list_gmail_senders(active_only=True, storage=db, cfg=db.get("settings", 1) or {}) if s.get("provider", "gmail") == "gmail"]
