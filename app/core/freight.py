@@ -117,6 +117,75 @@ def truck_availability(profile: dict, load: dict | None = None, storage=None) ->
     return {"status": status, "detail": detail}
 
 
+BROKER_CREDIT_STATUSES = {"unknown", "approved", "denied", "exempt"}
+BROKER_SETUP_STATUSES = {"not_started", "packet_sent", "complete"}
+
+
+def _email_domain(email: str) -> str:
+    return str(email or "").split("@")[-1].strip().lower() if "@" in str(email or "") else ""
+
+
+def resolve_broker(email: str, company: str, storage=None) -> dict | None:
+    """Find or create the broker identity for an email address.
+
+    Matching is exact-email first, then company domain. A new broker starts
+    unknown / not_started: credit approval and setup are explicit human steps.
+    """
+    storage = storage or store
+    email = str(email or "").strip().lower()
+    if not email:
+        return None
+    domain = _email_domain(email)
+    brokers = storage.list("freight_brokers", order="", limit=1000)
+    for broker in brokers:
+        if email in [str(item).lower() for item in broker.get("emails") or []]:
+            return broker
+    for broker in brokers:
+        if domain and (broker.get("domain") or "").lower() == domain:
+            emails = list(broker.get("emails") or [])
+            if email not in emails:
+                emails.append(email)
+                broker = storage.update("freight_brokers", broker["id"], {"emails": emails, "updated_at": now_iso()})
+            return broker
+    stamp = now_iso()
+    return storage.insert("freight_brokers", {
+        "id": new_id(),
+        "legal_name": str(company or "").strip(),
+        "domain": domain,
+        "emails": [email],
+        "credit_status": "unknown",
+        "setup_status": "not_started",
+        "blocked": False,
+        "created_at": stamp,
+        "updated_at": stamp,
+    })
+
+
+def update_broker(broker_id: str, values: dict[str, Any], storage=None) -> dict:
+    """Dispatcher records broker credit and setup decisions."""
+    storage = storage or store
+    broker = storage.get("freight_brokers", broker_id)
+    if not broker:
+        raise ValueError("Broker not found")
+    credit = str(values.get("credit_status") or broker.get("credit_status") or "unknown").strip().lower()
+    if credit not in BROKER_CREDIT_STATUSES:
+        raise ValueError("Unknown credit status")
+    setup = str(values.get("setup_status") or broker.get("setup_status") or "not_started").strip().lower()
+    if setup not in BROKER_SETUP_STATUSES:
+        raise ValueError("Unknown setup status")
+    score = _number(values.get("credit_score"))
+    return storage.update("freight_brokers", broker_id, {
+        "legal_name": str(values.get("legal_name") or broker.get("legal_name") or "").strip(),
+        "mc_number": str(values.get("mc_number") or broker.get("mc_number") or "").strip(),
+        "credit_status": credit,
+        "credit_score": score if score is not None else broker.get("credit_score"),
+        "credit_notes": str(values.get("credit_notes") or broker.get("credit_notes") or "").strip(),
+        "setup_status": setup,
+        "blocked": bool(values.get("blocked")) if "blocked" in values else bool(broker.get("blocked")),
+        "updated_at": now_iso(),
+    })
+
+
 # A broker describing a price as "quoted" while asking another question has not
 # made a clean new offer. This check runs after model interpretation as well.
 MIXED_QUOTED_RATE = re.compile(r"\bquoted\s+\$?\d[\d,]*(?:\.\d+)?\b", re.I)
@@ -1001,6 +1070,14 @@ def _booking_readiness_blockers(load: dict, mission: dict, profile: dict, storag
         availability = truck_availability(profile, load, storage)
         if availability["status"] != "available":
             blockers.append(f"truck availability ({availability['detail'] or availability['status']})")
+    if load.get("broker_id"):
+        broker = (storage or store).get("freight_brokers", load["broker_id"]) or {}
+        if broker.get("blocked"):
+            blockers.append(f"blocked broker ({broker.get('legal_name') or broker.get('domain') or 'unknown'})")
+        if broker.get("credit_status") not in {"approved", "exempt"}:
+            blockers.append("broker credit approval")
+        if broker.get("setup_status") != "complete":
+            blockers.append("broker setup packet")
     if any((mission.get("permissions") or {}).get(key) for key in ("auto_profile_reply", "auto_counter", "auto_pass")):
         lane_issue = auto_lane_issue(mission)
         if lane_issue:
@@ -1049,9 +1126,14 @@ def _auto_send_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
 
 def _broker_detail_labels(blockers: list[str], readings: list[dict[str, Any]]) -> list[str]:
     """Turn booking gaps into questions the broker can actually answer."""
+    internal = {"active truck profile and mission", "truck weight capacity", "actual deadhead miles",
+                "broker credit approval", "broker setup packet"}
     requested = [
         item for item in blockers
-        if item not in {"active truck profile and mission", "truck weight capacity", "actual deadhead miles"}
+        if item not in internal
+        and not item.startswith("truck availability (")
+        and not item.startswith("blocked broker (")
+        and not re.match(r"^stop \d+ ", item)
     ]
     if "pickup and delivery schedule" in requested:
         has_pickup = any(row.get("pickup_schedule_evidence") for row in readings)
@@ -1251,6 +1333,9 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
     mission = storage.get("freight_missions", load.get("mission_id")) or {}
     profile_id = load.get("truck_profile_id") or mission.get("truck_profile_id")
     profile = storage.get("freight_truck_profiles", profile_id) or {}
+    broker = resolve_broker(load.get("broker_email"), load.get("broker_company"), storage)
+    if broker and not load.get("broker_id"):
+        load = storage.update("freight_loads", load["id"], {"broker_id": broker["id"], "updated_at": now_iso()})
     if not mission.get("active", True) or not profile.get("active", True):
         summary = "Truck profile or mission is inactive. Review this broker reply before continuing."
         _create_alert(thread["id"], "inactive_configuration", summary, storage)
