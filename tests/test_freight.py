@@ -378,6 +378,12 @@ class FreightConversationTests(unittest.TestCase):
         result = self.inbound("Max is 4200")
         self.assertEqual(result["action"], "alert")
         self.assertIn("Counter limit", result["summary"])
+        booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
+        freight_module.submit_rate_con(booking["id"], {"total_rate": "4200"}, self.storage)
+        freight_module.review_rate_con(booking["id"], True, self.storage)
+        freight_module.approve_driver_handoff(booking["id"], self.storage)
+        linked_broker = self.storage.get("freight_loads", self.load_id).get("broker_id")
+        freight_module.update_broker(linked_broker, {"credit_status": "approved", "setup_status": "complete"}, self.storage)
         set_thread_state(self.thread_id, "booked", self.storage)
         booked = self.inbound("Can do $4,500. Where is the truck now?")
         self.assertEqual(booked["action"], "alert")
@@ -495,16 +501,29 @@ class FreightConversationTests(unittest.TestCase):
                 "origin_city": "Phoenix", "origin_state": "AZ", "equipment_type": "dry van",
                 "destination_city": "Dallas", "destination_state": "TX", "pickup_date": "2026-09-23",
                 "loaded_miles": "1068", "deadhead_miles": "75", "weight_lbs": "40000",
+                "origin_confirmed": "yes", "equipment_confirmed": "yes", "pickup_date_confirmed": "yes",
                 "schedule_confirmed": "yes",
             }, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertTrue(self.storage.get("freight_loads", self.load_id)["destination_verified"])
+            # Without a recorded agreement, booking is refused - the old manual shortcut bypassed every gate.
+            refused = client.post(f"/freight/threads/{self.thread_id}/state", data={"state": "booked"}, follow_redirects=False)
+            self.assertEqual(refused.status_code, 400)
+            booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
+            freight_module.submit_rate_con(booking["id"], {"total_rate": "4200"}, self.storage)
+            freight_module.review_rate_con(booking["id"], True, self.storage)
+            freight_module.approve_driver_handoff(booking["id"], self.storage)
+            broker = freight_module.resolve_broker("rep@freightbroker.example", "FreightBroker", self.storage)
+            self.storage.update("freight_loads", self.load_id, {"broker_id": broker["id"]})
+            freight_module.update_broker(broker["id"], {"credit_status": "approved", "setup_status": "complete"}, self.storage)
             response = client.post(f"/freight/threads/{self.thread_id}/state", data={"state": "booked"}, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "booked")
             page = client.get(f"/freight?load_id={self.load_id}")
             self.assertEqual(page.status_code, 200)
-            self.assertIn("Reopen negotiation", page.text)
+            # A booked thread no longer offers "Reopen negotiation": the booked snapshot is immutable.
+            self.assertNotIn("Reopen negotiation", page.text)
+            self.assertIn("Booked", page.text)
             self.assertIn("Selected mission", page.text)
             self.assertIn("Desired delivery", page.text)
             self.assertIn("Truck weight limit", page.text)

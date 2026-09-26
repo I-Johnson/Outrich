@@ -374,7 +374,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 
 @media (max-width: 1180px) {
   .fx-work { grid-template-columns: 280px minmax(0, 1fr); }
-  .fx-rail { display: none; }
+  .fx-rail { grid-column: 1 / -1; grid-row: auto; }
   .fx-grid2 { grid-template-columns: 1fr; }
   .fx-tpl { grid-template-columns: 1fr; }
 }
