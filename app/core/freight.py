@@ -96,8 +96,38 @@ def _sensitive_profile_values_in_text(profile: dict, text: str) -> list[str]:
     return hits
 
 
+def _load_window(load: dict, storage=None) -> tuple[str, str] | None:
+    """Occupied window for a load: pickup date through delivery.
+
+    Delivery comes from the last delivery stop's appointment date when known,
+    otherwise from loaded miles at 500 miles per transit day. A truck cannot be
+    in two places at once, so overlapping windows conflict - same-date-only
+    checks miss multi-day transit.
+    """
+    from datetime import date as _date, timedelta as _delta
+    pickup = str(load.get("pickup_date") or "")[:10]
+    if not pickup:
+        return None
+    delivery = ""
+    if load.get("id"):
+        stops = (storage or store).list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50)
+        dates = [_normalize_con_date(s.get("appointment")) for s in stops
+                 if not s.get("removed_at") and (s.get("kind") or "") == "delivery" and s.get("appointment")]
+        dates = [d for d in dates if re.match(r"^\d{4}-\d{2}-\d{2}$", d)]
+        if dates:
+            delivery = max(dates)
+    if not delivery:
+        miles = _number(load.get("loaded_miles")) or 0
+        days = max(1, -(-int(miles) // 500))
+        try:
+            delivery = (_date.fromisoformat(pickup) + _delta(days=days)).isoformat()
+        except ValueError:
+            return None
+    return (pickup, delivery)
+
+
 def truck_availability(profile: dict, load: dict | None = None, storage=None) -> dict[str, str]:
-    """Live availability of a truck, including booked-load conflicts for a load date."""
+    """Live availability of a truck, including booked-load window conflicts."""
     status = str(profile.get("availability_status") or "available")
     detail = ""
     if status == "off":
@@ -105,13 +135,18 @@ def truck_availability(profile: dict, load: dict | None = None, storage=None) ->
     elif status == "booked":
         detail = "Truck is marked booked"
     pickup = str((load or {}).get("pickup_date") or "")
-    if status == "available" and pickup and profile.get("id"):
+    window = _load_window(load, storage) if load else None
+    if status == "available" and window and profile.get("id"):
         others = (storage or store).list(
-            "freight_loads", {"truck_profile_id": profile["id"], "status": "booked", "pickup_date": pickup},
-            order="", limit=10)
-        others = [row for row in others if row["id"] != (load or {}).get("id")]
-        if others:
-            status, detail = "conflict", f"Already booked for {pickup}"
+            "freight_loads", {"truck_profile_id": profile["id"], "status": "booked"},
+            order="", limit=50)
+        for row in others:
+            if row["id"] == (load or {}).get("id"):
+                continue
+            other = _load_window(row, storage)
+            if other and window[0] <= other[1] and other[0] <= window[1]:
+                status, detail = "conflict", f"Booked {other[0]} to {other[1]}"
+                break
     available_from = str(profile.get("available_from") or "")
     if status == "available" and available_from and pickup and pickup < available_from:
         status, detail = "conflict", f"Not available until {available_from}"
@@ -203,7 +238,7 @@ BOOKING_STATUSES = {"agreed", "rate_con_review", "booked", "cancelled"}
 
 def _agreement_snapshot(load: dict, broker: dict | None, storage) -> dict:
     """Immutable record of what was agreed, captured at acceptance time."""
-    stops = storage.list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50)
+    stops = [s for s in storage.list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50) if not s.get("removed_at")]
     return {
         "agreed_at": now_iso(),
         "origin": route_label(load.get("origin_city"), load.get("origin_state")),
@@ -431,9 +466,19 @@ def mark_booked(booking_id: str, storage=None) -> dict:
     blockers = _booking_readiness_blockers(load, mission, profile, storage)
     if blockers:
         raise ValueError("Booking is not ready: " + ", ".join(blockers))
+    # Atomic reservation: the compare-and-set claim closes the read-then-write
+    # race - a second concurrent booking loses the claim instead of double-booking.
+    if not storage.claim_status_not("freight_loads", load["id"], "booked", "booked"):
+        raise ValueError("Load is already booked")
+    if profile.get("id"):
+        # Re-verify the truck window after claiming: a concurrent booking for the
+        # same truck may have landed between the readiness check and the claim.
+        conflict = truck_availability({**profile, "availability_status": "available"}, load, storage)
+        if conflict["status"] == "conflict":
+            storage.update("freight_loads", load["id"], {"status": load.get("status") or "negotiating", "updated_at": now_iso()})
+            raise ValueError("Booking is not ready: truck availability (" + (conflict["detail"] or "conflict") + ")")
     stamp = now_iso()
     booking = storage.update("freight_bookings", booking_id, {"status": "booked", "updated_at": stamp})
-    storage.update("freight_loads", load["id"], {"status": "booked", "updated_at": stamp})
     if profile.get("id"):
         storage.update("freight_truck_profiles", profile["id"], {"availability_status": "booked", "updated_at": stamp})
     thread = storage.get("freight_threads", booking["thread_id"])
@@ -1056,6 +1101,8 @@ def verify_load_stop(stop_id: str, values: dict[str, Any], storage=None) -> dict
     stop = storage.get("freight_load_stops", stop_id)
     if not stop:
         raise ValueError("Freight stop not found")
+    if stop.get("removed_at"):
+        raise ValueError("This stop was dropped from the broker's latest route")
     city = str(values.get("city") or stop.get("city") or "").strip()
     state = str(values.get("state") or stop.get("state") or "").strip().upper()
     if not city or len(state) != 2:
@@ -1075,11 +1122,14 @@ def verify_load_stop(stop_id: str, values: dict[str, Any], storage=None) -> dict
 
 
 def _sync_load_stops(load: dict, classification: dict, message_id: str, storage) -> None:
-    """Persist evidence-backed stops from the latest broker message, in route order.
+    """Reconcile evidence-backed stops from the latest broker message, in route order.
 
-    Stops are matched by kind + city. A broker update that changes a stop's
-    facility or appointment clears that stop's verification so the dispatcher
-    re-confirms it; unchanged stops keep their verification.
+    Stops are matched by occurrence: the broker's list defines the full route,
+    so repeat stops in the same city each get their own row, position sets seq,
+    and a stop that disappears from the route is marked removed with a review
+    alert instead of silently lingering or vanishing. A broker update that
+    changes a stop's facility or appointment clears that stop's verification;
+    unchanged stops keep theirs, and a pure reorder never clears it.
     """
     if classification.get("source") != "gemini":
         return
@@ -1087,15 +1137,18 @@ def _sync_load_stops(load: dict, classification: dict, message_id: str, storage)
     if not stops:
         return
     existing = storage.list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50)
+    active = [row for row in existing if not row.get("removed_at")]
     stamp = now_iso()
-    next_seq = max([int(stop.get("seq") or 0) for stop in existing], default=0) + 1
-    for stop in stops:
-        match = next((row for row in existing
-                      if row.get("kind") == stop["kind"]
+    matched_ids: set[str] = set()
+    for position, stop in enumerate(stops, start=1):
+        match = next((row for row in active
+                      if row["id"] not in matched_ids
+                      and row.get("kind") == stop["kind"]
                       and (row.get("city") or "").casefold() == stop["city"].casefold()
                       and (row.get("state") or "").upper() == stop["state"]), None)
         if match:
-            updates: dict[str, Any] = {"evidence": stop["evidence"], "source_message_id": message_id, "updated_at": stamp}
+            matched_ids.add(match["id"])
+            updates: dict[str, Any] = {"seq": position, "evidence": stop["evidence"], "source_message_id": message_id, "updated_at": stamp}
             changed = False
             if stop.get("facility") and stop["facility"] != (match.get("facility_name") or ""):
                 updates["facility_name"] = stop["facility"]
@@ -1111,7 +1164,7 @@ def _sync_load_stops(load: dict, classification: dict, message_id: str, storage)
             storage.insert("freight_load_stops", {
                 "id": new_id(),
                 "load_id": load["id"],
-                "seq": next_seq,
+                "seq": position,
                 "kind": stop["kind"],
                 "facility_name": stop.get("facility") or "",
                 "city": stop["city"],
@@ -1124,8 +1177,15 @@ def _sync_load_stops(load: dict, classification: dict, message_id: str, storage)
                 "created_at": stamp,
                 "updated_at": stamp,
             })
-            next_seq += 1
-
+    removed = [row for row in active if row["id"] not in matched_ids]
+    for row in removed:
+        storage.update("freight_load_stops", row["id"], {"removed_at": stamp, "updated_at": stamp})
+    if removed:
+        threads = storage.list("freight_threads", {"load_id": load["id"]}, order="", limit=1)
+        if threads:
+            labels = ", ".join(f"{row.get('kind')} {row.get('city')}{', ' + row.get('state') if row.get('state') else ''}" for row in removed)
+            _create_alert(threads[0]["id"], "stop_removed",
+                          f"The broker's latest update dropped stop(s): {labels}. Confirm the new route before booking.", storage)
 
 def _record_negotiation_event(thread_id: str, source_id: str, event_type: str, amount: float, details: dict | None = None, storage=None) -> None:
     storage = storage or store
@@ -1325,7 +1385,7 @@ def _counter_value(load: dict, mission: dict, offer: float) -> float | None:
 def _booking_readiness_blockers(load: dict, mission: dict, profile: dict, storage=None) -> list[str]:
     """Facts that must be resolved before the carrier commits to the load."""
     blockers: list[str] = []
-    stops = (storage or store).list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50) if load.get("id") else []
+    stops = [s for s in ((storage or store).list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50) if load.get("id") else []) if not s.get("removed_at")]
     for stop in stops:
         label = f"stop {stop.get('seq')} {stop.get('kind')} ({stop.get('city')}{', ' + stop.get('state') if stop.get('state') else ''})"
         if not stop.get("verified"):

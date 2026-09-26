@@ -935,6 +935,70 @@ class FreightStopsTests(unittest.TestCase):
         blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
         self.assertEqual(blockers, ['stop 2 delivery (Dallas, TX) confirmed'])
 
+    def test_repeat_stops_same_city_each_get_a_row(self):
+        # Two pickups in the same city are real; kind+city dedupe must not collapse them.
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'A Warehouse', 'appointment': 'Mon 8am', 'evidence': 'pick up A Warehouse Phoenix'},
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'B Depot', 'appointment': 'Mon 1pm', 'evidence': 'then pick up B Depot Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-1', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual(len(stops), 3)
+        self.assertEqual([s['facility_name'] for s in stops[:2]], ['A Warehouse', 'B Depot'])
+        # A re-sync of the same route matches by occurrence and keeps both rows stable.
+        first_ids = [s['id'] for s in stops]
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'A Warehouse', 'appointment': 'Mon 8am', 'evidence': 'pick up A Warehouse Phoenix'},
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'B Depot', 'appointment': 'Mon 1pm', 'evidence': 'then pick up B Depot Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-2', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual([s['id'] for s in stops], first_ids)
+
+    def test_dropped_stop_is_marked_removed_with_review_alert(self):
+        load = self._load()
+        self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load['id'], 'sender_account': '1', 'recipient_email': 'b@x.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': now_iso(), 'created_at': now_iso(), 'updated_at': now_iso()})
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-1', self.storage)
+        pickup = self.storage.list('freight_load_stops', {'load_id': load['id'], 'kind': 'pickup'}, order='', limit=1)[0]
+        freight_module.verify_load_stop(pickup['id'], {'appointment': 'Mon 8am'}, self.storage)
+        # The broker's next message drops the pickup stop.
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-2', self.storage)
+        gone = self.storage.get('freight_load_stops', pickup['id'])
+        self.assertIsNotNone(gone['removed_at'])
+        alerts = self.storage.list('freight_alerts', {'kind': 'stop_removed'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+        # Removed stops no longer block booking and cannot be verified.
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertNotIn('stop 1 pickup (Phoenix, AZ) appointment', blockers)
+        with self.assertRaises(ValueError):
+            freight_module.verify_load_stop(pickup['id'], {'appointment': 'Mon 9am'}, self.storage)
+
+    def test_reordered_route_updates_seq_without_clearing_verification(self):
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix'},
+            {'kind': 'pickup', 'city': 'Tempe', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 11am', 'evidence': 'then Tempe'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-1', self.storage)
+        for stop in self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10):
+            freight_module.verify_load_stop(stop['id'], {}, self.storage)
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Tempe', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 11am', 'evidence': 'Tempe first now'},
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'then Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-2', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual([s['city'] for s in stops], ['Tempe', 'Phoenix', 'Dallas'])
+        self.assertTrue(all(s['verified'] for s in stops))
+
     def test_verify_load_stop_requires_appointment(self):
         load = self._load()
         freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
@@ -996,15 +1060,29 @@ class FreightDriverSafetyTests(unittest.TestCase):
         blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
         self.assertIn('truck availability (Truck is marked off duty)', blockers)
 
-    def test_booked_load_same_date_conflicts(self):
+    def test_booked_load_window_conflicts(self):
+        # A booked 1,000-mile load picked up 9/28 occupies the truck through 9/30
+        # (500 miles per transit day) - next-day pickups conflict too.
         self._load(status='booked', pickup_date='2026-09-28')
-        other = self._load(pickup_date='2026-09-28')
         profile = self.storage.get('freight_truck_profiles', self.profile_id)
-        availability = freight_module.truck_availability(profile, other, self.storage)
+        same_day = self._load(pickup_date='2026-09-28')
+        self.assertEqual(freight_module.truck_availability(profile, same_day, self.storage)['status'], 'conflict')
+        mid_transit = self._load(pickup_date='2026-09-30')
+        availability = freight_module.truck_availability(profile, mid_transit, self.storage)
         self.assertEqual(availability['status'], 'conflict')
-        free = self._load(pickup_date='2026-09-30')
-        availability = freight_module.truck_availability(profile, free, self.storage)
-        self.assertEqual(availability['status'], 'available')
+        self.assertIn('2026-09-30', availability['detail'])
+        after = self._load(pickup_date='2026-10-02')
+        self.assertEqual(freight_module.truck_availability(profile, after, self.storage)['status'], 'available')
+
+    def test_delivery_stop_appointment_extends_the_window(self):
+        booked = self._load(status='booked', pickup_date='2026-09-28')
+        stamp = now_iso()
+        self.storage.insert('freight_load_stops', {'id': new_id(), 'load_id': booked['id'], 'seq': 1, 'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility_name': '', 'appointment': '2026-10-05 13:00', 'evidence': 'deliver Dallas 10/5', 'source_message_id': 'm1', 'created_at': stamp, 'updated_at': stamp})
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        during = self._load(pickup_date='2026-10-04')
+        self.assertEqual(freight_module.truck_availability(profile, during, self.storage)['status'], 'conflict')
+        after = self._load(pickup_date='2026-10-06')
+        self.assertEqual(freight_module.truck_availability(profile, after, self.storage)['status'], 'available')
 
     def test_available_from_future_date_conflicts(self):
         self.storage.update('freight_truck_profiles', self.profile_id, {'available_from': '2026-10-01'})
@@ -1211,6 +1289,19 @@ class FreightBookingTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             freight_module.mark_booked(booking['id'], self.storage)
         self.assertIn('verified broker identity', str(ctx.exception))
+
+    def test_mark_booked_claim_is_atomic(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        # A concurrent booking claimed the load between the gate check and commit.
+        self.storage.update('freight_loads', self.load['id'], {'status': 'booked'})
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('already booked', str(ctx.exception))
+        # The losing booking is not marked booked.
+        self.assertNotEqual(self.storage.get('freight_bookings', booking['id'])['status'], 'booked')
 
     def test_rejected_rate_con_returns_to_agreed(self):
         booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)

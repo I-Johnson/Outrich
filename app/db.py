@@ -161,6 +161,9 @@ class SQLiteStore:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN weight_lbs REAL")
             if "broker_id" not in load_columns:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN broker_id TEXT")
+            stop_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_load_stops)")}
+            if "removed_at" not in stop_columns:
+                con.execute("ALTER TABLE freight_load_stops ADD COLUMN removed_at TEXT")
             booking_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_bookings)")}
             for column, ddl in (
                 ("rate_con_terms", "TEXT NOT NULL DEFAULT '{}'"),
@@ -201,7 +204,7 @@ class SQLiteStore:
             else: clauses.append(f"{key} = ?"); args.append(value)
         sql = f"SELECT {select} FROM {table}" + (" WHERE " + " AND ".join(clauses) if clauses else "")
         if order:
-            allowed = {"created_at", "updated_at", "sent_at", "scheduled_for", "uploaded_at", "business_name", "name", "id"}
+            allowed = {"created_at", "updated_at", "sent_at", "scheduled_for", "uploaded_at", "business_name", "name", "id", "seq"}
             parts = order.split(); col = parts[0] if parts[0] in allowed else "created_at"
             direction = "DESC" if len(parts) > 1 and parts[1].lower() == "desc" else "ASC"; sql += f" ORDER BY {col} {direction}"
         sql += " LIMIT ?"; args.append(limit)
@@ -236,6 +239,12 @@ class SQLiteStore:
     def claim_status(self, table: str, row_id: Any, expected: str, new_status: str) -> bool:
         with self.connect() as con:
             result = con.execute(f"UPDATE {table} SET status=?, updated_at=? WHERE id=? AND status=?", (new_status, now_iso(), row_id, expected))
+            con.commit()
+            return result.rowcount == 1
+
+    def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        with self.connect() as con:
+            result = con.execute(f"UPDATE {table} SET status=?, updated_at=? WHERE id=? AND status<>?", (new_status, now_iso(), row_id, disallowed))
             con.commit()
             return result.rowcount == 1
 
@@ -296,6 +305,9 @@ class SupabaseStore:
         rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}", json=values, headers={"Prefer": "return=representation"}); return rows[0] if rows else values
     def claim_status(self, table: str, row_id: Any, expected: str, new_status: str) -> bool:
         rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&status=eq.{quote(expected)}", json={"status": new_status, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
+        return bool(rows)
+    def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&status=neq.{quote(disallowed)}", json={"status": new_status, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
         return bool(rows)
     def delete(self, table: str, filters: dict[str, Any]):
         query = "&".join(f"{quote(k)}=eq.{quote(str(v))}" for k, v in filters.items())

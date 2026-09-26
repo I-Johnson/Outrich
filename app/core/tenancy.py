@@ -95,6 +95,14 @@ class OwnerStore:
                 return False
         return self.base.claim_status(table, row_id, expected, new_status)
 
+    def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        if table in OWNED_TABLES:
+            try:
+                self._require(table, row_id)
+            except LookupError:
+                return False
+        return self.base.claim_status_not(table, row_id, disallowed, new_status)
+
     def delete(self, table: str, filters: dict[str, Any]):
         if table in OWNED_TABLES:
             filters = {**filters, "owner_id": self.owner_id}

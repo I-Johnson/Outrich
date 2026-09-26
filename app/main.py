@@ -437,7 +437,7 @@ def freight_dashboard(request: Request, load_id: str = ""):
         alerts_by_thread.setdefault(str(alert.get("thread_id")), []).append(alert)
     pending_drafts = db.list("freight_drafts", {"status": "pending"}, order="created_at desc", limit=500)
     drafts_by_thread = {str(row["thread_id"]): row for row in pending_drafts}
-    all_stops = db.list("freight_load_stops", order="seq asc", limit=2000)
+    all_stops = [s for s in db.list("freight_load_stops", order="seq asc", limit=2000) if not s.get("removed_at")]
     stops_by_load: dict[str, list[dict]] = {}
     for stop in all_stops:
         stops_by_load.setdefault(str(stop.get("load_id")), []).append(stop)
