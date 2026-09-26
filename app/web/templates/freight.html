@@ -357,24 +357,26 @@
       </div>
       {% elif B.status == 'rate_con_review' %}
       {% set snap_stops = B.snapshot.stops or [] %}
-      {% if snap_stops|length > 2 %}
-      <p class="fx-muted fx-mt6-fs">Rate con matches on the compared fields (first pickup, final delivery, pickup date, equipment, weight, total). This route has {{ snap_stops|length }} stops - verify intermediate stops and appointments against the original rate con{% if B.rate_con_source_ref %} ({{ B.rate_con_source_ref }}){% endif %}.</p>
+      {% set con_limited = (snap_stops|length > 2) or (snap_stops | selectattr('appointment') | list) or (snap_stops | selectattr('facility') | list) %}
+      {% if con_limited %}
+      <p class="fx-muted fx-mt6-fs">Rate con matches on the compared fields (first pickup, final delivery, pickup date, equipment, weight, total). Verify intermediate stops, facilities and appointments against the original rate con{% if B.rate_con_source_ref and B.rate_con_source_ref.startswith('att:') %} (<a href="/freight/bookings/{{ B.id }}/rate-con.pdf">open PDF</a>){% endif %} before approving.</p>
       {% else %}
-      <p class="fx-muted fx-mt6-fs">Rate con matches the agreement exactly.</p>
+      <p class="fx-muted fx-mt6-fs">Rate con matches the agreement exactly{% if B.rate_con_source_ref and B.rate_con_source_ref.startswith('att:') %} (<a href="/freight/bookings/{{ B.id }}/rate-con.pdf">open PDF</a>){% endif %}.</p>
       {% endif %}
       {% endif %}
       {% if L.thread.id and B.status != 'booked' %}
       <details class="fx-mt10">
         <summary class="fx-muted fx-summary">Enter rate confirmation</summary>
         <form action="/freight/bookings/{{ B.id }}/rate-con" method="post" class="fx-verify-form">
-          <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_amount|int if B.rate_con_amount is not none else (B.agreed_rate|int) }}" required></label>
-          <label>Pickup city<input name="pickup_city" placeholder="City" value="{{ L.origin_city or '' }}"></label>
-          <label>State<input name="pickup_state" maxlength="2" placeholder="AZ" value="{{ L.origin_state or '' }}"></label>
-          <label>Delivery city<input name="delivery_city" placeholder="City" value="{{ '' if dest_open else L.destination_city }}"></label>
-          <label>State<input name="delivery_state" maxlength="2" placeholder="TX" value="{{ L.destination_state or '' }}"></label>
-          <label>Pickup date<input type="date" name="pickup_date" value="{{ L.pickup_date or '' }}"></label>
-          <label>Equipment<input name="equipment" placeholder="e.g. Dry Van" value="{{ L.equipment_type or '' }}"></label>
-          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ L.weight_lbs|int if L.weight_lbs else '' }}"></label>
+          <p class="fx-muted fx-mt6-fs">Transcribe the terms exactly as they appear on the broker's rate con - fields left blank are reported as unverified, never assumed to match.</p>
+          <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_terms.total_rate or '' }}" placeholder="{{ B.agreed_rate|int }}" required></label>
+          <label>Pickup city<input name="pickup_city" value="{{ B.rate_con_terms.pickup_city or '' }}" placeholder="{{ L.origin_city or 'City' }}"></label>
+          <label>State<input name="pickup_state" maxlength="2" value="{{ B.rate_con_terms.pickup_state or '' }}" placeholder="{{ L.origin_state or 'AZ' }}"></label>
+          <label>Delivery city<input name="delivery_city" value="{{ B.rate_con_terms.delivery_city or '' }}" placeholder="{{ L.destination_city or 'City' }}"></label>
+          <label>State<input name="delivery_state" maxlength="2" value="{{ B.rate_con_terms.delivery_state or '' }}" placeholder="{{ L.destination_state or 'TX' }}"></label>
+          <label>Pickup date<input type="date" name="pickup_date" value="{{ B.rate_con_terms.pickup_date or '' }}"></label>
+          <label>Equipment<input name="equipment" value="{{ B.rate_con_terms.equipment or '' }}" placeholder="{{ L.equipment_type or 'e.g. Dry Van' }}"></label>
+          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ B.rate_con_terms.weight_lbs or '' }}" placeholder="{{ L.weight_lbs|int if L.weight_lbs else '' }}"></label>
           <button type="submit" class="fx-btn primary wide fx-center">Compare rate con</button>
         </form>
       </details>
@@ -404,7 +406,7 @@
         <div class="k">MC</div><div class="v {{ '' if L.broker.mc_number else 'none' }}">{{ L.broker.mc_number or 'Not on file' }}</div><div class="s"></div>
         <div class="k">Credit</div><div class="v">{{ L.broker.credit_status|capitalize }}{% if L.broker.credit_score %} ({{ L.broker.credit_score|int }}){% endif %}</div><div class="s">{% if L.broker.credit_status in ['approved', 'exempt'] %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
         <div class="k">Setup</div><div class="v">{{ L.broker.setup_status.replace('_', ' ')|capitalize }}</div><div class="s">{% if L.broker.setup_status == 'complete' %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
-        <div class="k">Identity</div><div class="v">{% if L.broker.identity_confirmed %}Confirmed{% else %}<span class="fx-source fx-danger-text">New email needs confirmation</span>{% endif %}</div><div class="s">{% if L.broker.identity_confirmed %}<svg class="i sm"><use href="#i-check"/></svg>{% endif %}</div>
+        <div class="k">Identity</div><div class="v">{% if L.broker.unconfirmed_emails %}<span class="fx-source fx-danger-text">{{ L.broker.unconfirmed_emails|length }} email(s) need confirmation</span>{% elif not L.broker.identity_confirmed %}<span class="fx-source fx-danger-text">New email needs confirmation</span>{% else %}Confirmed{% endif %}</div><div class="s">{% if not L.broker.unconfirmed_emails and L.broker.identity_confirmed %}<svg class="i sm"><use href="#i-check"/></svg>{% endif %}</div>
       </div>
       {% if L.thread.id and L.status not in ['closed', 'booked'] %}
       <details class="fx-mt10">
@@ -416,7 +418,11 @@
           <label>Credit score<input type="number" name="credit_score" min="0" step="1" value="{{ L.broker.credit_score|int if L.broker.credit_score is not none else '' }}"></label>
           <label class="wide">Credit notes<input name="credit_notes" value="{{ L.broker.credit_notes }}"></label>
           <label>Setup<select name="setup_status">{% for s in ['not_started', 'packet_sent', 'complete'] %}<option value="{{ s }}" {% if L.broker.setup_status == s %}selected{% endif %}>{{ s.replace('_', ' ')|capitalize }}</option>{% endfor %}</select></label>
-          {% if not L.broker.identity_confirmed %}
+          {% if L.broker.unconfirmed_emails %}
+          {% for em in L.broker.unconfirmed_emails %}
+          <label class="check wide"><input type="checkbox" name="identity_confirm_emails" value="{{ em }}"> Confirm {{ em }} belongs to {{ L.broker.legal_name or L.broker.domain or 'this broker' }}</label>
+          {% endfor %}
+          {% elif not L.broker.identity_confirmed %}
           <label class="check wide"><input type="checkbox" name="identity_confirmed" value="yes"> Confirm the new email address belongs to {{ L.broker.legal_name or L.broker.domain or 'this broker' }}</label>
           {% endif %}
           <label class="check wide"><input type="checkbox" name="blocked" value="yes" {% if L.broker.blocked %}checked{% endif %}> Block this broker</label>
