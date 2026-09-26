@@ -198,6 +198,24 @@ CREATE TABLE IF NOT EXISTS freight_loads (
 );
 CREATE INDEX IF NOT EXISTS freight_loads_status_idx ON freight_loads(status, updated_at);
 
+CREATE TABLE IF NOT EXISTS freight_load_stops (
+  id TEXT PRIMARY KEY,
+  load_id TEXT NOT NULL REFERENCES freight_loads(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('pickup', 'delivery')),
+  facility_name TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT '',
+  appointment TEXT,
+  appointment_verified INTEGER NOT NULL DEFAULT 0,
+  verified INTEGER NOT NULL DEFAULT 0,
+  evidence TEXT NOT NULL DEFAULT '',
+  source_message_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_load_stops_load_idx ON freight_load_stops(load_id, seq);
+
 CREATE TABLE IF NOT EXISTS freight_threads (
   id TEXT PRIMARY KEY,
   load_id TEXT NOT NULL REFERENCES freight_loads(id) ON DELETE CASCADE,
