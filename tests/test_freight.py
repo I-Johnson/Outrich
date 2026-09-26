@@ -379,7 +379,7 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(result["action"], "alert")
         self.assertIn("Counter limit", result["summary"])
         booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
-        freight_module.submit_rate_con(booking["id"], {"total_rate": "4200"}, self.storage)
+        freight_module.submit_rate_con(booking["id"], {"total_rate": "4200", "pickup_city": "Phoenix", "pickup_state": "AZ", "delivery_city": "Dallas", "delivery_state": "TX", "pickup_date": "2026-09-23"}, self.storage)
         freight_module.review_rate_con(booking["id"], True, self.storage)
         freight_module.approve_driver_handoff(booking["id"], self.storage)
         linked_broker = self.storage.get("freight_loads", self.load_id).get("broker_id")
@@ -478,6 +478,39 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.storage.get("freight_drafts", draft["id"])["status"], "send_uncertain")
         self.assertEqual(recover_uncertain_freight_sends(self.storage), 0)
 
+    def test_crash_interrupted_inbound_is_recovered_by_reconcile(self):
+        # A crash between insert and evaluation must not strand the broker's reply:
+        # the message stays pending/failed and the next poll's reconcile replays it.
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<crash-1@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "We can do $4,200 all-in. Pickup tomorrow morning.",
+            "classification": {}, "status": "received", "processing_state": "pending",
+            "created_at": now_iso(),
+        })
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated crash mid-evaluation")
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+        failed = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(failed["processing_state"], "failed")
+        self.assertIn("simulated crash", failed["processing_error"])
+        # The next poll recovers it through the same processing path.
+        self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 1)
+        done = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(done["processing_state"], "processed")
+        self.assertIsNone(done["processing_error"])
+        # Reprocessing the same message never stacks a second reply draft.
+        thread = self.storage.get("freight_threads", self.thread_id)
+        freight_module._process_inbound(thread, done, None, self.storage)
+        first_pass = self.storage.list("freight_drafts", {"thread_id": self.thread_id}, order="", limit=50)
+        freight_module._process_inbound(thread, done, None, self.storage)
+        second_pass = self.storage.list("freight_drafts", {"thread_id": self.thread_id}, order="", limit=50)
+        self.assertEqual(len(first_pass), len(second_pass))
+        # A steady-state reconcile is a no-op.
+        self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+
     def test_review_and_state_endpoints(self):
         from fastapi.testclient import TestClient
         from app import main
@@ -510,7 +543,7 @@ class FreightConversationTests(unittest.TestCase):
             refused = client.post(f"/freight/threads/{self.thread_id}/state", data={"state": "booked"}, follow_redirects=False)
             self.assertEqual(refused.status_code, 400)
             booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
-            freight_module.submit_rate_con(booking["id"], {"total_rate": "4200"}, self.storage)
+            freight_module.submit_rate_con(booking["id"], {"total_rate": "4200", "pickup_city": "Phoenix", "pickup_state": "AZ", "delivery_city": "Dallas", "delivery_state": "TX", "pickup_date": "2026-09-23"}, self.storage)
             freight_module.review_rate_con(booking["id"], True, self.storage)
             freight_module.approve_driver_handoff(booking["id"], self.storage)
             broker = freight_module.resolve_broker("rep@freightbroker.example", "FreightBroker", self.storage)
@@ -852,7 +885,9 @@ class FreightStopsTests(unittest.TestCase):
 
     def _load(self):
         stamp = now_iso()
-        return self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': self.mission_id, 'truck_profile_id': self.profile_id, 'broker_email': 'b@x.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        broker = freight_module.resolve_broker('b@x.com', 'X Co', self.storage)
+        freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        return self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': self.mission_id, 'truck_profile_id': self.profile_id, 'broker_id': broker['id'], 'broker_email': 'b@x.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
 
     def test_sync_inserts_stops_in_order(self):
         load = self._load()
@@ -1005,6 +1040,15 @@ class FreightBrokerTests(unittest.TestCase):
         self.assertEqual(second['id'], broker['id'])
         self.assertEqual(sorted(second['emails']), ['one@xyz.com', 'two@xyz.com'])
 
+    def test_free_mail_domains_never_match_by_domain(self):
+        # Two brokers at gmail.com are not the same company; domain matching
+        # would let one inherit the other's credit approval.
+        first = freight_module.resolve_broker('one@gmail.com', 'One Co', self.storage)
+        second = freight_module.resolve_broker('two@gmail.com', 'Two Co', self.storage)
+        self.assertNotEqual(first['id'], second['id'])
+        again = freight_module.resolve_broker('one@gmail.com', '', self.storage)
+        self.assertEqual(again['id'], first['id'])
+
     def test_update_broker_validates_statuses(self):
         broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
         updated = freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'credit_score': '92', 'setup_status': 'complete', 'mc_number': 'MC-123'}, self.storage)
@@ -1046,11 +1090,20 @@ class FreightBookingTests(unittest.TestCase):
         stamp = now_iso()
         self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'max_weight_lbs': 45000, 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
         self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
-        self.load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_type': 'dry van', 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        self.broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
+        freight_module.update_broker(self.broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        self.load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_id': self.broker['id'], 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_type': 'dry van', 'equipment_verified': 1, 'pickup_date': '2026-09-23', 'pickup_date_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
         self.thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': self.load['id'], 'sender_account': '1', 'recipient_email': 'a@b.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def _full_con(self, **overrides):
+        con = {'total_rate': '4200', 'pickup_city': 'Phoenix', 'pickup_state': 'AZ',
+               'delivery_city': 'Dallas', 'delivery_state': 'TX', 'pickup_date': '2026-09-23',
+               'equipment': 'dry van', 'weight_lbs': '40000'}
+        con.update(overrides)
+        return con
 
     def test_agreement_snapshot_immutable_and_idempotent(self):
         booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
@@ -1076,7 +1129,7 @@ class FreightBookingTests(unittest.TestCase):
 
     def test_clean_rate_con_has_no_diffs(self):
         booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
-        updated = freight_module.submit_rate_con(booking['id'], {'total_rate': '4200', 'pickup_city': 'Phoenix', 'pickup_state': 'AZ', 'delivery_city': 'Dallas', 'delivery_state': 'TX', 'equipment': 'dry van', 'weight_lbs': '40000'}, self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
         self.assertEqual(updated['rate_con_diffs'], [])
 
     def test_gates_enforced_in_order(self):
@@ -1085,7 +1138,7 @@ class FreightBookingTests(unittest.TestCase):
             freight_module.approve_driver_handoff(booking['id'], self.storage)
         with self.assertRaises(ValueError):
             freight_module.mark_booked(booking['id'], self.storage)
-        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
         freight_module.review_rate_con(booking['id'], True, self.storage)
         freight_module.approve_driver_handoff(booking['id'], self.storage)
         done = freight_module.mark_booked(booking['id'], self.storage)
@@ -1097,19 +1150,76 @@ class FreightBookingTests(unittest.TestCase):
     def test_mark_booked_blocked_by_unverified_facts(self):
         self.storage.update('freight_loads', self.load['id'], {'equipment_verified': 0})
         booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
-        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
         freight_module.review_rate_con(booking['id'], True, self.storage)
         freight_module.approve_driver_handoff(booking['id'], self.storage)
         with self.assertRaises(ValueError) as ctx:
             freight_module.mark_booked(booking['id'], self.storage)
         self.assertIn('broker equipment', str(ctx.exception))
 
+    def test_partial_rate_con_is_unverified_not_matching(self):
+        # A con that omits agreed terms is not an exact match: unknown is not equal.
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        fields = {d['field']: d for d in updated['rate_con_diffs']}
+        self.assertEqual(fields['pickup date']['status'], 'unverified')
+        self.assertIsNone(fields['pickup date']['rate_con'])
+        self.assertEqual(fields['equipment']['status'], 'unverified')
+
+    def test_approval_refused_when_required_terms_missing(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.review_rate_con(booking['id'], True, self.storage)
+        self.assertIn('pickup city', str(ctx.exception))
+
+    def test_rate_con_dates_compare_normalized(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(pickup_date='09/23/2026'), self.storage)
+        self.assertEqual(updated['rate_con_diffs'], [])
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(pickup_date='Sep 24, 2026'), self.storage)
+        fields = {d['field']: d for d in updated['rate_con_diffs']}
+        self.assertEqual(fields['pickup date']['status'], 'mismatch')
+
+    def test_new_rate_con_resets_review_and_handoff_gates(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        # A replacement con invalidates both approvals; booking must stop.
+        freight_module.submit_rate_con(booking['id'], self._full_con(total_rate='4100'), self.storage)
+        reset = self.storage.get('freight_bookings', booking['id'])
+        self.assertFalse(reset['rate_con_reviewed'])
+        self.assertFalse(reset['driver_handoff_approved'])
+        with self.assertRaises(ValueError):
+            freight_module.mark_booked(booking['id'], self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+
+    def test_mark_booked_refused_without_broker_identity(self):
+        self.storage.update('freight_loads', self.load['id'], {'broker_id': None})
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        # record_agreement re-resolves identity from the broker email; clear it to simulate an unidentified broker.
+        broker_id = self.storage.get('freight_loads', self.load['id']).get('broker_id')
+        self.assertIsNotNone(broker_id)
+        self.storage.update('freight_loads', self.load['id'], {'broker_id': None})
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('verified broker identity', str(ctx.exception))
+
     def test_rejected_rate_con_returns_to_agreed(self):
         booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
-        freight_module.submit_rate_con(booking['id'], {'total_rate': '4000'}, self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(total_rate='4000'), self.storage)
         back = freight_module.review_rate_con(booking['id'], False, self.storage)
         self.assertEqual(back['status'], 'agreed')
         self.assertEqual(back['rate_con_diffs'], [])
+        self.assertFalse(back['rate_con_reviewed'])
+        self.assertFalse(back['driver_handoff_approved'])
 
 
 def _make_pdf(lines):
@@ -1202,7 +1312,28 @@ class FreightRateConPdfTests(unittest.TestCase):
         fields = {d['field'] for d in updated['rate_con_diffs']}
         self.assertIn('total rate', fields)
         alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_compared'}, order='', limit=5)
-        self.assertIn('difference', alerts[0]['summary'])
+        self.assertIn('issue', alerts[0]['summary'])
+
+    def test_line_haul_is_not_the_total(self):
+        from app.core.rate_con import parse_rate_con_pdf
+        fields = parse_rate_con_pdf(_make_pdf([
+            "RATE CONFIRMATION",
+            "Line Haul: $3,900.00",
+            "Fuel Surcharge: $300.00",
+            "Total Rate: $4,200.00",
+            "Rate per mile: $3.93",
+        ]))
+        self.assertEqual(fields['total_rate'], 4200.0)
+        self.assertEqual(fields.get('line_haul'), 3900.0)
+        # Without a total label, line haul alone must not become the total.
+        fields = parse_rate_con_pdf(_make_pdf([
+            "RATE CONFIRMATION",
+            "Line Haul: $3,900.00",
+            "Rate per mile: $3.93",
+            "Pickup: Phoenix, AZ 85001",
+        ]))
+        self.assertNotIn('total_rate', fields)
+        self.assertEqual(fields.get('line_haul'), 3900.0)
 
     def test_rate_con_without_booking_alerts(self):
         freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)

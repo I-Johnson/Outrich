@@ -356,9 +356,10 @@
       </div>
       {% if B.rate_con_diffs %}
       <div style="margin-top:8px;padding:8px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2">
-        <strong style="font-size:12.5px;color:#b91c1c">Rate con differences</strong>
+        <strong style="font-size:12.5px;color:#b91c1c">Rate con issues</strong>
         {% for d in B.rate_con_diffs %}
-        <div style="font-size:12.5px;margin-top:4px">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> vs rate con <strong>{{ d.rate_con }}</strong></div>
+        {% if d.status == 'unverified' %}<div style="font-size:12.5px;margin-top:4px">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> - <strong>missing on the rate con</strong></div>
+        {% else %}<div style="font-size:12.5px;margin-top:4px">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> vs rate con <strong>{{ d.rate_con }}</strong></div>{% endif %}
         {% endfor %}
       </div>
       {% elif B.status == 'rate_con_review' %}
