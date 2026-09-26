@@ -116,6 +116,34 @@ class FreightPolicyTests(unittest.TestCase):
         result = parse_destinations(["Dallas, TX"], ["city"], ["0"])
         self.assertEqual(result, [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
 
+    def test_destination_input_normalizes_kind_and_common_city_state_formats(self):
+        self.assertEqual(
+            parse_destinations(["Dallas TX"], ["state"], ["0"]),
+            [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}],
+        )
+        self.assertEqual(
+            parse_destinations(["tx"], ["city"], ["0"]),
+            [{"label": "TX", "kind": "state", "radius_miles": 0}],
+        )
+        self.assertEqual(
+            parse_destinations(["Dallas, Texas"], ["city"], ["0"]),
+            [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}],
+        )
+
+    def test_rules_destination_parser_accepts_no_comma_without_parsing_normal_prose(self):
+        self.assertEqual(freight_module._destination_from_text("Delivery to Dallas TX tomorrow"), ("Dallas", "TX"))
+        self.assertIsNone(freight_module._destination_from_text("I'm going to call me later"))
+
+    def test_pickup_city_reconciles_only_with_exact_mission_origin(self):
+        mission = {"origin_city": "Phoenix", "origin_state": "AZ"}
+        self.assertEqual(freight_module._mission_origin_from_text("Phoenix pickup Oct 2 at 0900", mission), ("Phoenix", "AZ"))
+        self.assertEqual(freight_module._mission_origin_from_text("PU Phoenix Oct 2 at 0900", mission), ("Phoenix", "AZ"))
+        self.assertIsNone(freight_module._mission_origin_from_text("Tucson pickup Oct 2 at 0900", mission))
+
+    def test_pickup_date_parser_accepts_month_name_and_uses_mission_year(self):
+        mission = {"pickup_start": "2026-09-27", "pickup_end": "2026-09-29"}
+        self.assertEqual(str(freight_module._pickup_date_from_text("Phoenix pickup Oct 2 at 0900", mission)), "2026-10-02")
+
     def test_auto_mode_requires_one_priced_lane(self):
         mission = {"origin_state": "FL", "destinations": [{"kind": "state", "label": "NJ"}], "target_total": 5000}
         self.assertIsNone(auto_lane_issue(mission))
@@ -766,10 +794,13 @@ class FreightConversationTests(unittest.TestCase):
                 "execution_mode": "auto",
                 "active": "on",
             }, follow_redirects=False)
+            page = client.get("/freight/missions")
         self.assertEqual(response.status_code, 303)
         self.assertIn("Mission+saved", response.headers["location"])
         saved = self.raw.list("freight_missions", order="created_at desc", limit=1)[0]
         self.assertEqual(saved["destinations"], [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
+        self.assertIn("Dallas, TX", page.text)
+        self.assertNotIn("<span>Open Destinations</span>", page.text)
         geocoder.assert_not_called()
 
     def test_freight_sender_add_workflow(self):
@@ -1233,6 +1264,18 @@ class FreightStopsTests(unittest.TestCase):
         result = freight_agent_module._validated(raw, 'Pick up in Phoenix, AZ Friday. Rate $4,000.')
         self.assertEqual(len(result['stops']), 1)
         self.assertEqual(result['stops'][0]['city'], 'Phoenix')
+
+    def test_gemini_location_requires_explicit_state_token_or_name(self):
+        inferred = freight_agent_module._validated({
+            'intent': 'details',
+            'destination': {'city': 'Washington', 'state': 'WA', 'evidence': 'Deliver in Washington'},
+        }, 'Deliver in Washington')
+        self.assertIsNone(inferred['destination'])
+        explicit = freight_agent_module._validated({
+            'intent': 'details',
+            'destination': {'city': 'Dallas', 'state': 'TX', 'evidence': 'Deliver in Dallas, Texas'},
+        }, 'Deliver in Dallas, Texas')
+        self.assertEqual(explicit['destination']['state'], 'TX')
 
 
 class FreightDriverSafetyTests(unittest.TestCase):

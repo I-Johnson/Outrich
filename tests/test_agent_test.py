@@ -163,6 +163,34 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         approved = approve_test_draft(self.storage, draft["id"])
         self.assertEqual(approved["state"]["load"]["current_round"], 1)
 
+    def test_city_only_pickup_uses_exact_mission_state_and_explicit_date(self):
+        self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
+        self.storage.update("freight_missions", self.mission_id, {
+            "pickup_start": "2026-09-27", "pickup_end": "2026-09-29", "target_total": 3500,
+        })
+        load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
+        reading = {
+            "kind": "offer", "intent": "offer", "source": "gemini", "summary": "Two Dallas stops for $2,250.",
+            "protected": [], "questions": [], "offer": 2250, "rate_per_mile": None, "ambiguous_offer": False,
+            "numeric_facts": [{"unit": "weight", "value": 30000, "evidence": "30,000 lb"}],
+            "origin": None, "destination": {"city": "Dallas", "state": "TX", "evidence": "Dallas TX"},
+            "equipment": {"type": "dry van", "evidence": "dry van"}, "pickup_date": None,
+            "pickup_schedule_evidence": "Oct 2 at 0900", "delivery_schedule_evidence": "Oct 4 at 0700",
+            "stops": [{"kind": "delivery", "city": "Dallas", "state": "TX", "facility": "retail DC", "appointment": "Oct 4 at 0700", "evidence": "Dallas TX stop 1 retail DC Oct 4 at 0700"}],
+            "route_scope": "complete", "required_equipment": "dry van", "suggested_reply": "",
+        }
+        text = "Phoenix pickup Oct 2 at 0900. Dallas TX stop 1 retail DC Oct 4 at 0700. 30,000 lb dry van. $2,250 all in."
+        with patch("app.core.freight.settings.FREIGHT_AGENT_MODE", "model"), patch("app.core.freight.interpret_broker_reply", return_value=reading):
+            result = inject_broker_reply(self.storage, load_id, text)
+        load = result["state"]["load"]
+        self.assertEqual((load["origin_city"], load["origin_state"]), ("Phoenix", "AZ"))
+        self.assertTrue(load["origin_verified"])
+        self.assertEqual(load["pickup_date"], "2026-10-02")
+        self.assertFalse(load["pickup_date_verified"])
+        self.assertEqual(result["decision"]["action"], "alert")
+        self.assertIn("outside the mission pickup window", result["decision"]["summary"])
+        self.assertNotIn("pickup city and state", " ".join(message["body_text"] for message in result["state"]["messages"]))
+
     def test_reload_preserves_approvals_and_reset_cascades_only_this_test(self):
         from fastapi.testclient import TestClient
         from app import main

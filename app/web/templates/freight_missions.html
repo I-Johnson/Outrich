@@ -50,7 +50,13 @@
             <div class="route-badge">
               <span>{{ m.origin_city }}, {{ m.origin_state }}</span>
               <span class="fx-arrow">to</span>
-              <span>Open Destinations</span>
+              <span>
+                {% if m.destinations %}
+                  {{ m.destinations|map(attribute='label')|join(' · ') }}
+                {% else %}
+                  Open Destinations
+                {% endif %}
+              </span>
             </div>
           </div>
           <span class="fx-status {{ 'on' if m.active else 'off' }}">{{ 'Active' if m.active else 'Paused' }}</span>
