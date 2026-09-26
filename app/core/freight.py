@@ -65,6 +65,58 @@ SENSITIVE_OUTBOUND = {
     "insurance or financial document": re.compile(r"\b(?:insurance certificate|certificate of insurance|\bcoi\b|w-?9|bank(?:ing)? details?|routing number|account number|factoring|void(?:ed)? check)\b", re.I),
     "vehicle identifier": re.compile(r"\b(?:vin|vehicle identification number|license plate|plate number|tractor number|trailer number)\b", re.I),
 }
+# Driver and vehicle identity lives on the truck profile for booking paperwork.
+# These values are never passed to the model, never shareable, and a draft that
+# contains a stored value cannot be sent at all - even with a dispatcher override.
+NEVER_SEND_PROFILE_FIELDS = {
+    "truck_vin": "truck VIN",
+    "driver_name": "driver name",
+    "driver_cdl_number": "driver CDL number",
+    "driver_cdl_state": "driver CDL state",
+    "driver_phone": "driver phone",
+}
+# Only these profile facts can ever be marked shareable with brokers.
+SHAREABLE_FIELD_ALLOWLIST = {"equipment_type", "team_status", "mc_number", "dot_number", "trailer_length_ft"}
+
+
+def filter_shareable_fields(fields: list[str]) -> list[str]:
+    """Server-side guard: crafted form posts cannot widen the shareable set."""
+    return [field for field in fields if field in SHAREABLE_FIELD_ALLOWLIST]
+
+
+def _sensitive_profile_values_in_text(profile: dict, text: str) -> list[str]:
+    """Stored driver/vehicle values found in an outbound text. Hard block."""
+    folded = text.casefold()
+    hits: list[str] = []
+    for field, label in NEVER_SEND_PROFILE_FIELDS.items():
+        value = str(profile.get(field) or "").strip()
+        if value and value.casefold() in folded:
+            hits.append(label)
+    return hits
+
+
+def truck_availability(profile: dict, load: dict | None = None, storage=None) -> dict[str, str]:
+    """Live availability of a truck, including booked-load conflicts for a load date."""
+    status = str(profile.get("availability_status") or "available")
+    detail = ""
+    if status == "off":
+        detail = "Truck is marked off duty"
+    elif status == "booked":
+        detail = "Truck is marked booked"
+    pickup = str((load or {}).get("pickup_date") or "")
+    if status == "available" and pickup and profile.get("id"):
+        others = (storage or store).list(
+            "freight_loads", {"truck_profile_id": profile["id"], "status": "booked", "pickup_date": pickup},
+            order="", limit=10)
+        others = [row for row in others if row["id"] != (load or {}).get("id")]
+        if others:
+            status, detail = "conflict", f"Already booked for {pickup}"
+    available_from = str(profile.get("available_from") or "")
+    if status == "available" and available_from and pickup and pickup < available_from:
+        status, detail = "conflict", f"Not available until {available_from}"
+    return {"status": status, "detail": detail}
+
+
 # A broker describing a price as "quoted" while asking another question has not
 # made a clean new offer. This check runs after model interpretation as well.
 MIXED_QUOTED_RATE = re.compile(r"\bquoted\s+\$?\d[\d,]*(?:\.\d+)?\b", re.I)
@@ -945,6 +997,10 @@ def _booking_readiness_blockers(load: dict, mission: dict, profile: dict, storag
             blockers.append(f"{label} confirmed")
         elif not stop.get("appointment") or not stop.get("appointment_verified"):
             blockers.append(f"{label} appointment")
+    if profile.get("id"):
+        availability = truck_availability(profile, load, storage)
+        if availability["status"] != "available":
+            blockers.append(f"truck availability ({availability['detail'] or availability['status']})")
     if any((mission.get("permissions") or {}).get(key) for key in ("auto_profile_reply", "auto_counter", "auto_pass")):
         lane_issue = auto_lane_issue(mission)
         if lane_issue:
@@ -1527,6 +1583,11 @@ def send_draft(draft_id: str, storage=None, *, confirm_sensitive: bool = False) 
         raise ValueError("This thread needs review or is closed; reopen it before sending a draft")
     if draft.get("in_reply_to_message_id") and thread.get("last_message_id") != draft["in_reply_to_message_id"]:
         raise ValueError("A newer broker reply arrived; review it before sending this draft")
+    profile_id = load.get("truck_profile_id") or (storage.get("freight_missions", load.get("mission_id")) or {}).get("truck_profile_id")
+    profile = (storage.get("freight_truck_profiles", profile_id) or {}) if profile_id else {}
+    never_send = _sensitive_profile_values_in_text(profile, (draft.get("subject") or "") + "\n" + (draft.get("body_text") or ""))
+    if never_send:
+        raise ValueError("Draft contains protected driver/vehicle data (" + ", ".join(never_send) + "); remove it before sending")
     sensitive_fields = sensitive_outbound_fields(draft.get("subject") or thread.get("subject", ""), draft.get("body_text") or "")
     if sensitive_fields and not confirm_sensitive:
         raise SensitiveOutboundConfirmationRequired(str(load.get("id") or ""), sensitive_fields)

@@ -29,7 +29,7 @@ from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
-from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts, verify_load_stop
+from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts, verify_load_stop, filter_shareable_fields
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
@@ -841,7 +841,10 @@ async def freight_profile_save(request: Request):
     form = await request.form()
     row_id = str(form.get("id") or "")
     stamp = now_iso()
-    shareable = [str(value) for value in form.getlist("shareable_fields")]
+    shareable = filter_shareable_fields([str(value) for value in form.getlist("shareable_fields")])
+    availability_status = str(form.get("availability_status") or "available").strip().lower()
+    if availability_status not in {"available", "booked", "off"}:
+        availability_status = "available"
     data = {
         "name": str(form.get("name") or "").strip(),
         "current_city": str(form.get("current_city") or "").strip(),
@@ -854,6 +857,13 @@ async def freight_profile_save(request: Request):
         "dot_number": str(form.get("dot_number") or "").strip(),
         "dispatcher_name": str(form.get("dispatcher_name") or "").strip(),
         "dispatcher_phone": str(form.get("dispatcher_phone") or "").strip(),
+        "truck_vin": str(form.get("truck_vin") or "").strip().upper(),
+        "driver_name": str(form.get("driver_name") or "").strip(),
+        "driver_cdl_number": str(form.get("driver_cdl_number") or "").strip(),
+        "driver_cdl_state": str(form.get("driver_cdl_state") or "").strip().upper(),
+        "driver_phone": str(form.get("driver_phone") or "").strip(),
+        "availability_status": availability_status,
+        "available_from": str(form.get("available_from") or "").strip() or None,
         "shareable_fields": shareable,
         "active": bool(form.get("active")),
         "updated_at": stamp,

@@ -898,3 +898,64 @@ class FreightStopsTests(unittest.TestCase):
         result = freight_agent_module._validated(raw, 'Pick up in Phoenix, AZ Friday. Rate $4,000.')
         self.assertEqual(len(result['stops']), 1)
         self.assertEqual(result['stops'][0]['city'], 'Phoenix')
+
+
+class FreightDriverSafetyTests(unittest.TestCase):
+    """Phase 3: driver/vehicle identity never leaves; availability gates booking."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/driver.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        self.profile_id, self.mission_id = new_id(), new_id()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': self.profile_id, 'name': 'T', 'current_city': 'Phoenix', 'current_state': 'AZ', 'equipment_type': 'dry van', 'max_weight_lbs': 45000, 'team_status': 'team', 'truck_vin': '1HGBH41JXMN109186', 'driver_name': 'Alex Rios', 'driver_cdl_number': 'D1234567', 'driver_cdl_state': 'AZ', 'driver_phone': '6025550143', 'shareable_fields': ['team_status'], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': self.mission_id, 'name': 'M', 'truck_profile_id': self.profile_id, 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'equipment_type': 'dry van', 'destinations': [{'kind': 'city', 'label': 'Dallas, TX', 'radius_miles': 0}], 'floor_total': 3900, 'target_total': 4500, 'maximum_counter_rounds': 2, 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _load(self, **over):
+        stamp = now_iso()
+        row = {'id': new_id(), 'mission_id': self.mission_id, 'truck_profile_id': self.profile_id, 'broker_email': 'b@x.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp}
+        row.update(over)
+        return self.storage.insert('freight_loads', row)
+
+    def test_shareable_fields_allowlist_rejects_driver_fields(self):
+        crafted = ['equipment_type', 'driver_cdl_number', 'truck_vin', 'driver_name', 'mc_number']
+        self.assertEqual(freight_module.filter_shareable_fields(crafted), ['equipment_type', 'mc_number'])
+
+    def test_send_draft_blocks_stored_vin_even_with_confirmation(self):
+        load = self._load()
+        stamp = now_iso()
+        thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load['id'], 'sender_account': '1', 'recipient_email': 'b@x.com', 'subject': 's', 'state': 'draft_ready', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+        draft = self.storage.insert('freight_drafts', {'id': new_id(), 'thread_id': thread['id'], 'subject': 's', 'body_text': 'Driver Alex Rios, VIN 1HGBH41JXMN109186, CDL D1234567.', 'reason': 'manual_reply', 'status': 'pending', 'created_at': stamp, 'updated_at': stamp})
+        with self.assertRaises(ValueError) as ctx:
+            send_draft(draft['id'], self.storage, confirm_sensitive=True)
+        self.assertIn('driver', str(ctx.exception).lower())
+
+    def test_availability_off_blocks_booking(self):
+        self.storage.update('freight_truck_profiles', self.profile_id, {'availability_status': 'off'})
+        load = self._load()
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('truck availability (Truck is marked off duty)', blockers)
+
+    def test_booked_load_same_date_conflicts(self):
+        self._load(status='booked', pickup_date='2026-09-28')
+        other = self._load(pickup_date='2026-09-28')
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        availability = freight_module.truck_availability(profile, other, self.storage)
+        self.assertEqual(availability['status'], 'conflict')
+        free = self._load(pickup_date='2026-09-30')
+        availability = freight_module.truck_availability(profile, free, self.storage)
+        self.assertEqual(availability['status'], 'available')
+
+    def test_available_from_future_date_conflicts(self):
+        self.storage.update('freight_truck_profiles', self.profile_id, {'available_from': '2026-10-01'})
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        load = self._load(pickup_date='2026-09-28')
+        self.assertEqual(freight_module.truck_availability(profile, load, self.storage)['status'], 'conflict')
+        later = self._load(pickup_date='2026-10-02')
+        self.assertEqual(freight_module.truck_availability(profile, later, self.storage)['status'], 'available')

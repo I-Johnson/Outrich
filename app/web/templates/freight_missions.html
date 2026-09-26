@@ -997,6 +997,12 @@
           Dispatcher: <strong>{{ p.dispatcher_name or 'Dispatch' }}</strong> {% if p.dispatcher_phone %}({{ p.dispatcher_phone }}){% endif %}
         </div>
         {% endif %}
+        <div style="font-size:12px;margin-top:6px">
+          {% if p.availability_status == 'off' %}<span style="color:#dc2626;font-weight:700">Off duty</span>
+          {% elif p.availability_status == 'booked' %}<span style="color:#b45309;font-weight:700">Booked</span>
+          {% else %}<span style="color:#15803d;font-weight:700">Available</span>{% endif %}
+          {% if p.available_from %}<span style="color:var(--muted)"> from {{ p.available_from }}</span>{% endif %}
+        </div>
       </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #f1f5f9;margin-top:8px">
@@ -1115,7 +1121,54 @@
       </div>
 
       <div class="form-section-title">
-        <span>4. Facts Agent May Disclose to Brokers</span>
+        <span>4. Driver & Vehicle Identity (never auto-shared)</span>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        Stored for booking paperwork. The agent never sends these - drafts containing them are blocked automatically.
+      </p>
+      <div class="form-grid-4">
+        <label>
+          Truck VIN
+          <input name="truck_vin" value="{{ edit_profile.truck_vin if edit_profile else '' }}" placeholder="17-character VIN" maxlength="17">
+        </label>
+        <label>
+          Driver name
+          <input name="driver_name" value="{{ edit_profile.driver_name if edit_profile else '' }}" placeholder="e.g. Alex Johnson">
+        </label>
+        <label>
+          CDL number
+          <input name="driver_cdl_number" value="{{ edit_profile.driver_cdl_number if edit_profile else '' }}" placeholder="e.g. D1234567">
+        </label>
+        <label>
+          CDL state
+          <input name="driver_cdl_state" value="{{ edit_profile.driver_cdl_state if edit_profile else '' }}" placeholder="e.g. AZ" maxlength="2">
+        </label>
+        <label>
+          Driver phone
+          <input name="driver_phone" value="{{ edit_profile.driver_phone if edit_profile else '' }}" placeholder="e.g. (602) 555-0143">
+        </label>
+      </div>
+
+      <div class="form-section-title">
+        <span>5. Availability</span>
+      </div>
+      <div class="form-grid-4">
+        <label>
+          Status
+          <select name="availability_status">
+            {% for value,label in [('available','Available now'),('booked','Booked'),('off','Off duty')] %}
+            <option value="{{ value }}" {% if edit_profile and edit_profile.availability_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Available from
+          <input type="date" name="available_from" value="{{ edit_profile.available_from if edit_profile and edit_profile.available_from else '' }}">
+        </label>
+      </div>
+
+      <div class="form-section-title">
+        <span>6. Facts Agent May Disclose to Brokers</span>
       </div>
       <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
         Check only the facts that the AI agent is allowed to quote in email replies without asking you.
