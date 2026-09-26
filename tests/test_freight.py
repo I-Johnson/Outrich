@@ -1015,3 +1015,79 @@ class FreightBrokerTests(unittest.TestCase):
     def test_internal_blockers_never_asked_of_broker(self):
         labels = freight_module._broker_detail_labels(['broker credit approval', 'broker setup packet', 'blocked broker (B Co)', 'truck availability (Truck is marked off duty)', 'stop 1 pickup (Phoenix, AZ) confirmed', 'broker load weight'], [])
         self.assertEqual(labels, ['load weight'])
+
+
+class FreightBookingTests(unittest.TestCase):
+    """Phase 5: agreed -> rate con review -> booked with immutable snapshot."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/booking.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'max_weight_lbs': 45000, 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_type': 'dry van', 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        self.thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': self.load['id'], 'sender_account': '1', 'recipient_email': 'a@b.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_agreement_snapshot_immutable_and_idempotent(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        self.assertEqual(booking['status'], 'agreed')
+        self.assertEqual(booking['snapshot']['origin'], 'Phoenix, AZ')
+        self.assertEqual(booking['snapshot']['destination'], 'Dallas, TX')
+        again = freight_module.record_agreement(self.thread['id'], 4500.0, 'msg-2', self.storage)
+        self.assertEqual(again['id'], booking['id'])
+        self.assertEqual(again['agreed_rate'], 4200.0)
+        self.storage.update('freight_loads', self.load['id'], {'destination_city': 'Houston'})
+        kept = self.storage.get('freight_bookings', booking['id'])
+        self.assertEqual(kept['snapshot']['destination'], 'Dallas, TX')
+
+    def test_rate_con_exact_diffs(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], {'total_rate': '4000', 'delivery_city': 'Houston', 'delivery_state': 'TX', 'pickup_city': 'Phoenix', 'pickup_state': 'AZ'}, self.storage)
+        self.assertEqual(updated['status'], 'rate_con_review')
+        fields = {d['field']: d for d in updated['rate_con_diffs']}
+        self.assertEqual(fields['total rate']['agreed'], 4200.0)
+        self.assertEqual(fields['total rate']['rate_con'], 4000.0)
+        self.assertEqual(fields['delivery']['rate_con'], 'Houston, TX')
+        self.assertNotIn('pickup', fields)
+
+    def test_clean_rate_con_has_no_diffs(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], {'total_rate': '4200', 'pickup_city': 'Phoenix', 'pickup_state': 'AZ', 'delivery_city': 'Dallas', 'delivery_state': 'TX', 'equipment': 'dry van', 'weight_lbs': '40000'}, self.storage)
+        self.assertEqual(updated['rate_con_diffs'], [])
+
+    def test_gates_enforced_in_order(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        with self.assertRaises(ValueError):
+            freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError):
+            freight_module.mark_booked(booking['id'], self.storage)
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+        self.assertEqual(self.storage.get('freight_loads', self.load['id'])['status'], 'booked')
+        self.assertEqual(self.storage.get('freight_truck_profiles', 'p1')['availability_status'], 'booked')
+        self.assertEqual(self.storage.get('freight_threads', self.thread['id'])['state'], 'booked')
+
+    def test_mark_booked_blocked_by_unverified_facts(self):
+        self.storage.update('freight_loads', self.load['id'], {'equipment_verified': 0})
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('broker equipment', str(ctx.exception))
+
+    def test_rejected_rate_con_returns_to_agreed(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4000'}, self.storage)
+        back = freight_module.review_rate_con(booking['id'], False, self.storage)
+        self.assertEqual(back['status'], 'agreed')
+        self.assertEqual(back['rate_con_diffs'], [])
