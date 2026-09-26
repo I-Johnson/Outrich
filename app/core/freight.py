@@ -19,6 +19,7 @@ from app.adapters import get_provider
 from app.core.freight_agent import compose_counter_reply, interpret_broker_reply
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_context, sender_password
 from app.core.leads import valid_email
+from app.core.locations import normalize_destination, normalize_state, split_city_state
 from app.core.template_engine import render_template
 from app.db import new_id, now_iso, store
 
@@ -630,7 +631,12 @@ TIME_CUE = re.compile(r"\b(?:pickup|pick\s*up|delivery|deliver|appointment|appt|
 IDENTIFIER_CUE = re.compile(r"\b(?:mc|dot|reference|ref|load\s*(?:#|number|id)|po\s*(?:#|number))\s*[:#-]?\s*$", re.I)
 CLOSED_REPLY = re.compile(r"\b(?:load\s+(?:is\s+)?covered|already\s+booked|no\s+longer\s+available|factoring\s+(?:was\s+)?denied|never\s+mind\s*[.!]\s*(?:factoring\s+(?:was\s+)?denied|sorry)|we(?:'ll|\s+will)\s+pass)\b", re.I)
 REQUIRED_EQUIPMENT = re.compile(r"\b(?:need|requires?|must\s+(?:be|have)|has\s+to\s+be)\s+(?:a\s+|an\s+|\d+\s*(?:ft|foot)\s+)?(dry\s*van|reefer|flatbed|step\s*deck|power\s*only)\b|\b(dry\s*van|reefer|flatbed|step\s*deck|power\s*only)\s+(?:only|required|needed)\b", re.I)
-DESTINATION_MENTION = re.compile(r"\b(?:deliver(?:y)?\s+(?:to|in)|going\s+to|to)\s+([A-Za-z][A-Za-z .'-]{1,35}?),\s*([A-Z]{2})\b", re.I)
+DESTINATION_MENTION = re.compile(
+    r"\b(?:deliver(?:y)?(?:\s+(?:to|in))?|drop(?:\s*off)?(?:\s+(?:to|in))?|"
+    r"destination(?:\s*(?:is|:))?)\s+"
+    r"([A-Za-z][A-Za-z .'-]{1,35}?)(?:,\s*|\s+)([A-Za-z]{2})\b",
+    re.I,
+)
 
 
 class SensitiveOutboundConfirmationRequired(ValueError):
@@ -727,10 +733,10 @@ def parse_destinations(
     result: list[dict[str, Any]] = []
     allowed = {"city", "state", "region", "anywhere"}
     for index, raw_label in enumerate(labels):
-        label = str(raw_label or "").strip()
+        raw_kind = kinds[index] if index < len(kinds) else "city"
+        label, kind = normalize_destination(raw_label, raw_kind)
         if not label:
             continue
-        kind = str(kinds[index] if index < len(kinds) else "city").lower()
         if kind not in allowed:
             kind = "city"
         radius = int(_number(radii[index] if index < len(radii) else 0) or 0)
@@ -740,7 +746,7 @@ def parse_destinations(
 
 def auto_lane_issue(mission: dict) -> str | None:
     """Auto mode needs one identifiable origin/destination lane and a price goal."""
-    if not re.fullmatch(r"[A-Za-z]{2}", str(mission.get("origin_state") or "")):
+    if not normalize_state(mission.get("origin_state")):
         return "Set the origin state for this automatic mission."
     destinations = mission.get("destinations") or []
     if len(destinations) != 1:
@@ -749,9 +755,9 @@ def auto_lane_issue(mission: dict) -> str | None:
     kind = str(destination.get("kind") or "").lower()
     label = str(destination.get("label") or "").strip()
     if kind == "state":
-        valid = bool(re.fullmatch(r"[A-Za-z]{2}", label))
+        valid = normalize_state(label) is not None
     elif kind == "city":
-        valid = bool(re.fullmatch(r"[^,]+,\s*[A-Za-z]{2}", label)) and not _number(destination.get("radius_miles"))
+        valid = split_city_state(label) is not None and not _number(destination.get("radius_miles"))
     else:
         valid = False
     if not valid:
@@ -1405,13 +1411,18 @@ def _counter_count(thread_id: str, load: dict, storage=None) -> int:
 
 def _destination_from_text(text: str) -> tuple[str, str] | None:
     matches = list(DESTINATION_MENTION.finditer(text))
-    return (matches[-1].group(1).strip(), matches[-1].group(2).upper()) if matches else None
+    for match in reversed(matches):
+        state = normalize_state(match.group(2))
+        if state:
+            return match.group(1).strip(), state
+    return None
 
 
 def _destination_matches(mission: dict, city: str, state: str) -> bool | None:
     destinations = mission.get("destinations") or []
     if not destinations:
         return None
+    state = normalize_state(state) or str(state or "").upper()
     uncertain = False
     for destination in destinations:
         kind = str(destination.get("kind") or "city").lower()
@@ -1419,15 +1430,16 @@ def _destination_matches(mission: dict, city: str, state: str) -> bool | None:
         if kind in {"anywhere", "region"}:
             uncertain = True
         elif kind == "state":
-            if len(label) != 2:
+            destination_state = normalize_state(label)
+            if not destination_state:
                 uncertain = True
-            elif label.upper() == state:
+            elif destination_state == state:
                 return True
         elif kind == "city":
-            match = re.fullmatch(r"\s*([^,]+),\s*([A-Za-z]{2})\s*", label)
-            if not match:
+            parsed = split_city_state(label)
+            if not parsed:
                 uncertain = True
-            elif match.group(1).strip().casefold() == city.casefold() and match.group(2).upper() == state:
+            elif parsed[0].casefold() == city.casefold() and parsed[1] == state:
                 return True
             elif _number(destination.get("radius_miles")):
                 uncertain = True  # Resolve a radius with geocoding before ruling a city out.
@@ -1435,28 +1447,71 @@ def _destination_matches(mission: dict, city: str, state: str) -> bool | None:
 
 
 def _pickup_date_from_text(text: str, mission: dict):
-    pickup = re.search(r"\b(?:pickup|pick\s*up)\b.{0,20}?\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)\b", text, re.I)
+    pickup = re.search(
+        r"\b(?:pickup|pick\s*up|pu)\b.{0,30}?\b("
+        r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?|"
+        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+        r"\s+\d{1,2}(?:,?\s+\d{4})?)\b",
+        text,
+        re.I,
+    )
     if not pickup:
         return None
     raw = pickup.group(1)
     try:
         if "-" in raw:
             return datetime.fromisoformat(raw).date()
-        parts = [int(part) for part in raw.split("/")]
         anchor = mission.get("pickup_start") or mission.get("pickup_end")
-        year = parts[2] if len(parts) == 3 else datetime.fromisoformat(anchor).year if anchor else datetime.now(timezone.utc).year
-        return datetime(2000 + year if year < 100 else year, parts[0], parts[1]).date()
+        anchor_year = datetime.fromisoformat(anchor).year if anchor else datetime.now(timezone.utc).year
+        if "/" in raw:
+            parts = [int(part) for part in raw.split("/")]
+            year = parts[2] if len(parts) == 3 else anchor_year
+            return datetime(2000 + year if year < 100 else year, parts[0], parts[1]).date()
+        normalized = re.sub(r"\s+", " ", raw.replace(",", "")).strip()
+        has_year = bool(re.search(r"\b\d{4}\b", normalized))
+        if not has_year:
+            normalized += f" {anchor_year}"
+        return datetime.strptime(normalized, "%B %d %Y").date()
     except (ValueError, TypeError):
+        try:
+            normalized = re.sub(r"\s+", " ", raw.replace(",", "")).strip()
+            has_year = bool(re.search(r"\b\d{4}\b", normalized))
+            anchor = mission.get("pickup_start") or mission.get("pickup_end")
+            year = datetime.fromisoformat(anchor).year if anchor else datetime.now(timezone.utc).year
+            if not has_year:
+                normalized += f" {year}"
+            return datetime.strptime(normalized, "%b %d %Y").date()
+        except (ValueError, TypeError):
+            return None
+
+
+def _mission_origin_from_text(text: str, mission: dict) -> tuple[str, str] | None:
+    """Reconcile an explicit pickup city with this mission's configured state.
+
+    The state is inherited only when the mentioned city exactly matches the
+    mission city, so this removes redundant questions without geocoding or
+    guessing a different location.
+    """
+    mission_city = str(mission.get("origin_city") or "").strip()
+    mission_state = normalize_state(mission.get("origin_state"))
+    if not mission_city or not mission_state:
         return None
+    city = rf"(?<![A-Za-z]){re.escape(mission_city)}(?![A-Za-z])"
+    pickup = r"\b(?:pickup|pick\s*up|pu)\b"
+    if re.search(rf"(?:{city}.{{0,16}}{pickup}|{pickup}.{{0,16}}{city})", text, re.I):
+        return mission_city, mission_state
+    return None
 
 
 def _enrich_load_facts(load: dict, mission: dict, classification: dict, text: str, storage=None, *, preserve_verified: bool = False) -> dict:
     storage = storage or store
     updates: dict[str, Any] = {}
     model_origin = classification.get("origin")
-    if model_origin and not (preserve_verified and load.get("origin_verified")):
-        updates["origin_city"] = model_origin["city"]
-        updates["origin_state"] = model_origin["state"].upper()
+    origin = ((model_origin["city"], model_origin["state"].upper()) if model_origin
+              else _mission_origin_from_text(text, mission))
+    if origin and not (preserve_verified and load.get("origin_verified")):
+        updates["origin_city"], updates["origin_state"] = origin
         updates["origin_verified"] = True
     model_equipment = classification.get("equipment")
     if model_equipment and not (preserve_verified and load.get("equipment_verified")):
@@ -1482,7 +1537,7 @@ def _enrich_load_facts(load: dict, mission: dict, classification: dict, text: st
         updates["destination_verified"] = _destination_matches(mission, *destination) is True
     model_pickup = classification.get("pickup_date")
     try:
-        pickup_date = datetime.fromisoformat(model_pickup["value"]).date() if model_pickup else (None if classification.get("source") == "gemini" else _pickup_date_from_text(text, mission))
+        pickup_date = datetime.fromisoformat(model_pickup["value"]).date() if model_pickup else _pickup_date_from_text(text, mission)
     except ValueError:
         pickup_date = None
     if pickup_date and not (preserve_verified and load.get("pickup_date_verified")):
@@ -1530,7 +1585,7 @@ def _mismatch_reasons(text: str, load: dict, mission: dict, profile: dict, class
         reasons.append(f"Destination {destination[0]}, {destination[1]} is outside this mission's selected destinations.")
     model_pickup = (classification or {}).get("pickup_date")
     try:
-        pickup_date = datetime.fromisoformat(model_pickup["value"]).date() if model_pickup else (None if (classification or {}).get("source") == "gemini" else _pickup_date_from_text(text, mission))
+        pickup_date = datetime.fromisoformat(model_pickup["value"]).date() if model_pickup else _pickup_date_from_text(text, mission)
     except ValueError:
         pickup_date = None
     if pickup_date and (mission.get("pickup_start") or mission.get("pickup_end")):
