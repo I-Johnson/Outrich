@@ -987,3 +987,40 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
     grid-template-columns: 1fr;
   }
 }
+
+/* Availability badge */
+.fx-avail { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border-radius:999px; font-size:11.5px; font-weight:700; border:1px solid transparent; }
+.fx-avail::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+.fx-avail.available { color:#15803d; background:#f0fdf4; border-color:#bbf7d0; }
+.fx-avail.booked { color:#b45309; background:#fffbeb; border-color:#fde68a; }
+.fx-avail.off { color:#dc2626; background:#fef2f2; border-color:#fecaca; }
+.fx-avail.until { color:var(--muted); font-weight:500; border:none; background:none; padding:2px 4px; }
+.fx-avail.until::before { display:none; }
+
+/* Load page utilities (moved off inline styles) */
+.fx-mt10 { margin-top: 10px; }
+.fx-mt8 { margin-top: 8px; }
+.fx-center { justify-content: center; }
+.fx-summary { cursor: pointer; font-size: 12.5px; }
+.fx-fs12 { font-size: 12px; }
+.fx-grow { flex: 1; }
+.fx-diff-line { font-size: 12.5px; margin-top: 4px; }
+.fx-diff-box { margin-top: 8px; padding: 8px; border: 1px solid #fecaca; border-radius: 8px; background: #fef2f2; }
+.fx-amber-box { margin-top: 8px; padding: 10px 12px; background: #fff; border: 1px solid #f3d08a; border-radius: 8px; white-space: pre-wrap; font-size: 12.5px; }
+.fx-stop-form { margin-top: 6px; display: grid; gap: 4px; }
+.fx-ml6 { margin-left: 6px; }
+.fx-booked-note { font-size: 13px; color: #15803d; font-weight: 700; margin-top: 8px; }
+.fx-handoff-note { font-size: 12px; width: 100%; margin: 2px 0 0; }
+.fx-inline-check { font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.fx-mt6-fs { font-size: 12.5px; margin-top: 6px; }
+.fx-diff-head { font-size: 12.5px; color: #b91c1c; }
+.fx-actions-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.fx-baseline-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.fx-link-block { display: block; color: var(--fx-ink-h); margin-bottom: 4px; }
+.fx-clickable { cursor: pointer; }
+.fx-danger-text { color: #dc2626; }
+.fx-chip-warn { border-color: #f59e0b; background: #fffbeb; }
+.fx-empty-pad { text-align: center; padding: 20px 0; }
+.fx-dialog-narrow { max-width: 380px; background: #fff; }
+.fx-push-down { margin-top: auto; }
+.fx-wauto { width: auto; }
