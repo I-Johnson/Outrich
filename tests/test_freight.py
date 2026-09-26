@@ -1,6 +1,9 @@
+import base64 as _b64
+import email as _email
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 os.environ["SCHEDULER_ENABLED"] = "false"
@@ -11,6 +14,8 @@ os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 
 from app.adapters.base import SendResult
 from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, mission_price_comparison, parse_destinations, recover_uncertain_freight_sends, reevaluate_verified_load, seed_freight_template, send_draft, sensitive_outbound_fields, set_thread_state, verify_load_facts
+from app.core import freight as freight_module
+from app.core import freight_agent as freight_agent_module
 from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import SQLiteStore, new_id, now_iso
 
@@ -106,9 +111,38 @@ class FreightPolicyTests(unittest.TestCase):
             {"label": "Southeast", "kind": "region", "radius_miles": 0},
         ])
 
-    def test_city_destination_state_is_combined_before_auto_validation(self):
-        result = parse_destinations(["Dallas"], ["city"], ["0"], ["tx"])
+    def test_city_destination_label_carries_its_state(self):
+        # One source of truth: the label holds city and state together.
+        result = parse_destinations(["Dallas, TX"], ["city"], ["0"])
         self.assertEqual(result, [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
+
+    def test_destination_input_normalizes_kind_and_common_city_state_formats(self):
+        self.assertEqual(
+            parse_destinations(["Dallas TX"], ["state"], ["0"]),
+            [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}],
+        )
+        self.assertEqual(
+            parse_destinations(["tx"], ["city"], ["0"]),
+            [{"label": "TX", "kind": "state", "radius_miles": 0}],
+        )
+        self.assertEqual(
+            parse_destinations(["Dallas, Texas"], ["city"], ["0"]),
+            [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}],
+        )
+
+    def test_rules_destination_parser_accepts_no_comma_without_parsing_normal_prose(self):
+        self.assertEqual(freight_module._destination_from_text("Delivery to Dallas TX tomorrow"), ("Dallas", "TX"))
+        self.assertIsNone(freight_module._destination_from_text("I'm going to call me later"))
+
+    def test_pickup_city_reconciles_only_with_exact_mission_origin(self):
+        mission = {"origin_city": "Phoenix", "origin_state": "AZ"}
+        self.assertEqual(freight_module._mission_origin_from_text("Phoenix pickup Oct 2 at 0900", mission), ("Phoenix", "AZ"))
+        self.assertEqual(freight_module._mission_origin_from_text("PU Phoenix Oct 2 at 0900", mission), ("Phoenix", "AZ"))
+        self.assertIsNone(freight_module._mission_origin_from_text("Tucson pickup Oct 2 at 0900", mission))
+
+    def test_pickup_date_parser_accepts_month_name_and_uses_mission_year(self):
+        mission = {"pickup_start": "2026-09-27", "pickup_end": "2026-09-29"}
+        self.assertEqual(str(freight_module._pickup_date_from_text("Phoenix pickup Oct 2 at 0900", mission)), "2026-10-02")
 
     def test_auto_mode_requires_one_priced_lane(self):
         mission = {"origin_state": "FL", "destinations": [{"kind": "state", "label": "NJ"}], "target_total": 5000}
@@ -321,8 +355,13 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.inbound("Reach me at 555-0100")["action"], "alert")
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "protected_review")
         set_thread_state(self.thread_id, "negotiating", self.storage)
-        self.assertEqual(self.inbound("Can you pick up tonight at 2200?")["action"], "alert")
-        self.assertEqual(self.inbound("Cargo weight is at 42,000 lbs")["action"], "alert")
+        tonight = self.inbound("Can you pick up tonight at 2200?")
+        self.assertEqual(tonight["action"], "draft")
+        self.assertEqual(tonight["draft"]["reason"], "clarify_load_details")
+        weight = self.inbound("Cargo weight is at 42,000 lbs")
+        self.assertEqual(weight["action"], "draft")
+        self.assertEqual(weight["draft"]["reason"], "clarify_load_details")
+        self.assertTrue(weight["draft"]["policy_snapshot"]["manual_only"])
         rpm = self.inbound("Rate is $2.45 per mile")
         self.assertEqual(rpm["action"], "draft")
         self.assertEqual(rpm["draft"]["reason"], "clarify_load_details")
@@ -371,6 +410,12 @@ class FreightConversationTests(unittest.TestCase):
         result = self.inbound("Max is 4200")
         self.assertEqual(result["action"], "alert")
         self.assertIn("Counter limit", result["summary"])
+        booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
+        freight_module.submit_rate_con(booking["id"], {"total_rate": "4200", "pickup_city": "Phoenix", "pickup_state": "AZ", "delivery_city": "Dallas", "delivery_state": "TX", "pickup_date": "2026-09-23"}, self.storage)
+        freight_module.review_rate_con(booking["id"], True, self.storage)
+        freight_module.approve_driver_handoff(booking["id"], self.storage)
+        linked_broker = self.storage.get("freight_loads", self.load_id).get("broker_id")
+        freight_module.update_broker(linked_broker, {"credit_status": "approved", "setup_status": "complete"}, self.storage)
         set_thread_state(self.thread_id, "booked", self.storage)
         booked = self.inbound("Can do $4,500. Where is the truck now?")
         self.assertEqual(booked["action"], "alert")
@@ -465,6 +510,188 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.storage.get("freight_drafts", draft["id"])["status"], "send_uncertain")
         self.assertEqual(recover_uncertain_freight_sends(self.storage), 0)
 
+    def test_crash_interrupted_inbound_is_recovered_by_reconcile(self):
+        # A crash between insert and evaluation must not strand the broker's reply:
+        # the message stays pending/failed and the next poll's reconcile replays it.
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<crash-1@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "We can do $4,200 all-in. Pickup tomorrow morning.",
+            "classification": {}, "status": "received", "processing_state": "pending",
+            "created_at": now_iso(),
+        })
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated crash mid-evaluation")
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+        failed = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(failed["processing_state"], "failed")
+        self.assertIn("simulated crash", failed["processing_error"])
+        # The next poll recovers it through the same processing path.
+        self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 1)
+        done = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(done["processing_state"], "processed")
+        self.assertIsNone(done["processing_error"])
+        # Reprocessing the same message never stacks a second reply draft.
+        thread = self.storage.get("freight_threads", self.thread_id)
+        freight_module._process_inbound(thread, done, None, self.storage)
+        first_pass = self.storage.list("freight_drafts", {"thread_id": self.thread_id}, order="", limit=50)
+        freight_module._process_inbound(thread, done, None, self.storage)
+        second_pass = self.storage.list("freight_drafts", {"thread_id": self.thread_id}, order="", limit=50)
+        self.assertEqual(len(first_pass), len(second_pass))
+        # A steady-state reconcile is a no-op.
+        self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+
+    def test_reconcile_reaches_pending_beyond_long_processed_history(self):
+        # A long processed history must never push unprocessed rows out of the window.
+        rows = [{
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": f"<old-{index}@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "ok", "classification": {}, "status": "received",
+            "processing_state": "processed", "created_at": f"2026-09-01T00:{index % 60:02d}:{index % 60:02d}+00:00",
+        } for index in range(1050)]
+        self.storage.insert_many("freight_messages", rows)
+        pending = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<late-pending@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "Still interested in the load?", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso(),
+        })
+        self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 1)
+        self.assertEqual(self.storage.get("freight_messages", pending["id"])["processing_state"], "processed")
+
+    def test_reconcile_alerts_when_thread_closed_before_processing(self):
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<closed-1@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "One more question.", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso(),
+        })
+        self.storage.update("freight_threads", self.thread_id, {"state": "closed"})
+        self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+        done = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(done["processing_state"], "processed")
+        alerts = self.storage.list("freight_alerts", {"kind": "inbound_stranded_closed"}, order="", limit=5)
+        self.assertEqual(len(alerts), 1)
+
+    def test_reconcile_escalates_repeated_failures(self):
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<boom@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "We can do $4,200 all-in.", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso(),
+        })
+        def boom(*args, **kwargs):
+            raise RuntimeError("still broken")
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+            self.assertEqual(self.storage.get("freight_messages", message["id"])["processing_state"], "failed")
+            self.assertEqual(freight_module.reconcile_unprocessed_inbound(self.storage), 0)
+        alerts = self.storage.list("freight_alerts", {"kind": "inbound_reprocess_failed"}, order="", limit=5)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("still broken", alerts[0]["summary"])
+        # A permanently failing message leaves the retry window entirely.
+        self.assertEqual(self.storage.get("freight_messages", message["id"])["processing_state"], "dead")
+
+    def test_reconcile_drains_more_than_200_stuck_failures(self):
+        # More stuck failures than one page must never starve the rows behind
+        # them: each row leaves the pending/failed window within two passes.
+        rows = [{
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": f"<stuck-{index}@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "ok", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": f"2026-09-01T00:{index // 60:02d}:{index % 60:02d}+00:00",
+        } for index in range(250)]
+        self.storage.insert_many("freight_messages", rows)
+        def boom(*args, **kwargs):
+            raise RuntimeError("permanent failure")
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            freight_module.reconcile_unprocessed_inbound(self.storage)
+            freight_module.reconcile_unprocessed_inbound(self.storage)
+        stuck = (self.storage.list("freight_messages", {"direction": "in", "processing_state": "pending"}, order="", limit=500)
+                 + self.storage.list("freight_messages", {"direction": "in", "processing_state": "failed"}, order="", limit=500))
+        self.assertEqual(stuck, [])
+        dead = self.storage.list("freight_messages", {"direction": "in", "processing_state": "dead"}, order="", limit=500)
+        self.assertEqual(len(dead), 250)
+        # Alerts dedupe per thread; every one of the 250 rows still drained.
+        alerts = self.storage.list("freight_alerts", {"kind": "inbound_reprocess_failed"}, order="", limit=500)
+        self.assertGreaterEqual(len(alerts), 1)
+
+    def test_reconcile_drains_mixed_pending_and_failed(self):
+        # A mixed window (150 pending + 150 failed) drains deterministically:
+        # pass one fails the pendings and kills the faileds, pass two kills
+        # the rest - all within ordinary reconcile calls, nothing stuck.
+        def row(index, state):
+            return {
+                "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+                "provider_message_id": f"<mix-{state}-{index}@example.com>", "from_email": "broker@example.com",
+                "to_email": "carrier@example.com", "subject": "Re: Truck available",
+                "body_text": "ok", "classification": {}, "status": "received",
+                "processing_state": state, "created_at": f"2026-09-01T00:{index // 60:02d}:{index % 60:02d}+00:00",
+            }
+        self.storage.insert_many("freight_messages", [row(i, "pending") for i in range(150)] + [row(i, "failed") for i in range(150)])
+        def boom(*args, **kwargs):
+            raise RuntimeError("permanent failure")
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            freight_module.reconcile_unprocessed_inbound(self.storage)
+        by_state = lambda state: self.storage.list("freight_messages", {"direction": "in", "processing_state": state}, order="", limit=500)
+        self.assertEqual(len(by_state("pending")), 0)
+        self.assertEqual(len(by_state("failed")), 150)
+        self.assertEqual(len(by_state("dead")), 150)
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            freight_module.reconcile_unprocessed_inbound(self.storage)
+        self.assertEqual(len(by_state("failed")), 0)
+        self.assertEqual(len(by_state("dead")), 300)
+
+    def test_replay_without_retained_attachment_alerts_instead_of_skipping(self):
+        # Crash landed before the PDF store: the replay must surface the lost
+        # comparison, not mark the message processed in silence.
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<lost-att@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "rate confirmation attached", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso()})
+        result = {"classification": {"protected": ["rate_confirmation"]}}
+        thread = self.storage.get("freight_threads", self.thread_id)
+        with patch.object(freight_module, "evaluate_inbound", return_value=result):
+            freight_module._process_inbound(thread, message, None, self.storage)
+        done = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(done["processing_state"], "processed")
+        alerts = self.storage.list("freight_alerts", {"kind": "rate_con_attachment_lost"}, order="", limit=5)
+        self.assertEqual(len(alerts), 1)
+
+    def test_attachments_persist_before_evaluation(self):
+        # The PDF bytes must be durable before evaluate_inbound runs: a crash
+        # inside evaluation must still leave the document recoverable.
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<att-order@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "rate confirmation attached", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso()})
+        pdf_b64 = _b64.b64encode(b"%PDF-1.4 fake-but-present")
+        raw = (b"From: broker@example.com\r\nSubject: RC\r\nContent-Type: multipart/mixed; boundary=bb\r\n\r\n"
+               b"--bb\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n"
+               b"--bb\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=ratecon.pdf\r\n"
+               b"Content-Transfer-Encoding: base64\r\n\r\n" + pdf_b64 + b"\r\n--bb--\r\n")
+        parsed = _email.message_from_bytes(raw)
+        seen = {}
+        def spy(*args, **kwargs):
+            seen["attachments"] = self.storage.list("freight_attachments", {"message_id": message["id"]}, order="", limit=5)
+            return {"classification": {"protected": []}}
+        thread = self.storage.get("freight_threads", self.thread_id)
+        with patch.object(freight_module, "evaluate_inbound", side_effect=spy):
+            freight_module._process_inbound(thread, message, parsed, self.storage)
+        self.assertEqual(len(seen["attachments"]), 1)
+        self.assertEqual(seen["attachments"][0]["filename"], "ratecon.pdf")
+
     def test_review_and_state_endpoints(self):
         from fastapi.testclient import TestClient
         from app import main
@@ -488,16 +715,32 @@ class FreightConversationTests(unittest.TestCase):
                 "origin_city": "Phoenix", "origin_state": "AZ", "equipment_type": "dry van",
                 "destination_city": "Dallas", "destination_state": "TX", "pickup_date": "2026-09-23",
                 "loaded_miles": "1068", "deadhead_miles": "75", "weight_lbs": "40000",
+                "origin_confirmed": "yes", "equipment_confirmed": "yes", "pickup_date_confirmed": "yes",
                 "schedule_confirmed": "yes",
             }, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertTrue(self.storage.get("freight_loads", self.load_id)["destination_verified"])
+            # Without a recorded agreement, booking is refused - the old manual shortcut bypassed every gate.
+            refused = client.post(f"/freight/threads/{self.thread_id}/state", data={"state": "booked"}, follow_redirects=False)
+            # Refusals land back on the load page with the reason, never a dead 400.
+            self.assertEqual(refused.status_code, 303)
+            self.assertIn("error=", refused.headers["location"])
+            self.assertIn(f"load_id={self.load_id}", refused.headers["location"])
+            booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
+            freight_module.submit_rate_con(booking["id"], {"total_rate": "4200", "pickup_city": "Phoenix", "pickup_state": "AZ", "delivery_city": "Dallas", "delivery_state": "TX", "pickup_date": "2026-09-23"}, self.storage)
+            freight_module.review_rate_con(booking["id"], True, self.storage)
+            freight_module.approve_driver_handoff(booking["id"], self.storage)
+            broker = freight_module.resolve_broker("rep@freightbroker.example", "FreightBroker", self.storage)
+            self.storage.update("freight_loads", self.load_id, {"broker_id": broker["id"]})
+            freight_module.update_broker(broker["id"], {"credit_status": "approved", "setup_status": "complete"}, self.storage)
             response = client.post(f"/freight/threads/{self.thread_id}/state", data={"state": "booked"}, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "booked")
             page = client.get(f"/freight?load_id={self.load_id}")
             self.assertEqual(page.status_code, 200)
-            self.assertIn("Reopen negotiation", page.text)
+            # A booked thread no longer offers "Reopen negotiation": the booked snapshot is immutable.
+            self.assertNotIn("Reopen negotiation", page.text)
+            self.assertIn("Booked", page.text)
             self.assertIn("Selected mission", page.text)
             self.assertIn("Desired delivery", page.text)
             self.assertIn("Truck weight limit", page.text)
@@ -542,8 +785,7 @@ class FreightConversationTests(unittest.TestCase):
                 "equipment_type": "Dry van",
                 "trailer_length_ft": "53",
                 "max_weight_lbs": "45000",
-                "destination_label": "Dallas",
-                "destination_state": "TX",
+                "destination_label": "Dallas, TX",
                 "destination_kind": "city",
                 "destination_radius": "0",
                 "floor_total": "2000",
@@ -552,10 +794,13 @@ class FreightConversationTests(unittest.TestCase):
                 "execution_mode": "auto",
                 "active": "on",
             }, follow_redirects=False)
+            page = client.get("/freight/missions")
         self.assertEqual(response.status_code, 303)
         self.assertIn("Mission+saved", response.headers["location"])
         saved = self.raw.list("freight_missions", order="created_at desc", limit=1)[0]
         self.assertEqual(saved["destinations"], [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
+        self.assertIn("Dallas, TX", page.text)
+        self.assertNotIn("<span>Open Destinations</span>", page.text)
         geocoder.assert_not_called()
 
     def test_freight_sender_add_workflow(self):
@@ -687,3 +932,1034 @@ class FreightIsolationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreightKeepAliveTests(unittest.TestCase):
+    """A broker turn must never end silently because part of the answer repeats."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.raw = SQLiteStore(os.path.join(self.temp.name, "freight.db"))
+        self.raw.init()
+        self.storage = OwnerStore(self.raw, ADMIN_OWNER_ID)
+        stamp = now_iso()
+        self.profile_id, self.mission_id, self.load_id, self.thread_id = (new_id() for _ in range(4))
+        self.storage.insert("freight_truck_profiles", {
+            "id": self.profile_id, "name": "Truck 1", "current_city": "Phoenix", "current_state": "AZ",
+            "equipment_type": "dry van", "trailer_length_ft": 53, "max_weight_lbs": 45000,
+            "team_status": "team", "mc_number": "123456", "shareable_fields": ["equipment_type", "team_status", "mc_number"],
+            "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_missions", {
+            "id": self.mission_id, "name": "Phoenix to Dallas", "truck_profile_id": self.profile_id,
+            "origin_city": "Phoenix", "origin_state": "AZ", "pickup_start": "2026-09-23", "pickup_end": "2026-09-23",
+            "equipment_type": "dry van", "destinations": [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}],
+            "floor_total": 3900, "target_total": 4500, "maximum_counter_rounds": 2,
+            "permissions": {"auto_counter": False, "auto_profile_reply": False, "auto_pass": False},
+            "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_loads", {
+            "id": self.load_id, "mission_id": self.mission_id, "truck_profile_id": self.profile_id,
+            "broker_email": "broker@example.com", "origin_city": "Phoenix", "origin_state": "AZ",
+            "destination_city": "Open destinations", "subject": "Truck available", "status": "waiting",
+            "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_threads", {
+            "id": self.thread_id, "load_id": self.load_id, "sender_account": "1", "recipient_email": "broker@example.com",
+            "subject": "Truck available", "root_message_id": "<first@example.com>", "last_message_id": "<first@example.com>",
+            "state": "waiting", "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp,
+        })
+        self.received = 0
+        self.sent = 0
+
+    def inbound(self, body):
+        self.received += 1
+        message_id = f"<broker-{self.received}@example.com>"
+        msg = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in", "provider_message_id": message_id,
+            "from_email": "broker@example.com", "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": body, "classification": {}, "created_at": now_iso(),
+        })
+        self.storage.update("freight_threads", self.thread_id, {"last_message_id": message_id})
+        return evaluate_inbound(self.storage.get("freight_threads", self.thread_id), msg, self.storage)
+
+    def send(self, draft):
+        self.sent += 1
+        provider = Mock()
+        provider.send.return_value = SendResult(True, f"<sent-{self.sent}@example.com>")
+        sender = {"id": "1", "email": "carrier@example.com", "provider": "gmail", "display_name": "Dispatch"}
+        with patch("app.core.freight.get_gmail_sender", return_value=sender), patch("app.core.freight.get_provider", return_value=provider):
+            return send_draft(draft["id"], self.storage)
+
+    def test_new_question_after_answered_one_still_goes_out(self):
+        first = self.inbound("Is this a true team?")
+        self.assertEqual(first["action"], "draft")
+        self.assertEqual(first["draft"]["reason"], "profile_fact_reply")
+        self.send(first["draft"])
+        # Broker's next message repeats part of the last exchange but asks something new.
+        second = self.inbound("Thanks. And is it a 53 ft dry van?")
+        self.assertEqual(second["action"], "draft")
+        self.assertEqual(second["draft"]["reason"], "profile_fact_reply")
+        self.assertIn("dry van", second["draft"]["body_text"])
+        self.assertNotIn("true team", second["draft"]["body_text"])
+
+    def test_unrecognized_broker_message_produces_keepalive_draft_not_silence(self):
+        result = self.inbound("Thirty pallets of manufactured components.")
+        self.assertEqual(result["action"], "draft")
+        self.assertEqual(result["draft"]["reason"], "clarify_load_details")
+        self.assertTrue(result["draft"]["policy_snapshot"]["manual_only"])
+        self.assertIn("delivery city and state", result["draft"]["body_text"])
+        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "draft_ready")
+
+    def test_fully_covered_load_gets_followup_nudge_draft_and_alert(self):
+        verify_load_facts(self.load_id, {
+            "origin_city": "Phoenix", "origin_state": "AZ", "origin_confirmed": "yes",
+            "destination_city": "Dallas", "destination_state": "TX",
+            "equipment_type": "dry van", "equipment_confirmed": "yes",
+            "pickup_date": "2026-09-23", "pickup_date_confirmed": "yes",
+            "loaded_miles": 1000, "deadhead_miles": 100,
+            "weight_lbs": 40000, "schedule_confirmed": "yes",
+        }, self.storage)
+        result = self.inbound("Ok, noted.")
+        self.assertEqual(result["action"], "draft")
+        self.assertEqual(result["draft"]["reason"], "follow_up_nudge")
+        self.assertTrue(self.storage.list("freight_alerts", {"thread_id": self.thread_id, "kind": "ambiguous_reply"}, order="", limit=1))
+
+    def test_driver_information_request_never_gets_keepalive(self):
+        result = self.inbound("Send me full driver information.")
+        self.assertEqual(result["action"], "alert")
+        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "protected_review")
+        self.assertEqual(self.storage.list("freight_drafts", {"thread_id": self.thread_id, "status": "pending"}, order="", limit=10), [])
+
+    def test_counter_restate_after_two_sends_goes_manual(self):
+        verify_load_facts(self.load_id, {
+            "destination_city": "Dallas", "destination_state": "TX",
+            "loaded_miles": 1000, "deadhead_miles": 100,
+        }, self.storage)
+        first = self.inbound("Rate is $4,000 all in.")
+        self.assertEqual(first["action"], "draft")
+        self.assertEqual(first["draft"]["reason"], "counter_to_target")
+        self.send(first["draft"])
+        second = self.inbound("Could you do $4,100?")
+        self.assertEqual(second["action"], "draft")
+        self.assertEqual(second["draft"]["reason"], "counter_to_target")
+        self.assertTrue(second["draft"]["policy_snapshot"]["safe_to_auto_send"])
+        self.send(second["draft"])
+        third = self.inbound("Best I can do is $4,150.")
+        self.assertEqual(third["action"], "draft")
+        self.assertFalse(third["draft"]["policy_snapshot"]["safe_to_auto_send"])
+        self.assertTrue(self.storage.list("freight_alerts", {"thread_id": self.thread_id, "kind": "counter_restate_limit"}, order="", limit=1))
+        # Restates never consume counter rounds: one initial counter, two restates.
+        self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 1)
+
+
+class FreightStopsTests(unittest.TestCase):
+    """Phase 2: ordered stops with per-stop verification."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/stops.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        self.profile_id, self.mission_id = new_id(), new_id()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': self.profile_id, 'name': 'T', 'current_city': 'Phoenix', 'current_state': 'AZ', 'equipment_type': 'dry van', 'max_weight_lbs': 45000, 'team_status': 'team', 'shareable_fields': ['team_status'], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': self.mission_id, 'name': 'M', 'truck_profile_id': self.profile_id, 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'equipment_type': 'dry van', 'destinations': [{'kind': 'city', 'label': 'Dallas, TX', 'radius_miles': 0}], 'floor_total': 3900, 'target_total': 4500, 'maximum_counter_rounds': 2, 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _load(self):
+        stamp = now_iso()
+        broker = freight_module.resolve_broker('b@x.com', 'X Co', self.storage)
+        freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        return self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': self.mission_id, 'truck_profile_id': self.profile_id, 'broker_id': broker['id'], 'broker_email': 'b@x.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'pickup_date': '2026-09-28', 'pickup_date_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+
+    def test_sync_inserts_stops_in_order(self):
+        load = self._load()
+        classification = {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'ABC Warehouse', 'appointment': 'Mon 8am-10am', 'evidence': 'pick up at ABC Warehouse in Phoenix, AZ Mon 8am-10am'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver to Dallas, TX Tue 1pm'},
+        ]}
+        freight_module._sync_load_stops(load, classification, 'msg-1', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual([s['kind'] for s in stops], ['pickup', 'delivery'])
+        self.assertEqual([s['seq'] for s in stops], [1, 2])
+        self.assertEqual(stops[0]['facility_name'], 'ABC Warehouse')
+        self.assertFalse(stops[0]['verified'])
+
+    def test_sync_unverifies_stop_when_appointment_changes(self):
+        load = self._load()
+        classification = {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix, AZ Mon 8am'},
+        ]}
+        freight_module._sync_load_stops(load, classification, 'msg-1', self.storage)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='', limit=1)[0]
+        freight_module.verify_load_stop(stop['id'], {}, self.storage)
+        changed = {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Wed 6am', 'evidence': 'actually pick up Phoenix, AZ Wed 6am'},
+        ]}
+        freight_module._sync_load_stops(load, changed, 'msg-2', self.storage)
+        stop = self.storage.get('freight_load_stops', stop['id'])
+        self.assertEqual(stop['appointment'], 'Wed 6am')
+        self.assertFalse(stop['verified'])
+
+    def test_readiness_blocks_on_unverified_stops(self):
+        load = self._load()
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        self.assertEqual(freight_module._booking_readiness_blockers(load, mission, profile, self.storage), [])
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix, AZ Mon 8am'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas, TX Tue 1pm'},
+        ]}, 'msg-1', self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(len(blockers), 2)
+        self.assertIn('stop 1 pickup (Phoenix, AZ) confirmed', blockers)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id'], 'kind': 'pickup'}, order='', limit=1)[0]
+        freight_module.verify_load_stop(stop['id'], {}, self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(blockers, ['stop 2 delivery (Dallas, TX) confirmed'])
+
+    def test_repeat_stops_same_city_each_get_a_row(self):
+        # Two pickups in the same city are real; kind+city dedupe must not collapse them.
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'A Warehouse', 'appointment': 'Mon 8am', 'evidence': 'pick up A Warehouse Phoenix'},
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'B Depot', 'appointment': 'Mon 1pm', 'evidence': 'then pick up B Depot Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-1', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual(len(stops), 3)
+        self.assertEqual([s['facility_name'] for s in stops[:2]], ['A Warehouse', 'B Depot'])
+        # A re-sync of the same route matches by occurrence and keeps both rows stable.
+        first_ids = [s['id'] for s in stops]
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'A Warehouse', 'appointment': 'Mon 8am', 'evidence': 'pick up A Warehouse Phoenix'},
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'B Depot', 'appointment': 'Mon 1pm', 'evidence': 'then pick up B Depot Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-2', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual([s['id'] for s in stops], first_ids)
+
+    def test_dropped_stop_is_marked_removed_with_review_alert(self):
+        load = self._load()
+        self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load['id'], 'sender_account': '1', 'recipient_email': 'b@x.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': now_iso(), 'created_at': now_iso(), 'updated_at': now_iso()})
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-1', self.storage)
+        pickup = self.storage.list('freight_load_stops', {'load_id': load['id'], 'kind': 'pickup'}, order='', limit=1)[0]
+        freight_module.verify_load_stop(pickup['id'], {'appointment': 'Mon 8am'}, self.storage)
+        # The broker's next message restates the complete route without the pickup stop.
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'route_scope': 'complete', 'stops': [
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-2', self.storage)
+        gone = self.storage.get('freight_load_stops', pickup['id'])
+        self.assertIsNotNone(gone['removed_at'])
+        alerts = self.storage.list('freight_alerts', {'kind': 'stop_removed'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+        # Removed stops no longer block booking and cannot be verified.
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertNotIn('stop 1 pickup (Phoenix, AZ) appointment', blockers)
+        with self.assertRaises(ValueError):
+            freight_module.verify_load_stop(pickup['id'], {'appointment': 'Mon 9am'}, self.storage)
+
+    def test_reordered_route_updates_seq_without_clearing_verification(self):
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix'},
+            {'kind': 'pickup', 'city': 'Tempe', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 11am', 'evidence': 'then Tempe'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-1', self.storage)
+        for stop in self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10):
+            freight_module.verify_load_stop(stop['id'], {}, self.storage)
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Tempe', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 11am', 'evidence': 'Tempe first now'},
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'then Phoenix'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas'},
+        ]}, 'msg-2', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual([s['city'] for s in stops], ['Tempe', 'Phoenix', 'Dallas'])
+        self.assertTrue(all(s['verified'] for s in stops))
+
+    def test_fcfs_stop_confirms_without_appointment(self):
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': '', 'evidence': 'deliver Dallas FCFS'},
+        ]}, 'msg-1', self.storage)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='', limit=1)[0]
+        confirmed = freight_module.verify_load_stop(stop['id'], {'fcfs': 'yes'}, self.storage)
+        self.assertTrue(confirmed['verified'])
+        self.assertEqual(confirmed['appointment'], 'FCFS')
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        self.assertEqual(freight_module._booking_readiness_blockers(load, mission, profile, self.storage), [])
+
+    def test_partial_stop_update_keeps_other_stops(self):
+        # A broker update mentioning one stop must not wipe the rest of the route.
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'route_scope': 'complete', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix, AZ Mon 8am'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas, TX Tue 1pm'},
+        ]}, 'msg-1', self.storage)
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Wed 6am', 'evidence': 'pickup moved to Wed 6am'},
+        ]}, 'msg-2', self.storage)
+        active = [row for row in self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10) if not row['removed_at']]
+        self.assertEqual(len(active), 2)
+        self.assertEqual(active[0]['appointment'], 'Wed 6am')
+        self.assertEqual(active[1]['city'], 'Dallas')
+        self.assertEqual(self.storage.list('freight_alerts', {'kind': 'stop_removed'}, order='', limit=5), [])
+
+    def test_repeated_city_stops_survive_model_boundary(self):
+        # Two pickups in one city with different facilities are distinct stops;
+        # only exact duplicates collapse.
+        from app.core import freight_agent
+        evidence = "Pick up Depot A Phoenix, AZ Mon 8am then Depot B Phoenix, AZ Mon 1pm, deliver Dallas, TX Tue 9am"
+        raw = {"intent": "details", "route_scope": "complete", "stops": [
+            {"kind": "pickup", "city": "Phoenix", "state": "AZ", "facility": "Depot A", "appointment": "Mon 8am", "evidence": evidence},
+            {"kind": "pickup", "city": "Phoenix", "state": "AZ", "facility": "Depot B", "appointment": "Mon 1pm", "evidence": evidence},
+            {"kind": "delivery", "city": "Dallas", "state": "TX", "facility": "", "appointment": "Tue 9am", "evidence": evidence},
+        ]}
+        reading = freight_agent._validated(raw, evidence)
+        self.assertEqual(len(reading["stops"]), 3)
+        self.assertEqual(reading["route_scope"], "complete")
+        # Exact stutter collapses to one row.
+        raw["stops"].append(dict(raw["stops"][0]))
+        reading = freight_agent._validated(raw, evidence)
+        self.assertEqual(len(reading["stops"]), 3)
+        # Missing or invalid scope defaults to partial (safe: never removes stops).
+        raw.pop("route_scope")
+        reading = freight_agent._validated(raw, evidence)
+        self.assertEqual(reading["route_scope"], "partial")
+
+    def test_manual_add_stop_appends_confirmed(self):
+        load = self._load()
+        added = freight_module.add_load_stop(load['id'], {'kind': 'pickup', 'city': 'Tucson', 'state': 'AZ', 'facility_name': ' Depot ', 'appointment': '', 'fcfs': 'yes'}, self.storage)
+        self.assertTrue(added['verified'])
+        self.assertEqual(added['appointment'], 'FCFS')
+        self.assertEqual(added['seq'], 1)
+        second = freight_module.add_load_stop(load['id'], {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'appointment': 'Tue 1pm'}, self.storage)
+        self.assertEqual(second['seq'], 2)
+        with self.assertRaises(ValueError):
+            freight_module.add_load_stop(load['id'], {'kind': 'pickup', 'city': 'Dallas', 'state': 'Texas'}, self.storage)
+
+    def test_verify_load_stop_requires_appointment(self):
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': '', 'evidence': 'pick up Phoenix, AZ'},
+        ]}, 'msg-1', self.storage)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='', limit=1)[0]
+        with self.assertRaises(ValueError):
+            freight_module.verify_load_stop(stop['id'], {'appointment': ''}, self.storage)
+
+    def test_gemini_stop_extraction_requires_evidence(self):
+        raw = {'intent': 'details', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': '', 'evidence': 'pick up in Phoenix, AZ Friday'},
+            {'kind': 'delivery', 'city': 'Nowhere', 'state': 'ZZ', 'facility': '', 'appointment': '', 'evidence': 'not in the message at all'},
+        ]}
+        result = freight_agent_module._validated(raw, 'Pick up in Phoenix, AZ Friday. Rate $4,000.')
+        self.assertEqual(len(result['stops']), 1)
+        self.assertEqual(result['stops'][0]['city'], 'Phoenix')
+
+    def test_gemini_location_requires_explicit_state_token_or_name(self):
+        inferred = freight_agent_module._validated({
+            'intent': 'details',
+            'destination': {'city': 'Washington', 'state': 'WA', 'evidence': 'Deliver in Washington'},
+        }, 'Deliver in Washington')
+        self.assertIsNone(inferred['destination'])
+        explicit = freight_agent_module._validated({
+            'intent': 'details',
+            'destination': {'city': 'Dallas', 'state': 'TX', 'evidence': 'Deliver in Dallas, Texas'},
+        }, 'Deliver in Dallas, Texas')
+        self.assertEqual(explicit['destination']['state'], 'TX')
+
+
+class FreightDriverSafetyTests(unittest.TestCase):
+    """Phase 3: driver/vehicle identity never leaves; availability gates booking."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/driver.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        self.profile_id, self.mission_id = new_id(), new_id()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': self.profile_id, 'name': 'T', 'current_city': 'Phoenix', 'current_state': 'AZ', 'equipment_type': 'dry van', 'max_weight_lbs': 45000, 'team_status': 'team', 'truck_vin': '1HGBH41JXMN109186', 'driver_name': 'Alex Rios', 'driver_cdl_number': 'D1234567', 'driver_cdl_state': 'AZ', 'driver_phone': '6025550143', 'shareable_fields': ['team_status'], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': self.mission_id, 'name': 'M', 'truck_profile_id': self.profile_id, 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'equipment_type': 'dry van', 'destinations': [{'kind': 'city', 'label': 'Dallas, TX', 'radius_miles': 0}], 'floor_total': 3900, 'target_total': 4500, 'maximum_counter_rounds': 2, 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _load(self, **over):
+        stamp = now_iso()
+        row = {'id': new_id(), 'mission_id': self.mission_id, 'truck_profile_id': self.profile_id, 'broker_email': 'b@x.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp}
+        row.update(over)
+        return self.storage.insert('freight_loads', row)
+
+    def test_shareable_fields_allowlist_rejects_driver_fields(self):
+        crafted = ['equipment_type', 'driver_cdl_number', 'truck_vin', 'driver_name', 'mc_number']
+        self.assertEqual(freight_module.filter_shareable_fields(crafted), ['equipment_type', 'mc_number'])
+
+    def test_send_draft_blocks_stored_vin_even_with_confirmation(self):
+        load = self._load()
+        stamp = now_iso()
+        thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load['id'], 'sender_account': '1', 'recipient_email': 'b@x.com', 'subject': 's', 'state': 'draft_ready', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+        draft = self.storage.insert('freight_drafts', {'id': new_id(), 'thread_id': thread['id'], 'subject': 's', 'body_text': 'Driver Alex Rios, VIN 1HGBH41JXMN109186, CDL D1234567.', 'reason': 'manual_reply', 'status': 'pending', 'created_at': stamp, 'updated_at': stamp})
+        with self.assertRaises(ValueError) as ctx:
+            send_draft(draft['id'], self.storage, confirm_sensitive=True)
+        self.assertIn('driver', str(ctx.exception).lower())
+
+    def test_availability_off_blocks_booking(self):
+        self.storage.update('freight_truck_profiles', self.profile_id, {'availability_status': 'off'})
+        load = self._load()
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('truck availability (Truck is marked off duty)', blockers)
+
+    def test_booked_load_window_conflicts(self):
+        # A booked 1,000-mile load picked up 9/28 occupies the truck through 9/30
+        # (500 miles per transit day) - next-day pickups conflict too.
+        self._load(status='booked', pickup_date='2026-09-28')
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        same_day = self._load(pickup_date='2026-09-28')
+        self.assertEqual(freight_module.truck_availability(profile, same_day, self.storage)['status'], 'conflict')
+        mid_transit = self._load(pickup_date='2026-09-30')
+        availability = freight_module.truck_availability(profile, mid_transit, self.storage)
+        self.assertEqual(availability['status'], 'conflict')
+        self.assertIn('2026-09-30', availability['detail'])
+        after = self._load(pickup_date='2026-10-02')
+        self.assertEqual(freight_module.truck_availability(profile, after, self.storage)['status'], 'available')
+
+    def test_delivery_stop_appointment_extends_the_window(self):
+        booked = self._load(status='booked', pickup_date='2026-09-28')
+        stamp = now_iso()
+        self.storage.insert('freight_load_stops', {'id': new_id(), 'load_id': booked['id'], 'seq': 1, 'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility_name': '', 'appointment': '2026-10-05 13:00', 'evidence': 'deliver Dallas 10/5', 'source_message_id': 'm1', 'created_at': stamp, 'updated_at': stamp})
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        during = self._load(pickup_date='2026-10-04')
+        self.assertEqual(freight_module.truck_availability(profile, during, self.storage)['status'], 'conflict')
+        after = self._load(pickup_date='2026-10-06')
+        self.assertEqual(freight_module.truck_availability(profile, after, self.storage)['status'], 'available')
+
+    def test_available_from_future_date_conflicts(self):
+        self.storage.update('freight_truck_profiles', self.profile_id, {'available_from': '2026-10-01'})
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        load = self._load(pickup_date='2026-09-28')
+        self.assertEqual(freight_module.truck_availability(profile, load, self.storage)['status'], 'conflict')
+        later = self._load(pickup_date='2026-10-02')
+        self.assertEqual(freight_module.truck_availability(profile, later, self.storage)['status'], 'available')
+
+
+class FreightBrokerTests(unittest.TestCase):
+    """Phase 4: broker identity, credit and setup gating."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/broker.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_resolve_creates_then_matches_by_email(self):
+        broker = freight_module.resolve_broker('Dispatch@ABCLogistics.com', 'ABC Logistics', self.storage)
+        self.assertEqual(broker['domain'], 'abclogistics.com')
+        self.assertEqual(broker['emails'], ['dispatch@abclogistics.com'])
+        self.assertEqual(broker['credit_status'], 'unknown')
+        again = freight_module.resolve_broker('dispatch@abclogistics.com', '', self.storage)
+        self.assertEqual(again['id'], broker['id'])
+
+    def test_resolve_matches_domain_and_appends_email(self):
+        broker = freight_module.resolve_broker('one@xyz.com', 'XYZ', self.storage)
+        second = freight_module.resolve_broker('two@xyz.com', '', self.storage)
+        self.assertEqual(second['id'], broker['id'])
+        self.assertEqual(sorted(second['emails']), ['one@xyz.com', 'two@xyz.com'])
+
+    def test_free_mail_domains_never_match_by_domain(self):
+        # Two brokers at gmail.com are not the same company; domain matching
+        # would let one inherit the other's credit approval.
+        first = freight_module.resolve_broker('one@gmail.com', 'One Co', self.storage)
+        second = freight_module.resolve_broker('two@gmail.com', 'Two Co', self.storage)
+        self.assertNotEqual(first['id'], second['id'])
+        again = freight_module.resolve_broker('one@gmail.com', '', self.storage)
+        self.assertEqual(again['id'], first['id'])
+
+    def test_update_broker_validates_statuses(self):
+        broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
+        updated = freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'credit_score': '92', 'setup_status': 'complete', 'mc_number': 'MC-123'}, self.storage)
+        self.assertEqual(updated['credit_status'], 'approved')
+        self.assertEqual(updated['credit_score'], 92.0)
+        with self.assertRaises(ValueError):
+            freight_module.update_broker(broker['id'], {'credit_status': 'great'}, self.storage)
+
+    def test_readiness_blocks_until_credit_and_setup_done(self):
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'max_weight_lbs': 45000, 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
+        load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_id': broker['id'], 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'pickup_date': '2026-09-28', 'pickup_date_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        mission = self.storage.get('freight_missions', 'm1')
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('broker credit approval', blockers)
+        self.assertIn('broker setup packet', blockers)
+        freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(blockers, [])
+        freight_module.update_broker(broker['id'], {'blocked': True}, self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('blocked broker (B Co)', blockers)
+
+    def test_domain_matched_email_requires_identity_confirmation(self):
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'max_weight_lbs': 45000, 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        broker = freight_module.resolve_broker('alice@bigbroker.com', 'Big Broker', self.storage)
+        freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_id': broker['id'], 'broker_email': 'bob@bigbroker.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'pickup_date': '2026-09-28', 'pickup_date_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load['id'], 'sender_account': '1', 'recipient_email': 'bob@bigbroker.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+        # A new email matching by company domain inherits credit/setup only after
+        # a dispatcher confirms it is the same company. Confirmation is per
+        # email link: the alias alone is blocked, the broker is not.
+        matched = freight_module.resolve_broker('bob@bigbroker.com', '', self.storage, thread_id=thread['id'])
+        self.assertEqual(matched['id'], broker['id'])
+        self.assertIn('bob@bigbroker.com', matched['unconfirmed_emails'])
+        alerts = self.storage.list('freight_alerts', {'kind': 'broker_identity_review'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+        mission = self.storage.get('freight_missions', 'm1')
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('broker identity confirmation', blockers)
+        # The broker's existing verified address keeps working while the new
+        # alias waits for confirmation.
+        load_alice = self.storage.insert('freight_loads', {**load, 'id': new_id(), 'broker_email': 'alice@bigbroker.com'})
+        blockers_alice = freight_module._booking_readiness_blockers(load_alice, mission, profile, self.storage)
+        self.assertNotIn('broker identity confirmation', blockers_alice)
+        # Confirming one alias confirms only that alias.
+        freight_module.update_broker(broker['id'], {'identity_confirm_emails': ['bob@bigbroker.com']}, self.storage)
+        confirmed = self.storage.get('freight_brokers', broker['id'])
+        self.assertEqual(confirmed['unconfirmed_emails'], [])
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(blockers, [])
+        # An exact-email match on the broker stays confirmed.
+        again = freight_module.resolve_broker('alice@bigbroker.com', '', self.storage)
+        self.assertEqual(again['unconfirmed_emails'], [])
+
+    def test_internal_blockers_never_asked_of_broker(self):
+        labels = freight_module._broker_detail_labels(['broker credit approval', 'broker setup packet', 'blocked broker (B Co)', 'truck availability (Truck is marked off duty)', 'stop 1 pickup (Phoenix, AZ) confirmed', 'broker load weight'], [])
+        self.assertEqual(labels, ['load weight'])
+
+
+class FreightBookingTests(unittest.TestCase):
+    """Phase 5: agreed -> rate con review -> booked with immutable snapshot."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/booking.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'max_weight_lbs': 45000, 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
+        freight_module.update_broker(self.broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        self.load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_id': self.broker['id'], 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_type': 'dry van', 'equipment_verified': 1, 'pickup_date': '2026-09-23', 'pickup_date_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        self.thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': self.load['id'], 'sender_account': '1', 'recipient_email': 'a@b.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _full_con(self, **overrides):
+        con = {'total_rate': '4200', 'pickup_city': 'Phoenix', 'pickup_state': 'AZ',
+               'delivery_city': 'Dallas', 'delivery_state': 'TX', 'pickup_date': '2026-09-23',
+               'equipment': 'dry van', 'weight_lbs': '40000'}
+        con.update(overrides)
+        return con
+
+    def test_agreement_snapshot_immutable_and_idempotent(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        self.assertEqual(booking['status'], 'agreed')
+        self.assertEqual(booking['snapshot']['origin'], 'Phoenix, AZ')
+        self.assertEqual(booking['snapshot']['destination'], 'Dallas, TX')
+        again = freight_module.record_agreement(self.thread['id'], 4500.0, 'msg-2', self.storage)
+        self.assertEqual(again['id'], booking['id'])
+        self.assertEqual(again['agreed_rate'], 4200.0)
+        self.storage.update('freight_loads', self.load['id'], {'destination_city': 'Houston'})
+        kept = self.storage.get('freight_bookings', booking['id'])
+        self.assertEqual(kept['snapshot']['destination'], 'Dallas, TX')
+
+    def test_rate_con_exact_diffs(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], {'total_rate': '4000', 'delivery_city': 'Houston', 'delivery_state': 'TX', 'pickup_city': 'Phoenix', 'pickup_state': 'AZ'}, self.storage)
+        self.assertEqual(updated['status'], 'rate_con_review')
+        fields = {d['field']: d for d in updated['rate_con_diffs']}
+        self.assertEqual(fields['total rate']['agreed'], 4200.0)
+        self.assertEqual(fields['total rate']['rate_con'], 4000.0)
+        self.assertEqual(fields['delivery']['rate_con'], 'Houston, TX')
+        self.assertNotIn('pickup', fields)
+
+    def test_clean_rate_con_has_no_diffs(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        self.assertEqual(updated['rate_con_diffs'], [])
+
+    def test_gates_enforced_in_order(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        with self.assertRaises(ValueError):
+            freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError):
+            freight_module.mark_booked(booking['id'], self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+        self.assertEqual(self.storage.get('freight_loads', self.load['id'])['status'], 'booked')
+        # The commitment is the load's occupancy window, not a permanent profile
+        # flag: availability returns to its prior state and the mutex is released.
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        self.assertEqual(profile['availability_status'], 'available')
+        self.assertIsNone(profile['booking_claim_at'])
+        self.assertEqual(self.storage.get('freight_threads', self.thread['id'])['state'], 'booked')
+
+    def test_mark_booked_blocked_by_unverified_facts(self):
+        self.storage.update('freight_loads', self.load['id'], {'equipment_verified': 0})
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('broker equipment', str(ctx.exception))
+
+    def test_partial_rate_con_is_unverified_not_matching(self):
+        # A con that omits agreed terms is not an exact match: unknown is not equal.
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        fields = {d['field']: d for d in updated['rate_con_diffs']}
+        self.assertEqual(fields['pickup date']['status'], 'unverified')
+        self.assertIsNone(fields['pickup date']['rate_con'])
+        self.assertEqual(fields['equipment']['status'], 'unverified')
+
+    def test_approval_refused_when_required_terms_missing(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.review_rate_con(booking['id'], True, self.storage)
+        self.assertIn('pickup city', str(ctx.exception))
+
+    def test_rate_con_dates_compare_normalized(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(pickup_date='09/23/2026'), self.storage)
+        self.assertEqual(updated['rate_con_diffs'], [])
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(pickup_date='Sep 24, 2026'), self.storage)
+        fields = {d['field']: d for d in updated['rate_con_diffs']}
+        self.assertEqual(fields['pickup date']['status'], 'mismatch')
+
+    def test_new_rate_con_resets_review_and_handoff_gates(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        # A replacement con invalidates both approvals; booking must stop.
+        freight_module.submit_rate_con(booking['id'], self._full_con(total_rate='4100'), self.storage)
+        reset = self.storage.get('freight_bookings', booking['id'])
+        self.assertFalse(reset['rate_con_reviewed'])
+        self.assertFalse(reset['driver_handoff_approved'])
+        with self.assertRaises(ValueError):
+            freight_module.mark_booked(booking['id'], self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+
+    def test_mark_booked_refused_without_broker_identity(self):
+        self.storage.update('freight_loads', self.load['id'], {'broker_id': None})
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        # record_agreement re-resolves identity from the broker email; clear it to simulate an unidentified broker.
+        broker_id = self.storage.get('freight_loads', self.load['id']).get('broker_id')
+        self.assertIsNotNone(broker_id)
+        self.storage.update('freight_loads', self.load['id'], {'broker_id': None})
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('verified broker identity', str(ctx.exception))
+
+    def test_mark_booked_claim_is_atomic(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        # A concurrent booking claimed the load between the gate check and commit.
+        self.storage.update('freight_loads', self.load['id'], {'status': 'booked'})
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('already booked', str(ctx.exception))
+        # The losing booking is not marked booked.
+        self.assertNotEqual(self.storage.get('freight_bookings', booking['id'])['status'], 'booked')
+
+    def test_rate_con_source_reference_retained(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        updated = freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage, source='pdf', source_ref='gmail:<m1>:con.pdf')
+        self.assertEqual(updated['rate_con_source'], 'pdf')
+        self.assertEqual(updated['rate_con_source_ref'], 'gmail:<m1>:con.pdf')
+        again = freight_module.submit_rate_con(booking['id'], self._full_con(total_rate='4300'), self.storage)
+        self.assertEqual(again['rate_con_source'], 'manual')
+        self.assertEqual(again['rate_con_source_ref'], '')
+
+    def test_mark_booked_requires_recorded_terms(self):
+        # Rows that predate version-bound gates must re-submit and re-review.
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        self.storage.update('freight_bookings', booking['id'], {'rate_con_reviewed': 1, 'driver_handoff_approved': 1})
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('Rate confirmation terms are required', str(ctx.exception))
+
+    def test_readiness_requires_pickup_date(self):
+        # No pickup date means no occupancy window, so booking must block.
+        self.storage.update('freight_loads', self.load['id'], {'pickup_date': None})
+        load = self.storage.get('freight_loads', self.load['id'])
+        mission = self.storage.get('freight_missions', 'm1')
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('broker pickup date', blockers)
+
+    def test_concurrent_bookings_on_one_truck_serialize(self):
+        import threading
+        stamp = now_iso()
+        load2 = self.storage.insert('freight_loads', {**self.load, 'id': new_id(), 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        thread2 = self.storage.insert('freight_threads', {**self.thread, 'id': new_id(), 'load_id': load2['id'], 'created_at': stamp, 'updated_at': stamp})
+        def gated(thread_id):
+            booking = freight_module.record_agreement(thread_id, 4200.0, 'msg-' + thread_id, self.storage)
+            freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+            freight_module.review_rate_con(booking['id'], True, self.storage)
+            freight_module.approve_driver_handoff(booking['id'], self.storage)
+            return booking
+        first, second = gated(self.thread['id']), gated(thread2['id'])
+        results = {}
+        def attempt(key, booking_id):
+            try:
+                freight_module.mark_booked(booking_id, self.storage)
+                results[key] = 'booked'
+            except ValueError as exc:
+                results[key] = str(exc)
+        workers = [threading.Thread(target=attempt, args=('one', first['id'])),
+                   threading.Thread(target=attempt, args=('two', second['id']))]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        outcomes = list(results.values())
+        self.assertEqual(outcomes.count('booked'), 1, results)
+        loser = [value for value in outcomes if value != 'booked'][0]
+        self.assertTrue(loser.startswith('Another booking is in progress') or loser.startswith('Booking is not ready: truck availability'), loser)
+        booked = self.storage.list('freight_loads', {'truck_profile_id': 'p1', 'status': 'booked'}, order='', limit=10)
+        self.assertEqual(len(booked), 1)
+        # The truck never gets stuck behind the transient mutex state.
+        self.assertEqual(self.storage.get('freight_truck_profiles', 'p1')['availability_status'], 'available')
+
+    def test_stale_booking_claim_recovers(self):
+        # A crashed booking flow leaves availability 'booking' behind; a stale
+        # or timestamp-less claim must recover instead of stranding the truck.
+        stamp = now_iso()
+        base = {'id': 'p9', 'name': 'T', 'availability_status': 'booking', 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp}
+        self.assertEqual(freight_module.truck_availability(base)['status'], 'available')
+        fresh = {**base, 'booking_claim_at': now_iso()}
+        self.assertEqual(freight_module.truck_availability(fresh)['status'], 'conflict')
+        old = {**base, 'booking_claim_at': (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}
+        self.assertEqual(freight_module.truck_availability(old)['status'], 'available')
+
+    def test_removed_stop_blocks_booking_until_route_confirmed(self):
+        stamp = now_iso()
+        self.storage.insert('freight_load_stops', {'id': new_id(), 'load_id': self.load['id'], 'seq': 1, 'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'verified': 1, 'appointment': '2026-09-23 08:00', 'appointment_verified': 1, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_load_stops', {'id': new_id(), 'load_id': self.load['id'], 'seq': 2, 'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'verified': 1, 'appointment': '2026-09-24 08:00', 'appointment_verified': 1, 'created_at': stamp, 'updated_at': stamp})
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        # The broker restates the full route without the delivery stop.
+        classification = {'source': 'gemini', 'route_scope': 'complete',
+                          'stops': [{'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'evidence': 'e'}]}
+        freight_module._sync_load_stops(self.storage.get('freight_loads', self.load['id']), classification, 'msg-2', self.storage)
+        alerts = self.storage.list('freight_alerts', {'kind': 'stop_removed', 'status': 'open'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+        # Approvals made against the old route are unbound...
+        kept = self.storage.get('freight_bookings', booking['id'])
+        self.assertFalse(kept['rate_con_reviewed'])
+        self.assertFalse(kept['driver_handoff_approved'])
+        # ...the booking row carries the revision gate: booking against the old
+        # (immutable) agreement is refused even after a fresh review.
+        kept = self.storage.get('freight_bookings', booking['id'])
+        self.assertTrue(kept['route_revision_pending'])
+        self.assertEqual(len(kept['snapshot']['stops']), 2)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        with self.assertRaises(ValueError) as ctx:
+            freight_module.mark_booked(booking['id'], self.storage)
+        self.assertIn('route changed', str(ctx.exception))
+        # The dispatcher approves the revised route: the agreement snapshot is
+        # re-captured against the new stops, the alert resolves, and the gates
+        # reset for a fresh rate-con review.
+        revised = freight_module.approve_route_revision(booking['id'], self.storage)
+        self.assertFalse(revised['route_revision_pending'])
+        self.assertEqual(len(revised['snapshot']['stops']), 1)
+        self.assertEqual(revised['snapshot']['stops'][0]['kind'], 'pickup')
+        self.assertEqual(self.storage.list('freight_alerts', {'kind': 'stop_removed', 'status': 'open'}, order='', limit=5), [])
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+
+    def test_mark_booked_reclaims_stale_stored_claim(self):
+        # A crashed booking left the lease in the database: an atomic
+        # timestamp-aware claim must reclaim it, not refuse forever.
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.storage.update('freight_truck_profiles', 'p1', {'availability_status': 'booking', 'booking_claim_at': stale})
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        self.assertEqual(profile['availability_status'], 'available')
+        self.assertIsNone(profile['booking_claim_at'])
+
+    def test_mark_booked_refused_under_fresh_stored_claim(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        self.storage.update('freight_truck_profiles', 'p1', {'availability_status': 'booking', 'booking_claim_at': now_iso()})
+        with self.assertRaises(ValueError):
+            freight_module.mark_booked(booking['id'], self.storage)
+
+    def test_rejected_rate_con_returns_to_agreed(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(total_rate='4000'), self.storage)
+        back = freight_module.review_rate_con(booking['id'], False, self.storage)
+        self.assertEqual(back['status'], 'agreed')
+        self.assertEqual(back['rate_con_diffs'], [])
+        self.assertFalse(back['rate_con_reviewed'])
+        self.assertFalse(back['driver_handoff_approved'])
+
+
+def _make_pdf(lines):
+    """Minimal one-page PDF containing the given text lines."""
+    def esc(s):
+        return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    content = "BT /F1 11 Tf 40 780 Td 14 TL " + " ".join(f"({esc(line)}) Tj T*" for line in lines) + " ET"
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
+    ]
+    out = "%PDF-1.4\n"
+    offsets = []
+    for i, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{body}\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n"
+    out += f"trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
+    return out.encode("latin-1")
+
+
+RATE_CON_LINES = [
+    "RATE CONFIRMATION",
+    "Load #: 12345",
+    "Total Rate: $4,200.00",
+    "Shipper: ABC Warehouse",
+    "Pickup: Phoenix, AZ 85001",
+    "Pickup Date: 09/28/2026",
+    "Consignee: XYZ Distribution",
+    "Delivery: Dallas, TX 75201",
+    "Equipment: Dry Van",
+    "Weight: 40,000 lbs",
+]
+
+
+class FreightRateConPdfTests(unittest.TestCase):
+    """Phase 6: rate-con PDF parsing into the booking compare."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/ratecon.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'destination_city': 'Dallas', 'destination_state': 'TX', 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        self.thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': self.load['id'], 'sender_account': '1', 'recipient_email': 'a@b.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_parse_extracts_booking_fields(self):
+        from app.core.rate_con import parse_rate_con_pdf
+        fields = parse_rate_con_pdf(_make_pdf(RATE_CON_LINES))
+        self.assertEqual(fields['total_rate'], 4200.0)
+        self.assertEqual(fields['pickup_city'], 'Phoenix')
+        self.assertEqual(fields['pickup_state'], 'AZ')
+        self.assertEqual(fields['delivery_city'], 'Dallas')
+        self.assertEqual(fields['delivery_state'], 'TX')
+        self.assertEqual(fields['pickup_date'], '09/28/2026')
+        self.assertEqual(fields['equipment'], 'dry van')
+        self.assertEqual(fields['weight_lbs'], 40000.0)
+
+    def test_parse_rejects_unreadable_pdf(self):
+        from app.core.rate_con import parse_rate_con_pdf
+        with self.assertRaises(ValueError):
+            parse_rate_con_pdf(b"not a pdf at all")
+
+    def test_matching_rate_con_alerts_exact_match(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES), 'att-1')], self.storage)
+        updated = self.storage.get('freight_bookings', booking['id'])
+        self.assertEqual(updated['status'], 'rate_con_review')
+        self.assertEqual(updated['rate_con_amount'], 4200.0)
+        self.assertEqual(updated['rate_con_diffs'], [])
+        alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_compared'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn('matches the agreement', alerts[0]['summary'])
+
+    def test_mismatched_rate_con_alerts_with_diffs(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4500.0, 'msg-1', self.storage)
+        freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES), 'att-1')], self.storage)
+        updated = self.storage.get('freight_bookings', booking['id'])
+        fields = {d['field'] for d in updated['rate_con_diffs']}
+        self.assertIn('total rate', fields)
+        alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_compared'}, order='', limit=5)
+        self.assertIn('issue', alerts[0]['summary'])
+
+    def test_rate_con_pdf_recovered_from_durable_store_after_crash(self):
+        # A crash between inserting the email and parsing its PDF must not lose
+        # the attachment: the reconcile path re-reads the stored bytes.
+        import base64 as b64
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        message = self.storage.insert('freight_messages', {
+            'id': new_id(), 'thread_id': self.thread['id'], 'direction': 'in',
+            'provider_message_id': '<rc-1@example.com>', 'from_email': 'a@b.com',
+            'to_email': 'c@d.com', 'subject': 'Re: s', 'body_text': 'rate confirmation attached',
+            'classification': {}, 'status': 'received', 'processing_state': 'pending',
+            'created_at': now_iso()})
+        pdf = _make_pdf(RATE_CON_LINES)
+        freight_module._store_attachments(message, [('ratecon.pdf', pdf)], self.storage)
+        result = {'classification': {'protected': ['rate_confirmation']}}
+        with patch.object(freight_module, 'evaluate_inbound', return_value=result):
+            freight_module._process_inbound(self.thread, message, None, self.storage)
+        updated = self.storage.get('freight_bookings', booking['id'])
+        self.assertEqual(updated['status'], 'rate_con_review')
+        self.assertTrue(updated['rate_con_source_ref'].startswith('att:'), updated['rate_con_source_ref'])
+        self.assertEqual(updated['rate_con_amount'], 4200.0)
+        # The retained bytes are the original PDF, resolvable by the booking's ref.
+        attachment_id = updated['rate_con_source_ref'].split(':')[1]
+        row = self.storage.get('freight_attachments', attachment_id)
+        self.assertEqual(b64.b64decode(row['content_b64']), pdf)
+        # A replay after a completed review never resets the review gates.
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        with patch.object(freight_module, 'evaluate_inbound', return_value=result):
+            freight_module._process_inbound(self.thread, message, None, self.storage)
+        kept = self.storage.get('freight_bookings', booking['id'])
+        self.assertTrue(kept['rate_con_reviewed'])
+
+    def test_unmatched_reply_is_parked_with_alert(self):
+        # A broker reply that matches no open thread must never be dropped
+        # silently: it is parked with a visible alert for the dispatcher.
+        header = _email.message_from_bytes(b"From: stranger@broker.com\r\nSubject: Re: Lane?\r\nMessage-ID: <u1@x>\r\n\r\n")
+        parsed = _email.message_from_bytes(b"From: stranger@broker.com\r\nTo: us@c.com\r\nSubject: Re: Lane?\r\n\r\nbody here")
+        thread = freight_module._record_unmatched_reply(header, parsed, "<u1@x>", "acct-1", self.storage)
+        self.assertEqual(thread["state"], "unmatched")
+        load = self.storage.get("freight_loads", thread["load_id"])
+        self.assertEqual(load["status"], "unmatched")
+        alerts = self.storage.list("freight_alerts", {"kind": "unmatched_reply"}, order="", limit=5)
+        self.assertEqual(len(alerts), 1)
+        messages = self.storage.list("freight_messages", {"thread_id": thread["id"]}, order="", limit=5)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["processing_state"], "processed")
+        # A follow-up on the same conversation parks on the same thread.
+        again = freight_module._record_unmatched_reply(header, parsed, "<u2@x>", "acct-1", self.storage)
+        self.assertEqual(again["id"], thread["id"])
+        self.assertEqual(len(self.storage.list("freight_alerts", {"kind": "unmatched_reply"}, order="", limit=5)), 1)
+
+    def test_rate_con_pdf_route_scopes_attachment_to_booking_thread(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        stamp = now_iso()
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        message = self.storage.insert('freight_messages', {
+            'id': new_id(), 'thread_id': self.thread['id'], 'direction': 'in',
+            'provider_message_id': '<rc-pdf@x>', 'from_email': 'a@b.com', 'to_email': 'c@d.com',
+            'subject': 'RC', 'body_text': 'attached', 'classification': {}, 'status': 'received',
+            'processing_state': 'processed', 'created_at': stamp})
+        freight_module._store_attachments(message, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)
+        attachment = self.storage.list('freight_attachments', {'message_id': message['id']}, order='', limit=1)[0]
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage, source='pdf', source_ref=f"att:{attachment['id']}:ratecon.pdf")
+        # A second booking (other thread) pointing at the same attachment.
+        load2 = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_email': 'x@y.com', 'origin_city': 'A', 'destination_city': 'B', 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        thread2 = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load2['id'], 'sender_account': '1', 'recipient_email': 'x@y.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+        booking2 = freight_module.record_agreement(thread2['id'], 1000.0, 'msg-2', self.storage)
+        self.storage.update('freight_bookings', booking2['id'], {'rate_con_source_ref': f"att:{attachment['id']}:ratecon.pdf"})
+        # A booking whose retained bytes are not a PDF.
+        bad_message = self.storage.insert('freight_messages', {
+            'id': new_id(), 'thread_id': thread2['id'], 'direction': 'in',
+            'provider_message_id': '<rc-bad@x>', 'from_email': 'x@y.com', 'to_email': 'c@d.com',
+            'subject': 'RC', 'body_text': 'attached', 'classification': {}, 'status': 'received',
+            'processing_state': 'processed', 'created_at': stamp})
+        freight_module._store_attachments(bad_message, [('notapdf.pdf', b'not a pdf at all')], self.storage)
+        bad_att = self.storage.list('freight_attachments', {'message_id': bad_message['id']}, order='', limit=1)[0]
+        self.storage.update('freight_bookings', booking2['id'], {'rate_con_source_ref': f"att:{bad_att['id']}:notapdf.pdf"})
+        with patch.object(main, "store", self.storage.base), patch.object(freight_module, "store", self.storage.base):
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            ok = client.get(f"/freight/bookings/{booking['id']}/rate-con.pdf")
+            self.assertEqual(ok.status_code, 200)
+            self.assertEqual(ok.content, _make_pdf(RATE_CON_LINES))
+            # Cross-booking reference: attachment belongs to another thread.
+            self.assertEqual(client.get(f"/freight/bookings/{booking2['id']}/rate-con.pdf").status_code, 404)
+
+    def test_line_haul_is_not_the_total(self):
+        from app.core.rate_con import parse_rate_con_pdf
+        fields = parse_rate_con_pdf(_make_pdf([
+            "RATE CONFIRMATION",
+            "Line Haul: $3,900.00",
+            "Fuel Surcharge: $300.00",
+            "Total Rate: $4,200.00",
+            "Rate per mile: $3.93",
+        ]))
+        self.assertEqual(fields['total_rate'], 4200.0)
+        self.assertEqual(fields.get('line_haul'), 3900.0)
+        # Without a total label, line haul alone must not become the total.
+        fields = parse_rate_con_pdf(_make_pdf([
+            "RATE CONFIRMATION",
+            "Line Haul: $3,900.00",
+            "Rate per mile: $3.93",
+            "Pickup: Phoenix, AZ 85001",
+        ]))
+        self.assertNotIn('total_rate', fields)
+        self.assertEqual(fields.get('line_haul'), 3900.0)
+
+    def test_rate_con_without_booking_alerts(self):
+        freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)
+        alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_no_booking'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+
+    def test_pdf_attachments_filters_non_pdf(self):
+        import email
+        raw = (b"From: a@b.com\r\nSubject: RC\r\nContent-Type: multipart/mixed; boundary=BB\r\n\r\n"
+               b"--BB\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n"
+               b"--BB\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=rc.pdf\r\n\r\n" + _make_pdf(RATE_CON_LINES) + b"\r\n"
+               b"--BB\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=notes.txt\r\n\r\nhello\r\n"
+               b"--BB--\r\n")
+        message = email.message_from_bytes(raw)
+        found = freight_module._pdf_attachments(message)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0], 'rc.pdf')

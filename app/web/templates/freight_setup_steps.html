@@ -1,0 +1,14 @@
+{% set setup_complete = missions and profiles and gmail_senders and freight_settings.default_template_id %}
+{% if not setup_complete %}
+<div style="padding:0 24px 12px;background:#fff">
+  <div class="fx-card fx-setup" style="margin:0">
+    <div class="fx-setup-head"><strong>Finish setup to send your first inquiry</strong></div>
+    <div class="fx-steps">
+      <a href="/freight/settings#gmail" class="fx-step {{ 'done' if gmail_senders else 'current' }}"><b>{% if gmail_senders %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}1.{% endif %} Gmail</b>{{ 'Connected' if gmail_senders else 'Connect the inbox you send from' }}</a>
+      <a href="/freight/missions?tab=trucks" class="fx-step {{ 'done' if profiles else ('current' if gmail_senders else '') }}"><b>{% if profiles %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}2.{% endif %} Truck</b>{{ profiles|length ~ ' on file' if profiles else 'Equipment, MC/DOT' }}</a>
+      <a href="/freight/missions?tab=missions" class="fx-step {{ 'done' if missions else ('current' if gmail_senders and profiles else '') }}"><b>{% if missions %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}3.{% endif %} Mission</b>{{ missions|length ~ ' active' if missions else 'Where it goes, rate floor' }}</a>
+      <a href="/freight/settings#sender" class="fx-step {{ 'done' if freight_settings.default_template_id else ('current' if gmail_senders and profiles and missions else '') }}"><b>{% if freight_settings.default_template_id %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}4.{% endif %} Template</b>{{ 'Default set' if freight_settings.default_template_id else 'Pick a default inquiry' }}</a>
+    </div>
+  </div>
+</div>
+{% endif %}
