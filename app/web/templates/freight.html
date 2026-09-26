@@ -39,19 +39,7 @@
   <button type="button" class="fx-btn primary" onclick="document.getElementById('fx-inquiry').showModal()" {% if not setup_ok %}disabled title="Finish setup first"{% endif %}><svg class="i sm"><use href="#i-plus"/></svg>New inquiry</button>
 </div>
 
-{% if not setup_ok %}
-<div style="padding:0 24px 12px;background:#fff">
-  <div class="fx-card fx-setup" style="margin:0">
-    <div class="fx-setup-head"><strong>Finish setup to send your first inquiry</strong></div>
-    <div class="fx-steps">
-      <a href="/freight/settings#gmail" class="fx-step {{ 'done' if gmail_senders else 'current' }}"><b>{% if gmail_senders %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}1.{% endif %} Gmail</b>{{ 'Connected' if gmail_senders else 'Connect the inbox you send from' }}</a>
-      <a href="/freight/missions?tab=trucks" class="fx-step {{ 'done' if profiles else ('current' if gmail_senders else '') }}"><b>{% if profiles %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}2.{% endif %} Truck</b>{{ profiles|length ~ ' on file' if profiles else 'Equipment, MC/DOT' }}</a>
-      <a href="/freight/missions?tab=missions" class="fx-step {{ 'done' if missions else ('current' if gmail_senders and profiles else '') }}"><b>{% if missions %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}3.{% endif %} Mission</b>{{ missions|length ~ ' active' if missions else 'Where it goes, rate floor' }}</a>
-      <a href="/freight/settings#sender" class="fx-step {{ 'done' if freight_settings.default_template_id else ('current' if gmail_senders and profiles and missions else '') }}"><b>{% if freight_settings.default_template_id %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}4.{% endif %} Template</b>{{ 'Default set' if freight_settings.default_template_id else 'Pick a default inquiry' }}</a>
-    </div>
-  </div>
-</div>
-{% endif %}
+{% include "freight_setup_steps.html" %}
 
 <nav class="fx-tabs" id="fx-load-tabs" aria-label="Filter loads">
   <button type="button" data-filter="needs">Needs you <span class="fx-tab-n num">{{ needs|length }}</span></button>
@@ -91,7 +79,8 @@
     {% set L = selected_load %}
     {% set is_auto = not L.mission or not L.mission.permissions or L.mission.permissions.auto_counter or L.mission.permissions.auto_profile_reply or L.mission.permissions.auto_pass %}
     <div class="fx-thead">
-      <h2>{{ L.origin_city }}{{ ', ' + L.origin_state if L.origin_state else '' }} → {{ L.destination_city }}{{ ', ' + L.destination_state if L.destination_state else '' }}</h2>
+      {% set dest_open = L.destination_city == 'Open destinations' or not L.destination_city %}
+      <h2>{{ route(L) }}</h2>
       <div class="fx-row">
         {{ status_pill(L) }}
         <span class="fx-chip" title="Broker"><svg class="i sm"><use href="#i-mail"/></svg>{{ L.broker_email }}</span>
@@ -310,7 +299,7 @@
     <div>
       <h3>Load details {% if L.thread.id and L.status not in ['closed', 'booked'] %}<button type="button" class="fx-btn sm" onclick="fxOpenVerify()">Edit / confirm</button>{% endif %}</h3>
       <div class="fx-facts">
-        {% set dest_open = L.destination_city == 'Open destinations' or not L.destination_city %}
+
         <div class="k">Pickup</div><div class="v editable" onclick="fxEditFact('origin_city')" title="Click to edit">{{ L.origin_city }}{{ ', ' + L.origin_state if L.origin_state else '' }}</div><div class="s">{% if L.origin_verified %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">From mission</span>{% endif %}</div>
         <div class="k">Delivery</div><div class="v {{ 'none' if dest_open else '' }} editable" onclick="fxEditFact('destination_city')" title="Click to edit">{{ 'Not confirmed' if dest_open else L.destination_city ~ (', ' ~ L.destination_state if L.destination_state else '') }}</div><div class="s">{% if dest_open %}<button type="button" class="fx-miss-btn" onclick="fxEditFact('destination_city')">Missing</button>{% elif L.destination_verified %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
         <div class="k">Pickup date</div><div class="v {{ '' if L.pickup_date else 'none' }} editable num" onclick="fxEditFact('pickup_date')" title="Click to edit">{{ nice_date(L.pickup_date) if L.pickup_date else 'Not given' }}</div><div class="s">{% if L.pickup_date_verified %}<svg class="i sm"><use href="#i-check"/></svg>{% elif L.pickup_date %}<span class="fx-source">From mission</span>{% else %}<button type="button" class="fx-miss-btn" onclick="fxEditFact('pickup_date')">Missing</button>{% endif %}</div>
@@ -327,7 +316,7 @@
           <label>Pickup city<input id="input-origin_city" name="origin_city" value="{{ L.origin_city }}" required></label>
           <label>State<input id="input-origin_state" name="origin_state" maxlength="2" value="{{ L.origin_state }}" required></label>
           <label class="check wide"><input type="checkbox" name="origin_confirmed" value="yes" {% if L.origin_verified %}checked{% endif %}> Broker confirmed the pickup location</label>
-          <label>Delivery city<input id="input-destination_city" name="destination_city" value="{{ '' if L.destination_city == 'Open destinations' else L.destination_city }}" placeholder="e.g. Dallas"></label>
+          <label>Delivery city<input id="input-destination_city" name="destination_city" value="{{ '' if dest_open else L.destination_city }}" placeholder="e.g. Dallas"></label>
           <label>State<input id="input-destination_state" name="destination_state" maxlength="2" value="{{ L.destination_state or '' }}" placeholder="TX"></label>
           {% if L.mission.destinations %}<p class="fx-muted wide fx-form-help">Mission target: {{ L.mission.destinations|map(attribute='label')|join(', ') }}. Enter the broker's actual delivery location above.</p>{% endif %}
           <label>Equipment<input id="input-equipment_type" name="equipment_type" value="{{ L.equipment_type or L.profile.equipment_type or L.mission.equipment_type or '' }}" placeholder="e.g. Dry Van"></label>
@@ -376,7 +365,7 @@
           <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_amount|int if B.rate_con_amount is not none else (B.agreed_rate|int) }}" required></label>
           <label>Pickup city<input name="pickup_city" placeholder="City" value="{{ L.origin_city or '' }}"></label>
           <label>State<input name="pickup_state" maxlength="2" placeholder="AZ" value="{{ L.origin_state or '' }}"></label>
-          <label>Delivery city<input name="delivery_city" placeholder="City" value="{{ L.destination_city if L.destination_city != 'Open destinations' else '' }}"></label>
+          <label>Delivery city<input name="delivery_city" placeholder="City" value="{{ '' if dest_open else L.destination_city }}"></label>
           <label>State<input name="delivery_state" maxlength="2" placeholder="TX" value="{{ L.destination_state or '' }}"></label>
           <label>Pickup date<input type="date" name="pickup_date" value="{{ L.pickup_date or '' }}"></label>
           <label>Equipment<input name="equipment" placeholder="e.g. Dry Van" value="{{ L.equipment_type or '' }}"></label>
