@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS freight_loads (
   truck_profile_id TEXT REFERENCES freight_truck_profiles(id) ON DELETE SET NULL,
   broker_email TEXT NOT NULL,
   broker_company TEXT NOT NULL DEFAULT '',
+  broker_id TEXT,
   origin_city TEXT NOT NULL,
   origin_state TEXT NOT NULL DEFAULT '',
   origin_verified INTEGER NOT NULL DEFAULT 0,
@@ -203,6 +204,22 @@ CREATE TABLE IF NOT EXISTS freight_loads (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS freight_brokers (
+  id TEXT PRIMARY KEY,
+  legal_name TEXT NOT NULL DEFAULT '',
+  mc_number TEXT NOT NULL DEFAULT '',
+  domain TEXT NOT NULL DEFAULT '',
+  emails TEXT NOT NULL DEFAULT '[]',
+  credit_status TEXT NOT NULL DEFAULT 'unknown',
+  credit_score REAL,
+  credit_notes TEXT NOT NULL DEFAULT '',
+  setup_status TEXT NOT NULL DEFAULT 'not_started',
+  blocked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_brokers_domain_idx ON freight_brokers(domain);
+
 CREATE INDEX IF NOT EXISTS freight_loads_status_idx ON freight_loads(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS freight_load_stops (
