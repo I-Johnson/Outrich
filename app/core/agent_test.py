@@ -217,7 +217,8 @@ def agent_test_state(storage, load_id: str) -> dict[str, Any]:
         "economics": load_economics(load),
         "price_comparison": mission_price_comparison(load, mission),
         "auto_send_blockers": _auto_send_blockers(load, mission, profile),
-        "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile),
+        "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile, storage),
+        "stops": storage.list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50),
         "waiting_for": waiting_for,
         "transport": "local",
     }

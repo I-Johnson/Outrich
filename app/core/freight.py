@@ -663,6 +663,83 @@ def verify_load_facts(load_id: str, values: dict[str, Any], storage=None) -> dic
     return storage.update("freight_loads", load_id, updates)
 
 
+def verify_load_stop(stop_id: str, values: dict[str, Any], storage=None) -> dict:
+    """A dispatcher confirms one stop's details and appointment time or window."""
+    storage = storage or store
+    stop = storage.get("freight_load_stops", stop_id)
+    if not stop:
+        raise ValueError("Freight stop not found")
+    city = str(values.get("city") or stop.get("city") or "").strip()
+    state = str(values.get("state") or stop.get("state") or "").strip().upper()
+    if not city or len(state) != 2:
+        raise ValueError("Enter the stop city and two-letter state")
+    appointment = str(values.get("appointment") or stop.get("appointment") or "").strip()
+    if not appointment:
+        raise ValueError("Enter the appointment time or window for this stop")
+    return storage.update("freight_load_stops", stop_id, {
+        "city": city,
+        "state": state,
+        "facility_name": str(values.get("facility_name") or stop.get("facility_name") or "").strip(),
+        "appointment": appointment,
+        "verified": True,
+        "appointment_verified": True,
+        "updated_at": now_iso(),
+    })
+
+
+def _sync_load_stops(load: dict, classification: dict, message_id: str, storage) -> None:
+    """Persist evidence-backed stops from the latest broker message, in route order.
+
+    Stops are matched by kind + city. A broker update that changes a stop's
+    facility or appointment clears that stop's verification so the dispatcher
+    re-confirms it; unchanged stops keep their verification.
+    """
+    if classification.get("source") != "gemini":
+        return
+    stops = classification.get("stops") or []
+    if not stops:
+        return
+    existing = storage.list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50)
+    stamp = now_iso()
+    next_seq = max([int(stop.get("seq") or 0) for stop in existing], default=0) + 1
+    for stop in stops:
+        match = next((row for row in existing
+                      if row.get("kind") == stop["kind"]
+                      and (row.get("city") or "").casefold() == stop["city"].casefold()
+                      and (row.get("state") or "").upper() == stop["state"]), None)
+        if match:
+            updates: dict[str, Any] = {"evidence": stop["evidence"], "source_message_id": message_id, "updated_at": stamp}
+            changed = False
+            if stop.get("facility") and stop["facility"] != (match.get("facility_name") or ""):
+                updates["facility_name"] = stop["facility"]
+                changed = True
+            if stop.get("appointment") and stop["appointment"] != (match.get("appointment") or ""):
+                updates["appointment"] = stop["appointment"]
+                changed = True
+            if changed:
+                updates["verified"] = False
+                updates["appointment_verified"] = False
+            storage.update("freight_load_stops", match["id"], updates)
+        else:
+            storage.insert("freight_load_stops", {
+                "id": new_id(),
+                "load_id": load["id"],
+                "seq": next_seq,
+                "kind": stop["kind"],
+                "facility_name": stop.get("facility") or "",
+                "city": stop["city"],
+                "state": stop["state"],
+                "appointment": stop.get("appointment") or None,
+                "verified": False,
+                "appointment_verified": False,
+                "evidence": stop["evidence"],
+                "source_message_id": message_id,
+                "created_at": stamp,
+                "updated_at": stamp,
+            })
+            next_seq += 1
+
+
 def _record_negotiation_event(thread_id: str, source_id: str, event_type: str, amount: float, details: dict | None = None, storage=None) -> None:
     storage = storage or store
     if storage.list("freight_negotiation_events", {"event_type": event_type, "source_id": source_id}, order="", limit=1):
@@ -858,9 +935,16 @@ def _counter_value(load: dict, mission: dict, offer: float) -> float | None:
     return None
 
 
-def _booking_readiness_blockers(load: dict, mission: dict, profile: dict) -> list[str]:
+def _booking_readiness_blockers(load: dict, mission: dict, profile: dict, storage=None) -> list[str]:
     """Facts that must be resolved before the carrier commits to the load."""
     blockers: list[str] = []
+    stops = (storage or store).list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50) if load.get("id") else []
+    for stop in stops:
+        label = f"stop {stop.get('seq')} {stop.get('kind')} ({stop.get('city')}{', ' + stop.get('state') if stop.get('state') else ''})"
+        if not stop.get("verified"):
+            blockers.append(f"{label} confirmed")
+        elif not stop.get("appointment") or not stop.get("appointment_verified"):
+            blockers.append(f"{label} appointment")
     if any((mission.get("permissions") or {}).get(key) for key in ("auto_profile_reply", "auto_counter", "auto_pass")):
         lane_issue = auto_lane_issue(mission)
         if lane_issue:
@@ -1198,6 +1282,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
         return {"action": "alert", "classification": classification, "summary": summary}
 
     load = _enrich_load_facts(load, mission, classification, text, storage, preserve_verified=preserve_verified_facts)
+    _sync_load_stops(load, classification, message["id"], storage)
     mismatches = _mismatch_reasons(text, load, mission, profile, classification)
     if mismatches:
         summary = " ".join(mismatches)
@@ -1227,7 +1312,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             return {"classification": classification, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
         else:
             summary = f"Broker quoted ${rpm:g} per mile; loaded miles need confirmation before calculating a total."
-            policy = {"safe_to_auto_send": True, "auto_send_blockers": [], "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile)}
+            policy = {"safe_to_auto_send": True, "auto_send_blockers": [], "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile, storage)}
             draft = _create_draft(thread["id"], thread["subject"], "Can you confirm the loaded miles and total all-in rate?", "clarify_load_details", policy, message.get("provider_message_id") or "", storage)
             _set_stage(thread, load, "draft_ready", storage)
             return {"classification": classification, "summary": summary, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
@@ -1272,7 +1357,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             storage.update("freight_loads", load["id"], {"current_offer": offer, "updated_at": now_iso()})
         if not load.get("destination_verified"):
             summary = "Confirm the actual delivery city and state before judging this lane's rate."
-            policy = {"offer": offer, "counter": None, "safe_to_auto_send": True, "auto_send_blockers": [], "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile)}
+            policy = {"offer": offer, "counter": None, "safe_to_auto_send": True, "auto_send_blockers": [], "booking_readiness_blockers": _booking_readiness_blockers(load, mission, profile, storage)}
             draft = _create_draft(thread["id"], thread["subject"], "What is the delivery city and state for this load?", "clarify_load_details", policy, message.get("provider_message_id") or "", storage)
             _set_stage(thread, load, "draft_ready", storage)
             return {"classification": classification, "summary": summary, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
@@ -1299,7 +1384,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
         economics = load_economics(load, offer)
         max_rounds = int(mission.get("maximum_counter_rounds") or 3)
         current_round = _counter_count(thread["id"], load, storage)
-        booking_blockers = _booking_readiness_blockers(load, mission, profile)
+        booking_blockers = _booking_readiness_blockers(load, mission, profile, storage)
         auto_blockers = _auto_send_blockers(load, mission, profile)
         previous = storage.list("freight_messages", {"thread_id": thread["id"], "direction": "in"}, order="created_at asc", limit=100)
         readings = [row.get("classification") or {} for row in previous if row["id"] != message["id"]] + [classification]
@@ -1392,7 +1477,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
     # Never end a turn silently. When the broker's message does not fit a known
     # shape, keep the thread working: ask for the most valuable missing load
     # detail, or hand the human a follow-up draft with an explicit next action.
-    booking_blockers = _booking_readiness_blockers(load, mission, profile)
+    booking_blockers = _booking_readiness_blockers(load, mission, profile, storage)
     auto_blockers = _auto_send_blockers(load, mission, profile)
     previous = storage.list("freight_messages", {"thread_id": thread["id"], "direction": "in"}, order="created_at asc", limit=100)
     readings = [row.get("classification") or {} for row in previous if row["id"] != message["id"]] + [classification]
