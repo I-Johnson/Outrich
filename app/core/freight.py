@@ -652,8 +652,9 @@ def parse_destinations(
     labels: list[str],
     kinds: list[str],
     radii: list[str],
-    states: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """One source of truth per destination: the label carries city and state
+    ("Dallas, TX"); no parallel state input to disagree with it."""
     result: list[dict[str, Any]] = []
     allowed = {"city", "state", "region", "anywhere"}
     for index, raw_label in enumerate(labels):
@@ -663,9 +664,6 @@ def parse_destinations(
         kind = str(kinds[index] if index < len(kinds) else "city").lower()
         if kind not in allowed:
             kind = "city"
-        state = str(states[index] if states and index < len(states) else "").strip().upper()
-        if kind == "city" and state and "," not in label:
-            label = f"{label}, {state}"
         radius = int(_number(radii[index] if index < len(radii) else 0) or 0)
         result.append({"label": label, "kind": kind, "radius_miles": max(0, radius)})
     return result

@@ -663,9 +663,7 @@ async def freight_agent_test_mission(request: Request):
         kinds = kinds if isinstance(kinds, list) else [kinds]
         radii = payload.get("destination_radius")
         radii = radii if isinstance(radii, list) else [radii]
-        states = payload.get("destination_state")
-        states = states if isinstance(states, list) else [states]
-        destinations = parse_destinations(labels, kinds, radii, states)
+        destinations = parse_destinations(labels, kinds, radii)
     destinations = [item for item in destinations if isinstance(item, dict) and str(item.get("label") or "").strip()]
     name = str(payload.get("name") or "").strip()
     if not name or not destinations:
@@ -910,7 +908,6 @@ async def freight_mission_save(request: Request):
         form.getlist("destination_label"),
         form.getlist("destination_kind"),
         form.getlist("destination_radius"),
-        form.getlist("destination_state"),
     )
     execution_mode = str(form.get("execution_mode") or form.get("mode") or "").strip().lower()
     if execution_mode == "auto":
@@ -954,6 +951,16 @@ async def freight_mission_save(request: Request):
         "active": bool(form.get("active")),
         "updated_at": stamp,
     }
+    if data["truck_profile_id"]:
+        truck = db.get("freight_truck_profiles", data["truck_profile_id"]) or {}
+        # Equipment inherits from the selected truck when left blank; the form
+        # shows "inherited from <truck>" next to each of these fields.
+        if not data["equipment_type"] and truck.get("equipment_type"):
+            data["equipment_type"] = str(truck["equipment_type"])
+        if data["trailer_length_ft"] is None and truck.get("trailer_length_ft") is not None:
+            data["trailer_length_ft"] = _optional_int(truck.get("trailer_length_ft"))
+        if data["max_weight_lbs"] is None and truck.get("max_weight_lbs") is not None:
+            data["max_weight_lbs"] = _optional_int(truck.get("max_weight_lbs"))
     if not data["name"] or not destinations:
         return mission_validation_redirect(request, data, "Mission name and at least one destination are required")
     floors = [data["floor_total"], data["floor_loaded_rpm"], data["floor_all_in_rpm"]]
@@ -1113,10 +1120,12 @@ def freight_alert_resolve(request: Request, alert_id: str):
 async def freight_thread_state(thread_id: str, request: Request):
     db = freight_store(request)
     form = await request.form()
+    thread = db.get("freight_threads", thread_id) or {}
     try:
         result = set_thread_state(thread_id, str(form.get("state") or ""), storage=db)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        # Send the dispatcher back to the load with the reason, not a dead 400 page.
+        return RedirectResponse(f"/freight?load_id={thread.get('load_id', '')}&error={quote(str(exc))}", 303)
     return RedirectResponse(f"/freight?load_id={result['load']['id']}&notice=Load+marked+{quote(result['thread']['state'])}", 303)
 
 

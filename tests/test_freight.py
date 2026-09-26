@@ -108,8 +108,9 @@ class FreightPolicyTests(unittest.TestCase):
             {"label": "Southeast", "kind": "region", "radius_miles": 0},
         ])
 
-    def test_city_destination_state_is_combined_before_auto_validation(self):
-        result = parse_destinations(["Dallas"], ["city"], ["0"], ["tx"])
+    def test_city_destination_label_carries_its_state(self):
+        # One source of truth: the label holds city and state together.
+        result = parse_destinations(["Dallas, TX"], ["city"], ["0"])
         self.assertEqual(result, [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}])
 
     def test_auto_mode_requires_one_priced_lane(self):
@@ -594,7 +595,10 @@ class FreightConversationTests(unittest.TestCase):
             self.assertTrue(self.storage.get("freight_loads", self.load_id)["destination_verified"])
             # Without a recorded agreement, booking is refused - the old manual shortcut bypassed every gate.
             refused = client.post(f"/freight/threads/{self.thread_id}/state", data={"state": "booked"}, follow_redirects=False)
-            self.assertEqual(refused.status_code, 400)
+            # Refusals land back on the load page with the reason, never a dead 400.
+            self.assertEqual(refused.status_code, 303)
+            self.assertIn("error=", refused.headers["location"])
+            self.assertIn(f"load_id={self.load_id}", refused.headers["location"])
             booking = freight_module.record_agreement(self.thread_id, 4200.0, "msg-test", self.storage)
             freight_module.submit_rate_con(booking["id"], {"total_rate": "4200", "pickup_city": "Phoenix", "pickup_state": "AZ", "delivery_city": "Dallas", "delivery_state": "TX", "pickup_date": "2026-09-23"}, self.storage)
             freight_module.review_rate_con(booking["id"], True, self.storage)
@@ -654,8 +658,7 @@ class FreightConversationTests(unittest.TestCase):
                 "equipment_type": "Dry van",
                 "trailer_length_ft": "53",
                 "max_weight_lbs": "45000",
-                "destination_label": "Dallas",
-                "destination_state": "TX",
+                "destination_label": "Dallas, TX",
                 "destination_kind": "city",
                 "destination_radius": "0",
                 "floor_total": "2000",

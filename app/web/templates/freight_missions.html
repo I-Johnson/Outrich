@@ -21,14 +21,14 @@
     </button>
   </div>
 
-  <div id="tab-actions-missions" style="display:{{ 'flex' if active_tab != 'trucks' else 'none' }};gap:8px">
+  <div id="tab-actions-missions" class="fx-row" style="display:{{ 'flex' if active_tab != 'trucks' else 'none' }}">
     {% if not edit_mission %}
-    <button class="primary-btn" onclick="openMissionForm()">+ New dispatch mission</button>
+    <button class="fx-btn primary" onclick="openMissionForm()">+ New dispatch mission</button>
     {% endif %}
   </div>
-  <div id="tab-actions-trucks" style="display:{{ 'flex' if active_tab == 'trucks' else 'none' }};gap:8px">
+  <div id="tab-actions-trucks" class="fx-row" style="display:{{ 'flex' if active_tab == 'trucks' else 'none' }}">
     {% if not edit_profile %}
-    <button class="primary-btn" onclick="openTruckForm()">+ Add truck profile</button>
+    <button class="fx-btn primary" onclick="openTruckForm()">+ Add truck profile</button>
     {% endif %}
   </div>
 </div>
@@ -49,7 +49,7 @@
             <h3 class="entity-title">{{ m.name }}</h3>
             <div class="route-badge">
               <span>{{ m.origin_city }}, {{ m.origin_state }}</span>
-              <span style="color:#94a3b8">to</span>
+              <span class="fx-arrow">to</span>
               <span>Open Destinations</span>
             </div>
           </div>
@@ -71,26 +71,26 @@
           <span class="spec-pill highlight">Floor: {{ '$%.0f'|format(m.floor_total) if m.floor_total else 'No floor' }}</span>
           {% if m.floor_loaded_rpm %}<span class="spec-pill highlight">Min ${{ '%.2f'|format(m.floor_loaded_rpm) }}/mi</span>{% endif %}
           {% if m.permissions and (m.permissions.auto_counter or m.permissions.auto_profile_reply or m.permissions.auto_pass) %}
-          <span class="spec-pill" style="background:#dcfce7;color:#15803d;font-weight:700;border:1px solid #bbf7d0">Auto Mode</span>
+          <span class="spec-pill mode-auto">Auto Mode</span>
           {% else %}
-          <span class="spec-pill" style="background:#eff6ff;color:#1d4ed8;font-weight:700;border:1px solid #bfdbfe">Approve Mode</span>
+          <span class="spec-pill mode-approve">Approve Mode</span>
           {% endif %}
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #f1f5f9;margin-top:8px">
-        <span style="font-size:11.5px;color:var(--muted)">
+      <div class="fx-card-foot">
+        <span class="fx-muted-sm">
           {% set assigned_truck = profiles|selectattr('id', 'equalto', m.truck_profile_id)|first %}
           {% if assigned_truck %}
           Assigned: <strong>{{ assigned_truck.name }}</strong>
           {% else %}
-          <span style="color:#f59e0b">No truck profile linked</span>
+          <span class="fx-warn">No truck profile linked</span>
           {% endif %}
         </span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=missions&mission_id={{ m.id }}">Edit mission</a>
+        <div class="fx-row">
+          <a class="fx-btn sm" href="/freight/missions?tab=missions&mission_id={{ m.id }}">Edit mission</a>
           <form action="/freight/missions/{{ m.id }}/delete" method="post" onsubmit="return confirm('Delete this mission? Existing loads will remain but be unlinked from it.')">
-            <button type="submit" class="button ghost" style="font-size:12px;padding:5px 12px;color:#dc2626;border-color:#fecaca">Delete</button>
+            <button type="submit" class="fx-btn sm danger-ghost">Delete</button>
           </form>
         </div>
       </div>
@@ -98,33 +98,33 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="panel" style="text-align:center;padding:36px 20px;border-radius:14px;margin-bottom:20px">
-    <h3 style="font-size:16px;margin:0 0 6px">No dispatch missions created yet</h3>
-    <p style="color:var(--muted);max-width:480px;margin:0 auto 16px;font-size:13px">
+  <div class="panel fx-empty">
+    <h3>No dispatch missions created yet</h3>
+    <p>
       A mission specifies which origin city your truck is departing from, where you want to go, and the negotiation rate floor.
     </p>
     {% if not profiles %}
-    <p style="color:#d97706;font-size:12.5px;margin-bottom:14px">
+    <p class="fx-warn-text">
       Add at least one truck profile first so you can assign it to your mission.
     </p>
-    <button class="primary-btn" onclick="switchFreightTab('trucks')">Add your first truck profile</button>
+    <button class="fx-btn primary" onclick="switchFreightTab('trucks')">Add your first truck profile</button>
     {% else %}
-    <button class="primary-btn" onclick="openMissionForm()">Create your first mission</button>
+    <button class="fx-btn primary" onclick="openMissionForm()">Create your first mission</button>
     {% endif %}
   </div>
   {% endif %}
 
   <!-- MISSION FORM (Visible when editing or toggled) -->
   <div id="mission-form-panel" class="form-card" style="display:{{ 'block' if edit_mission or not missions else 'none' }}">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)">
+    <div class="fx-form-head">
       <div>
-        <h2 style="font-size:17px;margin:0 0 4px">{{ 'Edit dispatch mission' if edit_mission else 'Create new dispatch mission' }}</h2>
-        <p style="margin:0;color:var(--muted)">Set truck assignment, origin, desired destinations, and rate boundaries.</p>
+        <h2 class="fx-form-title">{{ 'Edit dispatch mission' if edit_mission else 'Create new dispatch mission' }}</h2>
+        <p class="fx-form-sub">Set truck assignment, origin, desired destinations, and rate boundaries.</p>
       </div>
       {% if missions and not edit_mission %}
-      <button type="button" class="button ghost" onclick="closeMissionForm()">Close form</button>
+      <button type="button" class="fx-btn ghost" onclick="closeMissionForm()">Close form</button>
       {% elif edit_mission %}
-      <a class="button ghost" href="/freight/missions?tab=missions">Cancel edit</a>
+      <a class="fx-btn ghost" href="/freight/missions?tab=missions">Cancel edit</a>
       {% endif %}
     </div>
 
@@ -151,6 +151,7 @@
             </option>
             {% endfor %}
           </select>
+          <span id="truck-inherit-hint" class="fx-inherit-hint"></span>
         </label>
 
         <label>
@@ -160,7 +161,7 @@
 
         <label>
           Origin state
-          <input id="input-origin-state" name="origin_state" maxlength="2" value="{{ edit_mission.origin_state if edit_mission else '' }}" placeholder="AZ" style="text-transform:uppercase">
+          <input id="input-origin-state" name="origin_state" maxlength="2" value="{{ edit_mission.origin_state if edit_mission else '' }}" placeholder="AZ" class="fx-upper">
         </label>
 
         <label>
@@ -168,7 +169,7 @@
           <input type="number" name="origin_deadhead_miles" min="0" step="1" required value="{{ edit_mission.origin_deadhead_miles if edit_mission else 0 }}">
         </label>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="fx-grid-2col">
           <label>
             Pickup available from
             <input type="date" name="pickup_start" value="{{ edit_mission.pickup_start if edit_mission else '' }}">
@@ -206,15 +207,14 @@
         <span>3. Target Destinations</span>
       </div>
       <div>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
-          Add where this truck is willing to deliver. For Auto Mode, enter the destination city and its state (for example, Dallas + TX), or use a two-letter state code. Create separate missions for Florida → NJ and Florida → Dallas.
+        <p class="fx-help-block">
+          Add where this truck is willing to deliver. For Auto Mode, enter one destination with its state (for example, Dallas, TX), or a two-letter state code. Create separate missions for Florida → NJ and Florida → Dallas, TX.
         </p>
         <div id="destination-list">
           {% set destinations = edit_mission.destinations if edit_mission and edit_mission.destinations else [{'label':'','kind':'city','radius_miles':0}] %}
           {% for d in destinations %}
           <div class="destination-row">
             <input name="destination_label" value="{{ d.label }}" placeholder="e.g. Dallas, TX or Southeast" required>
-            <input name="destination_state" value="{{ d.label.rsplit(', ', 1)[-1] if d.kind == 'city' and ', ' in d.label else '' }}" maxlength="2" placeholder="ST" style="text-transform:uppercase" title="State abbreviation for this city">
             <select name="destination_kind" required>
               <option value="city" {% if d.kind=='city' %}selected{% endif %}>City</option>
               <option value="state" {% if d.kind=='state' %}selected{% endif %}>State code (NJ)</option>
@@ -228,14 +228,14 @@
           </div>
           {% endfor %}
         </div>
-        <button type="button" class="button secondary" style="font-size:12px;padding:6px 14px;margin-top:6px" id="add-destination">+ Add another destination</button>
+        <button type="button" class="fx-btn sm fx-mt6" id="add-destination">+ Add another destination</button>
       </div>
 
       <!-- SECTION 4: NEGOTIATION ENVELOPE -->
       <div class="form-section-title">
         <span>4. Rate Envelope & Negotiation Bounds</span>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin:-4px 0 10px">Type numbers only; the $ prefix is already shown. Active missions require at least one minimum rate: total, loaded RPM, or all-in RPM.</p>
+      <p class="fx-help-block fx-neg-top">Type numbers only; the $ prefix is already shown. Active missions require at least one minimum rate: total, loaded RPM, or all-in RPM.</p>
       <div class="form-grid-4">
         <label>
           Minimum floor total ($)
@@ -296,7 +296,7 @@
       <div class="form-section-title">
         <span>5. Agent Negotiation Mode</span>
       </div>
-      <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+      <p class="fx-help-block">
         Choose whether the AI agent communicates autonomously within your boundaries, or generates drafts for your approval.
       </p>
 
@@ -337,18 +337,18 @@
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;padding-top:16px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
-        <label class="check" style="margin:0">
+      <div class="fx-form-foot">
+        <label class="check fx-m0">
           <input type="checkbox" name="active" {% if not edit_mission or edit_mission.active %}checked{% endif %}>
-          <span style="font-weight:700">Mission active for broker outreach</span>
+          <span class="fx-strong">Mission active for broker outreach</span>
         </label>
-        <div style="display:flex;gap:10px">
+        <div class="fx-row">
           {% if edit_mission %}
-          <a class="button ghost" href="/freight/missions?tab=missions">Cancel</a>
+          <a class="fx-btn ghost" href="/freight/missions?tab=missions">Cancel</a>
           {% else %}
-          <button type="button" class="button ghost" onclick="closeMissionForm()">Cancel</button>
+          <button type="button" class="fx-btn ghost" onclick="closeMissionForm()">Cancel</button>
           {% endif %}
-          <button class="primary-btn" style="padding:10px 24px">{{ 'Update mission' if edit_mission else 'Save mission' }}</button>
+          <button class="fx-btn primary fx-btn-lg">{{ 'Update mission' if edit_mission else 'Save mission' }}</button>
         </div>
       </div>
     </form>
@@ -379,17 +379,17 @@
         <div class="spec-pills">
           <span class="spec-pill highlight">{{ p.trailer_length_ft or 53 }} ft {{ p.equipment_type }}</span>
           {% if p.max_weight_lbs %}<span class="spec-pill">Max {{ '{:,}'.format(p.max_weight_lbs) }} lbs</span>{% endif %}
-          {% if p.team_status %}<span class="spec-pill" style="text-transform:capitalize">{{ p.team_status }} team</span>{% endif %}
+          {% if p.team_status %}<span class="spec-pill fx-capitalize">{{ p.team_status }} team</span>{% endif %}
           {% if p.mc_number %}<span class="spec-pill">MC #{{ p.mc_number }}</span>{% endif %}
           {% if p.dot_number %}<span class="spec-pill">DOT #{{ p.dot_number }}</span>{% endif %}
         </div>
 
         {% if p.dispatcher_name or p.dispatcher_phone %}
-        <div style="font-size:12px;color:var(--muted);margin-top:10px">
+        <div class="fx-truck-meta">
           Dispatcher: <strong>{{ p.dispatcher_name or 'Dispatch' }}</strong> {% if p.dispatcher_phone %}({{ p.dispatcher_phone }}){% endif %}
         </div>
         {% endif %}
-        <div style="margin-top:6px">
+        <div class="fx-mt6">
           {% if p.availability_status == 'off' %}<span class="fx-avail off">Off duty</span>
           {% elif p.availability_status == 'booked' %}<span class="fx-avail booked">Booked</span>
           {% else %}<span class="fx-avail available">Available</span>{% endif %}
@@ -397,14 +397,14 @@
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid #f1f5f9;margin-top:8px">
-        <span style="font-size:11px;color:var(--muted)">
+      <div class="fx-card-foot">
+        <span class="fx-muted-xs">
           Shareable: {{ p.shareable_labels|join(', ') if p.shareable_labels else 'Nothing shared without asking' }}
         </span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <a class="button secondary" style="font-size:12px;padding:5px 12px" href="/freight/missions?tab=trucks&profile_id={{ p.id }}">Edit truck</a>
+        <div class="fx-row">
+          <a class="fx-btn sm" href="/freight/missions?tab=trucks&profile_id={{ p.id }}">Edit truck</a>
           <form action="/freight/profiles/{{ p.id }}/delete" method="post" onsubmit="return confirm('Delete this truck profile? Existing missions and loads will be unlinked from it.')">
-            <button type="submit" class="button ghost" style="font-size:12px;padding:5px 12px;color:#dc2626;border-color:#fecaca">Delete</button>
+            <button type="submit" class="fx-btn sm danger-ghost">Delete</button>
           </form>
         </div>
       </div>
@@ -412,26 +412,26 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="panel" style="text-align:center;padding:36px 20px;border-radius:14px;margin-bottom:20px">
-    <h3 style="font-size:16px;margin:0 0 6px">No truck profiles created yet</h3>
-    <p style="color:var(--muted);max-width:480px;margin:0 auto 16px;font-size:13px">
+  <div class="panel fx-empty">
+    <h3>No truck profiles created yet</h3>
+    <p>
       Add your vehicle dimensions, equipment type, and authority credentials so the AI can represent your fleet accurately to brokers.
     </p>
-    <button class="primary-btn" onclick="openTruckForm()">Add your first truck profile</button>
+    <button class="fx-btn primary" onclick="openTruckForm()">Add your first truck profile</button>
   </div>
   {% endif %}
 
   <!-- TRUCK PROFILE FORM -->
   <div id="truck-form-panel" class="form-card" style="display:{{ 'block' if edit_profile or not profiles else 'none' }}">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)">
+    <div class="fx-form-head">
       <div>
-        <h2 style="font-size:17px;margin:0 0 4px">{{ 'Edit truck profile' if edit_profile else 'Add new truck profile' }}</h2>
-        <p style="margin:0;color:var(--muted)">Vehicle specifications, authority numbers, and dispatcher contacts.</p>
+        <h2 class="fx-form-title">{{ 'Edit truck profile' if edit_profile else 'Add new truck profile' }}</h2>
+        <p class="fx-form-sub">Vehicle specifications, authority numbers, and dispatcher contacts.</p>
       </div>
       {% if profiles and not edit_profile %}
-      <button type="button" class="button ghost" onclick="closeTruckForm()">Close form</button>
+      <button type="button" class="fx-btn ghost" onclick="closeTruckForm()">Close form</button>
       {% elif edit_profile %}
-      <a class="button ghost" href="/freight/missions?tab=trucks">Cancel edit</a>
+      <a class="fx-btn ghost" href="/freight/missions?tab=trucks">Cancel edit</a>
       {% endif %}
     </div>
 
@@ -454,7 +454,7 @@
 
         <label>
           State
-          <input maxlength="2" name="current_state" value="{{ edit_profile.current_state if edit_profile else '' }}" placeholder="AZ" style="text-transform:uppercase">
+          <input maxlength="2" name="current_state" value="{{ edit_profile.current_state if edit_profile else '' }}" placeholder="AZ" class="fx-upper">
         </label>
       </div>
 
@@ -515,7 +515,7 @@
       <div class="form-section-title">
         <span>4. Driver & Vehicle Identity (never auto-shared)</span>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
+      <p class="fx-help-block">
         Stored for booking paperwork. The agent never sends these - drafts containing them are blocked automatically.
       </p>
       <div class="form-grid-4">
@@ -562,30 +562,30 @@
       <div class="form-section-title">
         <span>6. Facts Agent May Disclose to Brokers</span>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
+      <p class="fx-help-block">
         Check only the facts that the AI agent is allowed to quote in email replies without asking you.
       </p>
-      <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <div class="fx-row-wrap">
         {% for field,label in [('equipment_type','Equipment type'),('team_status','Team driver status'),('mc_number','MC number'),('dot_number','USDOT number')] %}
-        <label class="check" style="font-weight:600">
+        <label class="check fx-semibold">
           <input type="checkbox" name="shareable_fields" value="{{ field }}" {% if edit_profile and field in edit_profile.shareable_fields %}checked{% elif not edit_profile and field in ['equipment_type', 'team_status'] %}checked{% endif %}>
           <span>{{ label }}</span>
         </label>
         {% endfor %}
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;padding-top:16px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
-        <label class="check" style="margin:0">
+      <div class="fx-form-foot">
+        <label class="check fx-m0">
           <input type="checkbox" name="active" {% if not edit_profile or edit_profile.active %}checked{% endif %}>
-          <span style="font-weight:700">Truck profile active</span>
+          <span class="fx-strong">Truck profile active</span>
         </label>
-        <div style="display:flex;gap:10px">
+        <div class="fx-row">
           {% if edit_profile %}
-          <a class="button ghost" href="/freight/missions?tab=trucks">Cancel</a>
+          <a class="fx-btn ghost" href="/freight/missions?tab=trucks">Cancel</a>
           {% else %}
-          <button type="button" class="button ghost" onclick="closeTruckForm()">Cancel</button>
+          <button type="button" class="fx-btn ghost" onclick="closeTruckForm()">Cancel</button>
           {% endif %}
-          <button class="primary-btn" style="padding:10px 24px">{{ 'Update truck profile' if edit_profile else 'Save truck profile' }}</button>
+          <button class="fx-btn primary fx-btn-lg">{{ 'Update truck profile' if edit_profile else 'Save truck profile' }}</button>
         </div>
       </div>
     </form>
@@ -674,21 +674,26 @@ function closeTruckForm() {
 }
 
 function onTruckSelect(truckId) {
-  if (!truckId) return;
-  const truck = profilesData.find(p => String(p.id) === String(truckId));
-  if (!truck) return;
-  
+  const hint = document.getElementById('truck-inherit-hint');
   const eqEl = document.getElementById('input-equipment-type');
   const lenEl = document.getElementById('input-trailer-length');
   const wtEl = document.getElementById('input-max-weight');
-  const cityEl = document.getElementById('input-origin-city');
-  const stateEl = document.getElementById('input-origin-state');
-  
-  if (eqEl && truck.equipment_type) eqEl.value = truck.equipment_type;
-  if (lenEl && truck.trailer_length_ft) lenEl.value = truck.trailer_length_ft;
-  if (wtEl && truck.max_weight_lbs) wtEl.value = truck.max_weight_lbs;
-  if (cityEl && !cityEl.value && truck.current_city) cityEl.value = truck.current_city;
-  if (stateEl && !stateEl.value && truck.current_state) stateEl.value = truck.current_state;
+  if (eqEl) eqEl.placeholder = 'Dry van, Reefer, Flatbed';
+  if (lenEl) lenEl.placeholder = '53';
+  if (wtEl) wtEl.placeholder = '45000';
+  if (hint) hint.classList.remove('show');
+  if (!truckId) return;
+  const truck = profilesData.find(p => String(p.id) === String(truckId));
+  if (!truck) return;
+  // Equipment lives on the truck profile. Blank mission fields inherit at
+  // save time - shown here instead of silently copying values into the form.
+  if (eqEl && truck.equipment_type) eqEl.placeholder = truck.equipment_type;
+  if (lenEl && truck.trailer_length_ft) lenEl.placeholder = truck.trailer_length_ft + ' ft';
+  if (wtEl && truck.max_weight_lbs) wtEl.placeholder = String(truck.max_weight_lbs);
+  if (hint) {
+    hint.textContent = 'Equipment, trailer, and weight inherit from ' + truck.name + ' when left blank. Edit the truck profile to change them everywhere.';
+    hint.classList.add('show');
+  }
 }
 
 function bindRemove(){
@@ -707,7 +712,6 @@ document.getElementById('add-destination')?.addEventListener('click', () => {
   const rowHtml = `
     <div class="destination-row">
       <input name="destination_label" placeholder="e.g. Dallas, TX or Southeast" required>
-      <input name="destination_state" maxlength="2" placeholder="ST" style="text-transform:uppercase" title="State abbreviation for this city">
       <select name="destination_kind" required>
         <option value="city">City</option>
         <option value="state">State code (NJ)</option>
