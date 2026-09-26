@@ -80,16 +80,21 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertNotIn("equipment_type", classify_reply("This is a dry van load. Rate is $4,000 all in.")["questions"])
         self.assertIn("equipment_type", classify_reply("Do you have a dry van?")["questions"])
 
-    def test_repeated_profile_question_does_not_send_same_answer_twice(self):
+    def test_repeated_profile_question_offers_manual_restate_instead_of_stopping(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
         first = inject_broker_reply(self.storage, load_id, "Do you have a dry van?")
         second = inject_broker_reply(self.storage, load_id, "Is it a dry van?")
         self.assertEqual(first["decision"]["action"], "sent")
-        self.assertEqual(second["decision"]["action"], "alert")
+        # A repeated question never kills the turn and never auto-resends: a
+        # manual restate draft is prepared and an alert explains the repeat.
+        self.assertEqual(second["decision"]["action"], "draft")
+        self.assertEqual(second["decision"]["draft"]["reason"], "profile_fact_restate")
+        self.assertTrue(second["decision"]["draft"]["policy_snapshot"]["manual_only"])
         self.assertEqual([row["direction"] for row in second["state"]["messages"]], ["in", "out", "in"])
+        self.assertTrue(self.storage.list("freight_alerts", {"kind": "repeated_question"}, order="", limit=1))
 
-    def test_confirmed_facts_enable_auto_counter_without_repeating_it(self):
+    def test_confirmed_facts_enable_auto_counter_with_bounded_restate(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4500})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
@@ -109,9 +114,14 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(confirmed["state"]["auto_send_blockers"], [])
         self.assertEqual(len(confirmed["state"]["pending_drafts"]), 0)
         repeated = inject_broker_reply(self.storage, load_id, "Could you do $4,100 all in?")
-        self.assertEqual(repeated["decision"]["action"], "alert")
-        self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in"])
-        self.assertEqual(len(self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)), 1)
+        # A new broker message resets the turn: the same counter is restated,
+        # flagged as a restate, and never consumes another counter round.
+        self.assertEqual(repeated["decision"]["action"], "sent")
+        self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in", "out"])
+        events = self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)
+        self.assertEqual(len(events), 2)
+        self.assertEqual([(event.get("details") or {}).get("restate", False) for event in events], [False, True])
+        self.assertEqual(self.storage.get("freight_loads", load_id)["current_round"], 1)
 
     def test_auto_mode_sends_missing_load_details_request(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
@@ -396,7 +406,7 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(result["state"]["messages"][-1]["body_text"], "Could you meet us at $4,500 all in?")
         self.assertEqual(compose.call_args.args[2], 4500)
 
-    def test_details_followup_uses_active_offer_once(self):
+    def test_details_followup_never_resends_counter_for_same_message(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4500})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
@@ -418,7 +428,9 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(second["decision"]["action"], "sent")
         self.assertIn("$4,500", second["state"]["messages"][-1]["body_text"])
         self.assertEqual(second["state"]["messages"][-2]["classification"]["active_offer"], 4000)
-        self.assertEqual(final["decision"]["action"], "waiting")
+        # Re-evaluating the same broker message after manual fact confirmation
+        # must not resend the counter that already went out for it.
+        self.assertEqual(final["decision"]["action"], "duplicate")
         self.assertEqual(final["state"]["messages"][-1]["body_text"], "Could you do $4,500 all in?")
         self.assertEqual(model.call_count, 2)
         events = self.storage.list("freight_negotiation_events", {"event_type": "offer"}, order="", limit=10)
