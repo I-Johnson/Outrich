@@ -99,9 +99,9 @@
         {% if L.mission_id %}<a class="fx-chip {{ 'auto' if is_auto else 'approve' }}" href="/freight/missions?tab=missions&mission_id={{ L.mission_id }}" title="Change how this mission negotiates"><svg class="i sm"><use href="#i-{{ 'bolt' if is_auto else 'hand' }}"/></svg>{{ 'Auto mode' if is_auto else 'Approve mode' }}</a>{% endif %}
         <span style="flex:1"></span>
         {% if L.thread.id %}
-        {% if L.status != 'booked' %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="booked"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-check"/></svg>Mark booked</button></form>{% endif %}
+        {% if L.status != 'booked' and not L.booking %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="booked"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-check"/></svg>Mark booked</button></form>{% endif %}
         {% if L.status != 'closed' %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="closed"><button class="fx-btn sm" type="submit">Close</button></form>{% endif %}
-        {% if L.status in ['closed', 'mismatch', 'passed', 'accepted_pending_review', 'offer_review', 'protected_review', 'booked'] %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="negotiating"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-refresh"/></svg>Reopen negotiation</button></form>{% endif %}
+        {% if L.status in ['closed', 'mismatch', 'passed', 'accepted_pending_review', 'offer_review', 'protected_review'] %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="negotiating"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-refresh"/></svg>Reopen negotiation</button></form>{% endif %}
         {% endif %}
       </div>
     </div>

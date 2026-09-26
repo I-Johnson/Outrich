@@ -821,7 +821,14 @@ def set_thread_state(thread_id: str, state: str, storage=None) -> dict:
     load = storage.get("freight_loads", thread["load_id"])
     if not load:
         raise ValueError("Freight load not found")
-    if state in {"booked", "closed", "passed"}:
+    if state == "booked":
+        bookings = [b for b in storage.list("freight_bookings", {"thread_id": thread_id}, order="created_at desc", limit=5)
+                    if b.get("status") != "cancelled"]
+        if bookings:
+            mark_booked(bookings[0]["id"], storage)
+            return {"thread": storage.get("freight_threads", thread_id), "load": storage.get("freight_loads", load["id"])}
+        raise ValueError("No agreement is recorded for this thread; booking starts when the broker accepts a price")
+    if state in {"closed", "passed"}:
         _supersede_pending_drafts(thread_id, storage)
     _set_stage(thread, load, state, storage)
     return {"thread": storage.get("freight_threads", thread_id), "load": storage.get("freight_loads", load["id"])}
