@@ -1,0 +1,7 @@
+{
+  "name": "negotiation through to accepted price",
+  "turns": [
+    {"body": "Rate is $4,000 all in", "expect": {"action": ["sent"]}},
+    {"body": "Ok you got it at $4,200", "expect": {"action": ["alert"], "state": "accepted_pending_review", "alert_kind": "price_accepted"}}
+  ]
+}
