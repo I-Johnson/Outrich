@@ -80,6 +80,18 @@ NEVER_SEND_PROFILE_FIELDS = {
 SHAREABLE_FIELD_ALLOWLIST = {"equipment_type", "team_status", "mc_number", "dot_number", "trailer_length_ft"}
 
 
+SHAREABLE_FIELD_LABELS = {
+    "equipment_type": "Equipment type",
+    "team_status": "Team driver status",
+    "mc_number": "MC number",
+    "dot_number": "USDOT number",
+}
+
+
+def shareable_field_labels(fields: list[str]) -> list[str]:
+    return [SHAREABLE_FIELD_LABELS.get(field, field) for field in fields or []]
+
+
 def filter_shareable_fields(fields: list[str]) -> list[str]:
     """Server-side guard: crafted form posts cannot widen the shareable set."""
     return [field for field in fields if field in SHAREABLE_FIELD_ALLOWLIST]
@@ -1095,6 +1107,42 @@ def verify_load_facts(load_id: str, values: dict[str, Any], storage=None) -> dic
     return storage.update("freight_loads", load_id, updates)
 
 
+def add_load_stop(load_id: str, values: dict[str, Any], storage=None) -> dict:
+    """Dispatcher-entered stop. Manual entry is already confirmed by a human."""
+    storage = storage or store
+    load = storage.get("freight_loads", load_id)
+    if not load:
+        raise ValueError("Freight load not found")
+    kind = str(values.get("kind") or "").strip().lower()
+    if kind not in {"pickup", "delivery"}:
+        raise ValueError("Choose pickup or delivery")
+    city = str(values.get("city") or "").strip()
+    state = str(values.get("state") or "").strip().upper()
+    if not city or len(state) != 2:
+        raise ValueError("Enter the stop city and two-letter state")
+    appointment = str(values.get("appointment") or "").strip()
+    if bool(values.get("fcfs")) or appointment.upper() == "FCFS":
+        appointment = "FCFS"
+    active = [s for s in storage.list("freight_load_stops", {"load_id": load_id}, order="seq asc", limit=50) if not s.get("removed_at")]
+    stamp = now_iso()
+    return storage.insert("freight_load_stops", {
+        "id": new_id(),
+        "load_id": load_id,
+        "seq": max([int(s.get("seq") or 0) for s in active], default=0) + 1,
+        "kind": kind,
+        "facility_name": str(values.get("facility_name") or "").strip(),
+        "city": city,
+        "state": state,
+        "appointment": appointment or None,
+        "verified": True,
+        "appointment_verified": bool(appointment),
+        "evidence": "Entered manually by dispatch",
+        "source_message_id": "manual",
+        "created_at": stamp,
+        "updated_at": stamp,
+    })
+
+
 def verify_load_stop(stop_id: str, values: dict[str, Any], storage=None) -> dict:
     """A dispatcher confirms one stop's details and appointment time or window."""
     storage = storage or store
@@ -1108,8 +1156,11 @@ def verify_load_stop(stop_id: str, values: dict[str, Any], storage=None) -> dict
     if not city or len(state) != 2:
         raise ValueError("Enter the stop city and two-letter state")
     appointment = str(values.get("appointment") or stop.get("appointment") or "").strip()
+    fcfs = bool(values.get("fcfs")) or appointment.upper() == "FCFS"
+    if fcfs:
+        appointment = "FCFS"
     if not appointment:
-        raise ValueError("Enter the appointment time or window for this stop")
+        raise ValueError("Enter the appointment time or window for this stop, or mark it FCFS")
     return storage.update("freight_load_stops", stop_id, {
         "city": city,
         "state": state,

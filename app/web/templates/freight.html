@@ -33,7 +33,7 @@
     <h1>Loads</h1>
     <p class="fx-sub">{% if loads %}{{ needs|length }} need{{ 's' if needs|length == 1 else '' }} you · {{ waiting|length }} waiting on a broker{% else %}Send an inquiry to a broker to start a load.{% endif %}</p>
   </div>
-  <span class="fx-spacer" style="flex:1"></span>
+  <span class="fx-spacer fx-grow"></span>
   {% if loads %}<label class="fx-search" aria-label="Search loads"><svg class="i sm"><use href="#i-search"/></svg><input id="fx-load-search" type="search" placeholder="Search city or broker" autocomplete="off"></label>{% endif %}
   <form action="/freight/check-mail" method="post" class="fx-inline-form"><button class="fx-btn" type="submit"><svg class="i sm"><use href="#i-refresh"/></svg>Check Gmail</button></form>
   <button type="button" class="fx-btn primary" onclick="document.getElementById('fx-inquiry').showModal()" {% if not setup_ok %}disabled title="Finish setup first"{% endif %}><svg class="i sm"><use href="#i-plus"/></svg>New inquiry</button>
@@ -66,7 +66,7 @@
     {% endif %}
     {% endfor %}
     <div class="fx-qempty" id="fx-q-empty" hidden></div>
-    {% if not loads %}<div class="fx-qempty"><strong style="display:block;color:var(--fx-ink-h);margin-bottom:4px">No loads yet</strong>New inquiries and broker replies show up here.</div>{% endif %}
+    {% if not loads %}<div class="fx-qempty"><strong class="fx-link-block">No loads yet</strong>New inquiries and broker replies show up here.</div>{% endif %}
     {% if mail_cursors %}
     {% set cur = mail_cursors[0] %}
     <div class="fx-qfoot {{ 'err' if cur.error else '' }}"><svg class="i sm"><use href="#i-{{ 'alert' if cur.error else 'clock' }}"/></svg><span>{% if cur.error %}Gmail check failed: {{ cur.error }}{% else %}Gmail checked {{ fx_nav.gmail.checked if fx_nav and fx_nav.gmail and fx_nav.gmail.checked else (cur.last_checked_at[:16]|replace('T', ' ') if cur.last_checked_at else 'not yet') }}{% endif %}</span></div>
@@ -86,7 +86,7 @@
         <span class="fx-chip" title="Broker"><svg class="i sm"><use href="#i-mail"/></svg>{{ L.broker_email }}</span>
         {% if L.mission.name %}<a class="fx-chip" href="/freight/missions?tab=missions&mission_id={{ L.mission_id }}"><svg class="i sm"><use href="#i-route"/></svg>{{ L.mission.name }}</a>{% endif %}
         {% if L.mission_id %}<a class="fx-chip {{ 'auto' if is_auto else 'approve' }}" href="/freight/missions?tab=missions&mission_id={{ L.mission_id }}" title="Change how this mission negotiates"><svg class="i sm"><use href="#i-{{ 'bolt' if is_auto else 'hand' }}"/></svg>{{ 'Auto mode' if is_auto else 'Approve mode' }}</a>{% endif %}
-        <span style="flex:1"></span>
+        <span class="fx-grow"></span>
         {% if L.thread.id %}
         {% if L.status != 'booked' and not L.booking %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="booked"><button class="fx-btn sm" type="submit"><svg class="i sm"><use href="#i-check"/></svg>Mark booked</button></form>{% endif %}
         {% if L.status != 'closed' %}<form action="/freight/threads/{{ L.thread.id }}/state" method="post"><input type="hidden" name="state" value="closed"><button class="fx-btn sm" type="submit">Close</button></form>{% endif %}
@@ -97,23 +97,23 @@
 
     <div class="fx-tstream" id="fx-stream">
       {% if L.status == 'confirmation_required' %}
-      <div class="fx-alert" style="border-color:#f59e0b;background:#fffbeb">
+      <div class="fx-alert fx-chip-warn">
         <svg class="i"><use href="#i-shield"/></svg>
-        <div style="flex:1">
+        <div class="fx-grow">
           <strong>Confirm sensitive information before sending</strong>
           {% if confirmation_preview and not confirmation_preview.error %}
           <span class="fx-muted">This first email contains: {{ confirmation_preview.sensitive_fields|join(', ') }}. Review the exact message below before it leaves your Gmail.</span>
-          <details style="margin-top:10px">
-            <summary class="fx-muted" style="cursor:pointer">Preview email</summary>
-            <div style="margin-top:8px;padding:10px 12px;background:#fff;border:1px solid #f3d08a;border-radius:8px;white-space:pre-wrap;font-size:12.5px"><strong>Subject: {{ confirmation_preview.subject }}</strong>
+          <details class="fx-mt10">
+            <summary class="fx-muted fx-clickable">Preview email</summary>
+            <div class="fx-amber-box"><strong>Subject: {{ confirmation_preview.subject }}</strong>
 
 {{ confirmation_preview.body }}</div>
           </details>
-          <form action="/freight/loads/{{ L.id }}/send-confirmed" method="post" style="margin-top:10px">
+          <form action="/freight/loads/{{ L.id }}/send-confirmed" method="post" class="fx-mt10">
             <input type="hidden" name="confirm_sensitive" value="yes">
             <input type="hidden" name="confirmation_fingerprint" value="{{ confirmation_preview.fingerprint }}">
-            <label class="check" style="font-size:12px"><input type="checkbox" required> I reviewed this message and confirm sharing these details with this broker.</label>
-            <button class="fx-btn primary" type="submit" style="margin-top:8px"><svg class="i sm"><use href="#i-send"/></svg>Confirm &amp; send</button>
+            <label class="check fx-fs12"><input type="checkbox" required> I reviewed this message and confirm sharing these details with this broker.</label>
+            <button class="fx-btn primary fx-mt8" type="submit"><svg class="i sm"><use href="#i-send"/></svg>Confirm &amp; send</button>
           </form>
           {% else %}
           <span class="fx-muted">{{ confirmation_preview.error or 'Review the template before sending.' }}</span>
@@ -160,7 +160,7 @@
         {% endif %}
       </article>
       {% else %}
-      <p class="fx-muted" style="text-align:center;padding:20px 0">No messages in this thread yet.</p>
+      <p class="fx-muted fx-empty-pad">No messages in this thread yet.</p>
       {% endfor %}
     </div>
 
@@ -206,7 +206,7 @@
     {% endif %}
     {% else %}
     <div class="fx-thread-empty">
-      <div class="fx-empty" style="max-width:380px;background:#fff">
+      <div class="fx-empty fx-dialog-narrow">
         <strong>{{ 'Pick a load to see the conversation' if loads else 'No loads yet' }}</strong>
         {{ 'Broker replies and drafts to approve show up here.' if loads else 'Email a broker about a posted load. Their replies and the agent\'s drafts show up here.' }}
         {% if not loads and setup_ok %}<div><button type="button" class="fx-btn primary" onclick="document.getElementById('fx-inquiry').showModal()"><svg class="i sm"><use href="#i-plus"/></svg>New inquiry</button></div>{% endif %}
@@ -228,7 +228,7 @@
     <div>
       <h3>Offer vs your mission</h3>
       {% if E.rate %}
-      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><span class="fx-big num">{{ '${:,.0f}'.format(E.rate) }}</span>
+      <div class="fx-baseline-row"><span class="fx-big num">{{ '${:,.0f}'.format(E.rate) }}</span>
         {% if C.difference is not none %}<span class="fx-delta {{ 'good' if C.difference >= 0 else 'bad' }} num">{{ '${:,.0f}'.format(C.difference|abs) }} {{ 'over' if C.difference >= 0 else 'under' }} floor</span>{% endif %}
       </div>
       {% if C.missing %}<p class="fx-muted">Full mission comparison needs {{ C.missing|join(' and ') }}.{% if C.known_floor is not none %} Known minimum so far: {{ '${:,.0f}'.format(C.known_floor) }}.{% endif %}</p>{% endif %}
@@ -310,8 +310,8 @@
         {% if L.profile.name %}<div class="k">Truck</div><div class="v">{{ L.profile.name }}</div><div class="s"></div>{% endif %}
       </div>
       {% if L.thread.id and L.status not in ['closed', 'booked'] %}
-      <details id="verify-details-box" style="margin-top:10px">
-        <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Edit load details</summary>
+      <details id="verify-details-box" class="fx-mt10">
+        <summary class="fx-muted fx-summary">Edit load details</summary>
         <form action="/freight/loads/{{ L.id }}/facts" method="post" class="fx-verify-form">
           <label>Pickup city<input id="input-origin_city" name="origin_city" value="{{ L.origin_city }}" required></label>
           <label>State<input id="input-origin_state" name="origin_state" maxlength="2" value="{{ L.origin_state }}" required></label>
@@ -327,7 +327,7 @@
           <label>Actual deadhead miles<input type="number" id="input-deadhead_miles" name="deadhead_miles" min="0" step="1" value="{{ L.deadhead_miles if L.deadhead_miles is not none else '' }}" placeholder="0"></label>
           <label class="wide">Actual load weight (lbs)<input type="number" id="input-weight_lbs" name="weight_lbs" min="1" step="1" value="{{ L.weight_lbs if L.weight_lbs is not none else '' }}" placeholder="e.g. 42000"></label>
           <label class="check wide"><input type="checkbox" name="schedule_confirmed" value="yes" {% if L.schedule_verified %}checked{% endif %}> Broker's pickup and delivery times work for this truck</label>
-          <button type="submit" class="fx-btn primary wide" style="justify-content:center">Save load details</button>
+          <button type="submit" class="fx-btn primary wide fx-center">Save load details</button>
         </form>
       </details>
       {% endif %}
@@ -339,7 +339,7 @@
       {% if B.status == 'rate_con_review' and B.rate_con_reviewed and not B.driver_handoff_approved %}{% set step_text = 'Step 3 of 3: approve the driver handoff' %}
       {% elif B.status == 'rate_con_review' and B.rate_con_reviewed and B.driver_handoff_approved %}{% set step_text = 'Ready to book' %}
       {% else %}{% set step_text = step_label.get(B.status, B.status.replace('_', ' ')) %}{% endif %}
-      <h3>Booking <span class="fx-source" style="margin-left:6px">{{ step_text }}</span></h3>
+      <h3>Booking <span class="fx-source fx-ml6">{{ step_text }}</span></h3>
       <div class="fx-facts">
         <div class="k">Agreed rate</div><div class="v num">${{ '{:,}'.format(B.agreed_rate|int) }}</div><div class="s"><svg class="i sm"><use href="#i-check"/></svg></div>
         {% if B.snapshot.origin %}<div class="k">Route</div><div class="v">{{ B.snapshot.origin }} → {{ B.snapshot.destination }}</div><div class="s"></div>{% endif %}
@@ -348,19 +348,19 @@
         {% if B.rate_con_amount is not none %}<div class="k">Rate con</div><div class="v num">${{ '{:,}'.format(B.rate_con_amount|int) }}</div><div class="s">{% if B.rate_con_reviewed %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>{% endif %}
       </div>
       {% if B.rate_con_diffs %}
-      <div style="margin-top:8px;padding:8px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2">
-        <strong style="font-size:12.5px;color:#b91c1c">Rate con issues</strong>
+      <div class="fx-diff-box">
+        <strong class="fx-diff-head">Rate con issues</strong>
         {% for d in B.rate_con_diffs %}
-        {% if d.status == 'unverified' %}<div style="font-size:12.5px;margin-top:4px">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> - <strong>missing on the rate con</strong></div>
-        {% else %}<div style="font-size:12.5px;margin-top:4px">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> vs rate con <strong>{{ d.rate_con }}</strong></div>{% endif %}
+        {% if d.status == 'unverified' %}<div class="fx-diff-line">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> - <strong>missing on the rate con</strong></div>
+        {% else %}<div class="fx-diff-line">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> vs rate con <strong>{{ d.rate_con }}</strong></div>{% endif %}
         {% endfor %}
       </div>
       {% elif B.status == 'rate_con_review' %}
-      <p class="fx-muted" style="font-size:12.5px;margin-top:6px">Rate con matches the agreement exactly.</p>
+      <p class="fx-muted fx-mt6-fs">Rate con matches the agreement exactly.</p>
       {% endif %}
       {% if L.thread.id and B.status != 'booked' %}
-      <details style="margin-top:10px">
-        <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Enter rate confirmation</summary>
+      <details class="fx-mt10">
+        <summary class="fx-muted fx-summary">Enter rate confirmation</summary>
         <form action="/freight/bookings/{{ B.id }}/rate-con" method="post" class="fx-verify-form">
           <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_amount|int if B.rate_con_amount is not none else (B.agreed_rate|int) }}" required></label>
           <label>Pickup city<input name="pickup_city" placeholder="City" value="{{ L.origin_city or '' }}"></label>
@@ -370,24 +370,24 @@
           <label>Pickup date<input type="date" name="pickup_date" value="{{ L.pickup_date or '' }}"></label>
           <label>Equipment<input name="equipment" placeholder="e.g. Dry Van" value="{{ L.equipment_type or '' }}"></label>
           <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1" value="{{ L.weight_lbs|int if L.weight_lbs else '' }}"></label>
-          <button type="submit" class="fx-btn primary wide" style="justify-content:center">Compare rate con</button>
+          <button type="submit" class="fx-btn primary wide fx-center">Compare rate con</button>
         </form>
       </details>
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <div class="fx-actions-row">
         {% if B.status == 'rate_con_review' and not B.rate_con_reviewed %}
         <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="approve"><button type="submit" class="fx-btn sm primary">Approve rate con{{ ' with differences' if B.rate_con_diffs else '' }}</button></form>
         <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="reject"><button type="submit" class="fx-btn sm">Reject / keep negotiating</button></form>
         {% endif %}
         {% if B.rate_con_reviewed and not B.driver_handoff_approved %}
         <form action="/freight/bookings/{{ B.id }}/handoff" method="post"><button type="submit" class="fx-btn sm primary">Approve driver handoff</button></form>
-        <p class="fx-muted" style="font-size:12px;width:100%;margin:2px 0 0">Approving allows the driver name, CDL, and truck VIN to go to this broker. Nothing is sent until you send it.</p>
+        <p class="fx-muted fx-handoff-note">Approving allows the driver name, CDL, and truck VIN to go to this broker. Nothing is sent until you send it.</p>
         {% endif %}
         {% if B.rate_con_reviewed and B.driver_handoff_approved %}
         <form action="/freight/bookings/{{ B.id }}/book" method="post"><button type="submit" class="fx-btn sm primary">Mark booked</button></form>
         {% endif %}
       </div>
       {% elif B.status == 'booked' %}
-      <p style="font-size:13px;color:#15803d;font-weight:700;margin-top:8px">Booked. Agreement snapshot is locked.</p>
+      <p class="fx-booked-note">Booked. Agreement snapshot is locked.</p>
       {% endif %}
     </div>
     {% endif %}
@@ -395,14 +395,14 @@
     <div>
       <h3>Broker</h3>
       <div class="fx-facts">
-        <div class="k">Company</div><div class="v">{{ L.broker.legal_name or L.broker.domain or 'Unknown' }}</div><div class="s">{% if L.broker.blocked %}<span class="fx-source" style="color:#dc2626">Blocked</span>{% endif %}</div>
+        <div class="k">Company</div><div class="v">{{ L.broker.legal_name or L.broker.domain or 'Unknown' }}</div><div class="s">{% if L.broker.blocked %}<span class="fx-source fx-danger-text">Blocked</span>{% endif %}</div>
         <div class="k">MC</div><div class="v {{ '' if L.broker.mc_number else 'none' }}">{{ L.broker.mc_number or 'Not on file' }}</div><div class="s"></div>
         <div class="k">Credit</div><div class="v">{{ L.broker.credit_status|capitalize }}{% if L.broker.credit_score %} ({{ L.broker.credit_score|int }}){% endif %}</div><div class="s">{% if L.broker.credit_status in ['approved', 'exempt'] %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
         <div class="k">Setup</div><div class="v">{{ L.broker.setup_status.replace('_', ' ')|capitalize }}</div><div class="s">{% if L.broker.setup_status == 'complete' %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
       </div>
       {% if L.thread.id and L.status not in ['closed', 'booked'] %}
-      <details style="margin-top:10px">
-        <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Update broker</summary>
+      <details class="fx-mt10">
+        <summary class="fx-muted fx-summary">Update broker</summary>
         <form action="/freight/brokers/{{ L.broker.id }}/update" method="post" class="fx-verify-form">
           <label>Legal name<input name="legal_name" value="{{ L.broker.legal_name }}"></label>
           <label>MC number<input name="mc_number" value="{{ L.broker.mc_number }}"></label>
@@ -411,35 +411,48 @@
           <label class="wide">Credit notes<input name="credit_notes" value="{{ L.broker.credit_notes }}"></label>
           <label>Setup<select name="setup_status">{% for s in ['not_started', 'packet_sent', 'complete'] %}<option value="{{ s }}" {% if L.broker.setup_status == s %}selected{% endif %}>{{ s.replace('_', ' ')|capitalize }}</option>{% endfor %}</select></label>
           <label class="check wide"><input type="checkbox" name="blocked" value="yes" {% if L.broker.blocked %}checked{% endif %}> Block this broker</label>
-          <button type="submit" class="fx-btn primary wide" style="justify-content:center">Save broker</button>
+          <button type="submit" class="fx-btn primary wide fx-center">Save broker</button>
         </form>
       </details>
       {% endif %}
     </div>
     {% endif %}
-    {% if L.stops %}
     <div>
       <h3>Route stops</h3>
-      <div class="fx-facts">
+      {% if L.stops %}<div class="fx-facts">
         {% for stop in L.stops %}
         <div class="k">{{ loop.index }}. {{ 'Pickup' if stop.kind == 'pickup' else 'Delivery' }}</div>
         <div class="v">
           {{ stop.city }}{{ ', ' + stop.state if stop.state else '' }}{% if stop.facility_name %} · {{ stop.facility_name }}{% endif %}
-          {% if stop.appointment %}<div class="fx-muted" style="font-size:12px">Appt: {{ stop.appointment }}</div>{% else %}<div class="fx-muted" style="font-size:12px">No appointment yet</div>{% endif %}
+          {% if stop.appointment %}<div class="fx-muted fx-fs12">Appt: {{ stop.appointment }}</div>{% else %}<div class="fx-muted fx-fs12">No appointment yet</div>{% endif %}
           {% if L.thread.id and L.status not in ['closed', 'booked'] and not stop.verified %}
-          <form action="/freight/stops/{{ stop.id }}/verify" method="post" style="margin-top:6px;display:grid;gap:4px">
+          <form action="/freight/stops/{{ stop.id }}/verify" method="post" class="fx-stop-form">
             <input name="facility_name" value="{{ stop.facility_name }}" placeholder="Facility">
-            <input name="appointment" value="{{ stop.appointment or '' }}" placeholder="Appointment time/window" required>
+            <input name="appointment" value="{{ stop.appointment or '' }}" placeholder="Appointment time/window">
+            <label class="fx-muted fx-inline-check"><input type="checkbox" name="fcfs" value="yes" class="fx-wauto"> FCFS - first come, first served (no appointment)</label>
             <button type="submit" class="fx-btn sm">Confirm stop</button>
           </form>
           {% endif %}
         </div>
         <div class="s">{% if stop.verified %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
         {% endfor %}
-      </div>
+      </div>{% endif %}
+      {% if L.thread.id and L.status not in ['closed', 'booked'] %}
+      <details class="fx-mt8">
+        <summary class="fx-muted fx-summary">Add a stop manually</summary>
+        <form action="/freight/loads/{{ L.id }}/stops/add" method="post" class="fx-verify-form">
+          <label>Type<select name="kind"><option value="pickup">Pickup</option><option value="delivery">Delivery</option></select></label>
+          <label>City<input name="city" placeholder="e.g. Tucson" required></label>
+          <label>State<input name="state" maxlength="2" placeholder="AZ" required></label>
+          <label>Facility<input name="facility_name" placeholder="optional"></label>
+          <label>Appointment<input name="appointment" placeholder="time/window, or blank"></label>
+          <label class="check wide"><input type="checkbox" name="fcfs" value="yes"> FCFS - first come, first served (no appointment)</label>
+          <button type="submit" class="fx-btn primary wide fx-center">Add stop</button>
+        </form>
+      </details>
+      {% endif %}
     </div>
-    {% endif %}
-    <div class="fx-note" style="margin-top:auto"><svg class="i sm"><use href="#i-shield"/></svg><span>Rate cons, driver info requests, and phone calls always wait for you, even in Auto mode.</span></div>
+    <div class="fx-note fx-push-down"><svg class="i sm"><use href="#i-shield"/></svg><span>Rate cons, driver info requests, and phone calls always wait for you, even in Auto mode.</span></div>
     {% endif %}
   </div>
 </div>
