@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS freight_brokers (
   credit_notes TEXT NOT NULL DEFAULT '',
   setup_status TEXT NOT NULL DEFAULT 'not_started',
   blocked INTEGER NOT NULL DEFAULT 0,
+  identity_confirmed INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -252,6 +253,7 @@ CREATE TABLE IF NOT EXISTS freight_bookings (
   rate_con_terms TEXT NOT NULL DEFAULT '{}',
   rate_con_version TEXT NOT NULL DEFAULT '',
   rate_con_source TEXT NOT NULL DEFAULT '',
+  rate_con_source_ref TEXT NOT NULL DEFAULT '',
   rate_con_diffs TEXT NOT NULL DEFAULT '[]',
   rate_con_reviewed INTEGER NOT NULL DEFAULT 0,
   rate_con_review_version TEXT NOT NULL DEFAULT '',

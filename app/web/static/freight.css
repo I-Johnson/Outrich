@@ -383,6 +383,9 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   .fx-setwrap { grid-template-columns: 1fr; }
   .fx-subnav { position: static; grid-auto-flow: column; overflow-x: auto; }
   .fx-steps, .fx-rules, .fx-fgrid { grid-template-columns: 1fr; }
+  /* Phone: the queue stacks above the thread instead of crushing it to a sliver. */
+  .fx-work { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  .fx-queue { max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--fx-line); overflow-y: auto; }
 }
 
 /* ---------- Missions & settings pages ---------- */
@@ -438,21 +441,21 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   background: transparent;
   font-size: 13.5px;
   font-weight: 650;
-  color: var(--muted);
+  color: var(--fx-muted);
   cursor: pointer;
   transition: all 0.15s ease;
   box-shadow: none;
 }
 .tab-segment:hover {
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
   background: rgba(255, 255, 255, 0.6);
   transform: none;
 }
 .tab-segment.active {
-  background: var(--dark-overtone);
+  background: var(--fx-dark);
   color: #ffffff !important;
   box-shadow: 0 2px 6px rgba(0,0,0,0.12);
-  border-color: var(--dark-overtone);
+  border-color: var(--fx-dark);
 }
 .tab-count {
   display: inline-flex;
@@ -508,7 +511,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   margin: 0 0 4px 0;
   font-size: 16px;
   font-weight: 750;
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
 }
 .route-badge {
   display: inline-flex;
@@ -569,7 +572,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   gap: 8px;
   font-size: 14.5px;
   font-weight: 750;
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
   margin: 22px 0 12px 0;
   padding-bottom: 8px;
   border-bottom: 1px solid #f1f5f9;
@@ -690,7 +693,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .mode-title {
   font-size: 15px;
   font-weight: 750;
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
 }
 .mode-badge {
   font-size: 10.5px;
@@ -717,7 +720,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .mode-sub {
   display: block;
   font-size: 11.5px;
-  color: var(--muted);
+  color: var(--fx-muted);
   font-weight: 500;
 }
 .mode-card input[type="radio"] {
@@ -747,7 +750,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   line-height: 1.4;
 }
 .safety-guardrail-note strong {
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
 }
 /* Feature Toggle Cards */
 .toggle-grid {
@@ -780,13 +783,13 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .toggle-text b {
   display: block;
   font-size: 12.5px;
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
   margin-bottom: 2px;
 }
 .toggle-text small {
   display: block;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--fx-muted);
   line-height: 1.35;
 }
 /* Unit Input Group */
@@ -799,7 +802,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   position: absolute;
   left: 10px;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--fx-muted);
   font-weight: 600;
   pointer-events: none;
 }
@@ -807,17 +810,11 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   padding-left: 22px;
 }
 @media(max-width: 1000px) {
-  .stepper-steps {
-    grid-template-columns: repeat(2, 1fr);
-  }
   .form-grid-3, .form-grid-4, .toggle-grid, .mode-grid {
     grid-template-columns: 1fr;
   }
 }
 @media(max-width: 650px) {
-  .stepper-steps {
-    grid-template-columns: 1fr;
-  }
   .form-grid-2 {
     grid-template-columns: 1fr;
   }
@@ -827,80 +824,6 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 }
 
 /* ===== Freight settings page ===== */
-/* Freight Onboarding Stepper */
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-/* Tabs Bar */
-.freight-tabs-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
-.tabs-segmented {
-  display: inline-flex;
-  background: #eef2f6;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 4px;
-  gap: 4px;
-}
-.tab-segment {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 16px;
-  border-radius: 7px;
-  border: 1px solid transparent;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  text-decoration: none;
-  box-shadow: none;
-}
-.tab-segment:hover {
-  color: var(--ink-heading);
-  background: rgba(255, 255, 255, 0.6);
-  transform: none;
-}
-.tab-segment.active {
-  background: var(--dark-overtone);
-  color: #ffffff !important;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
-  border-color: var(--dark-overtone);
-}
-.tab-count {
-  display: inline-flex;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  background: #e2e8f0;
-  color: #475569;
-}
-.tab-segment.active .tab-count {
-  background: rgba(255, 255, 255, 0.2);
-  color: #ffffff;
-}
 /* Settings Form Styles */
 .field-grid {
   display: grid;
@@ -912,7 +835,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 }
 .field-hint {
   font-size: 11.5px;
-  color: var(--muted);
+  color: var(--fx-muted);
   margin-top: 5px;
   line-height: 1.4;
 }
@@ -946,7 +869,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .template-item h4 {
   margin: 0 0 4px 0;
   font-size: 14px;
-  color: var(--ink-heading);
+  color: var(--fx-ink-h);
 }
 .var-pill {
   display: inline-flex;
@@ -975,17 +898,11 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
   .freight-settings-grid, .templates-layout {
     grid-template-columns: 1fr;
   }
-  .stepper-steps {
-    grid-template-columns: repeat(2, 1fr);
-  }
   .field-grid {
     grid-template-columns: 1fr;
   }
 }
 @media(max-width: 650px) {
-  .stepper-steps {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* Availability badge */
@@ -994,7 +911,7 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .fx-avail.available { color:#15803d; background:#f0fdf4; border-color:#bbf7d0; }
 .fx-avail.booked { color:#b45309; background:#fffbeb; border-color:#fde68a; }
 .fx-avail.off { color:#dc2626; background:#fef2f2; border-color:#fecaca; }
-.fx-avail.until { color:var(--muted); font-weight:500; border:none; background:none; padding:2px 4px; }
+.fx-avail.until { color:var(--fx-muted); font-weight:500; border:none; background:none; padding:2px 4px; }
 .fx-avail.until::before { display:none; }
 
 /* Load page utilities (moved off inline styles) */
@@ -1024,3 +941,37 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .fx-dialog-narrow { max-width: 380px; background: #fff; }
 .fx-push-down { margin-top: auto; }
 .fx-wauto { width: auto; }
+
+/* ---------- Missions & fleet utilities (moved off inline styles) ---------- */
+.fx-row { display: flex; align-items: center; gap: 8px; }
+.fx-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--fx-line-2); margin-top: 8px; }
+.fx-form-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--fx-line); }
+.fx-form-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--fx-line-2); flex-wrap: wrap; gap: 12px; }
+.fx-form-title { font-size: 17px; margin: 0 0 4px; }
+.fx-form-sub { margin: 0; color: var(--fx-muted); }
+.fx-muted-sm { font-size: 11.5px; color: var(--fx-muted); }
+.fx-muted-xs { font-size: 11px; color: var(--fx-muted); }
+.fx-help-block { font-size: 12px; color: var(--fx-muted); margin-bottom: 10px; }
+.fx-neg-top { margin-top: -4px; }
+.fx-empty { text-align: center; padding: 36px 20px; border-radius: 14px; margin-bottom: 20px; }
+.fx-empty h3 { font-size: 16px; margin: 0 0 6px; }
+.fx-empty p { color: var(--fx-muted); max-width: 480px; margin: 0 auto 16px; font-size: 13px; }
+.fx-warn { color: var(--fx-amber); }
+.fx-warn-text { color: #d97706; font-size: 12.5px; margin-bottom: 14px; }
+.fx-upper { text-transform: uppercase; }
+.fx-capitalize { text-transform: capitalize; }
+.fx-grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fx-arrow { color: #94a3b8; }
+.fx-mt6 { margin-top: 6px; }
+.fx-m0 { margin: 0; }
+.fx-btn-lg { height: 40px; padding: 0 22px; font-size: 13.5px; }
+.fx-btn.danger-ghost { color: var(--fx-red); border-color: var(--fx-red-bd); }
+.fx-truck-meta { font-size: 12px; color: var(--fx-muted); margin-top: 10px; }
+.spec-pill.mode-auto { background: var(--fx-green-bg); color: var(--fx-green); font-weight: 700; border: 1px solid var(--fx-green-bd); }
+.spec-pill.mode-approve { background: var(--fx-blue-bg); color: var(--fx-blue); font-weight: 700; border: 1px solid var(--fx-blue-bd); }
+.fx-inherit-hint { display: none; font-size: 12px; color: var(--fx-muted); margin-top: 4px; }
+.fx-inherit-hint.show { display: block; }
+.fx-strong { font-weight: 700; }
+.fx-semibold { font-weight: 600; }
+.fx-row-wrap { display: flex; gap: 20px; flex-wrap: wrap; }
+.fx-mb4 { margin-bottom: 4px; }

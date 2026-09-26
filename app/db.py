@@ -243,8 +243,11 @@ class SQLiteStore:
             return result.rowcount == 1
 
     def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        return self.claim_field_not(table, row_id, "status", disallowed, new_status)
+
+    def claim_field_not(self, table: str, row_id: Any, field: str, disallowed: str, new_value: str) -> bool:
         with self.connect() as con:
-            result = con.execute(f"UPDATE {table} SET status=?, updated_at=? WHERE id=? AND status<>?", (new_status, now_iso(), row_id, disallowed))
+            result = con.execute(f"UPDATE {table} SET {field}=?, updated_at=? WHERE id=? AND {field}<>?", (new_value, now_iso(), row_id, disallowed))
             con.commit()
             return result.rowcount == 1
 
@@ -307,7 +310,10 @@ class SupabaseStore:
         rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&status=eq.{quote(expected)}", json={"status": new_status, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
         return bool(rows)
     def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
-        rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&status=neq.{quote(disallowed)}", json={"status": new_status, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
+        return self.claim_field_not(table, row_id, "status", disallowed, new_status)
+
+    def claim_field_not(self, table: str, row_id: Any, field: str, disallowed: str, new_value: str) -> bool:
+        rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&{quote(field)}=neq.{quote(disallowed)}", json={field: new_value, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
         return bool(rows)
     def delete(self, table: str, filters: dict[str, Any]):
         query = "&".join(f"{quote(k)}=eq.{quote(str(v))}" for k, v in filters.items())

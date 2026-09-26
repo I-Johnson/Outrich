@@ -146,23 +146,37 @@ def truck_availability(profile: dict, load: dict | None = None, storage=None) ->
         detail = "Truck is marked off duty"
     elif status == "booked":
         detail = "Truck is marked booked"
+    if status == "booking":
+        status, detail = "conflict", "Another booking is in progress"
     pickup = str((load or {}).get("pickup_date") or "")
     window = _load_window(load, storage) if load else None
     if status == "available" and window and profile.get("id"):
-        others = (storage or store).list(
-            "freight_loads", {"truck_profile_id": profile["id"], "status": "booked"},
-            order="", limit=50)
-        for row in others:
-            if row["id"] == (load or {}).get("id"):
-                continue
-            other = _load_window(row, storage)
-            if other and window[0] <= other[1] and other[0] <= window[1]:
-                status, detail = "conflict", f"Booked {other[0]} to {other[1]}"
-                break
+        conflict = _truck_window_conflict(str(profile["id"]), load, storage)
+        if conflict:
+            status, detail = "conflict", conflict
     available_from = str(profile.get("available_from") or "")
     if status == "available" and available_from and pickup and pickup < available_from:
         status, detail = "conflict", f"Not available until {available_from}"
     return {"status": status, "detail": detail}
+
+
+def _truck_window_conflict(profile_id: str, load: dict, storage=None) -> str:
+    """First window conflict with any booked load on this truck, or "".
+
+    The scan is unbounded (filtered at the database by truck and booked
+    status): capping it would let an old booking hide from the overlap check.
+    """
+    storage = storage or store
+    window = _load_window(load, storage) if load else None
+    if not window:
+        return ""
+    for row in storage.list("freight_loads", {"truck_profile_id": profile_id, "status": "booked"}, order="", limit=10000):
+        if row["id"] == (load or {}).get("id"):
+            continue
+        other = _load_window(row, storage)
+        if other and window[0] <= other[1] and other[0] <= window[1]:
+            return f"Booked {other[0]} to {other[1]}"
+    return ""
 
 
 BROKER_CREDIT_STATUSES = {"unknown", "approved", "denied", "exempt"}
@@ -180,11 +194,14 @@ FREE_MAIL_DOMAINS = {
 }
 
 
-def resolve_broker(email: str, company: str, storage=None) -> dict | None:
+def resolve_broker(email: str, company: str, storage=None, *, thread_id: str = "") -> dict | None:
     """Find or create the broker identity for an email address.
 
     Matching is exact-email first, then company domain. A new broker starts
     unknown / not_started: credit approval and setup are explicit human steps.
+    A NEW email attaching to an existing broker by domain inherits that
+    broker's credit and setup, so it stays unconfirmed - and blocks booking -
+    until a dispatcher explicitly confirms the identity.
     """
     storage = storage or store
     email = str(email or "").strip().lower()
@@ -204,7 +221,13 @@ def resolve_broker(email: str, company: str, storage=None) -> dict | None:
             emails = list(broker.get("emails") or [])
             if email not in emails:
                 emails.append(email)
-                broker = storage.update("freight_brokers", broker["id"], {"emails": emails, "updated_at": now_iso()})
+                broker = storage.update("freight_brokers", broker["id"], {
+                    "emails": emails, "identity_confirmed": False, "updated_at": now_iso()})
+                if thread_id:
+                    _create_alert(thread_id, "broker_identity_review",
+                                  f"New email {email} matched broker {broker.get('legal_name') or domain} by domain. "
+                                  "Confirm this is the same company before it inherits credit and setup; booking is blocked until then.",
+                                  storage)
             return broker
     stamp = now_iso()
     return storage.insert("freight_brokers", {
@@ -241,6 +264,7 @@ def update_broker(broker_id: str, values: dict[str, Any], storage=None) -> dict:
         "credit_notes": str(values.get("credit_notes") or broker.get("credit_notes") or "").strip(),
         "setup_status": setup,
         "blocked": bool(values.get("blocked")) if "blocked" in values else bool(broker.get("blocked")),
+        "identity_confirmed": True if values.get("identity_confirmed") else bool(broker.get("identity_confirmed", True)),
         "updated_at": now_iso(),
     })
 
@@ -385,11 +409,13 @@ def _rate_con_version(terms: dict) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
-def submit_rate_con(booking_id: str, values: dict[str, Any], storage=None, *, source: str = "manual") -> dict:
+def submit_rate_con(booking_id: str, values: dict[str, Any], storage=None, *, source: str = "manual", source_ref: str = "") -> dict:
     """Record the broker's rate confirmation terms and compute exact diffs.
 
     Every new submission replaces the terms under review and resets the gates:
-    a review or driver-handoff approval never carries over to new terms.
+    a review or driver-handoff approval never carries over to new terms. The
+    source reference (for a PDF, the message id and filename it came from) is
+    retained so the dispatcher can re-open the original document.
     """
     storage = storage or store
     booking = storage.get("freight_bookings", booking_id)
@@ -405,6 +431,7 @@ def submit_rate_con(booking_id: str, values: dict[str, Any], storage=None, *, so
         "rate_con_terms": terms,
         "rate_con_version": _rate_con_version(terms),
         "rate_con_source": source,
+        "rate_con_source_ref": source_ref,
         "rate_con_diffs": diffs,
         "rate_con_reviewed": False,
         "rate_con_review_version": "",
@@ -470,7 +497,11 @@ def mark_booked(booking_id: str, storage=None) -> dict:
     if not booking.get("driver_handoff_approved"):
         raise ValueError("Driver handoff approval is required before booking")
     version = booking.get("rate_con_version") or ""
-    if version and (booking.get("rate_con_review_version") != version or booking.get("driver_handoff_version") != version):
+    if not version:
+        # Rows without recorded terms predate version-bound gates; they must be
+        # re-submitted and reviewed, never waved through.
+        raise ValueError("Rate confirmation terms are required before booking; submit the rate con again")
+    if booking.get("rate_con_review_version") != version or booking.get("driver_handoff_version") != version:
         raise ValueError("Rate confirmation changed after review; review and approve the new terms")
     load = storage.get("freight_loads", booking["load_id"]) or {}
     mission = storage.get("freight_missions", load.get("mission_id")) or {}
@@ -478,21 +509,44 @@ def mark_booked(booking_id: str, storage=None) -> dict:
     blockers = _booking_readiness_blockers(load, mission, profile, storage)
     if blockers:
         raise ValueError("Booking is not ready: " + ", ".join(blockers))
-    # Atomic reservation: the compare-and-set claim closes the read-then-write
-    # race - a second concurrent booking loses the claim instead of double-booking.
-    if not storage.claim_status_not("freight_loads", load["id"], "booked", "booked"):
-        raise ValueError("Load is already booked")
-    if profile.get("id"):
-        # Re-verify the truck window after claiming: a concurrent booking for the
-        # same truck may have landed between the readiness check and the claim.
-        conflict = truck_availability({**profile, "availability_status": "available"}, load, storage)
-        if conflict["status"] == "conflict":
-            storage.update("freight_loads", load["id"], {"status": load.get("status") or "negotiating", "updated_at": now_iso()})
-            raise ValueError("Booking is not ready: truck availability (" + (conflict["detail"] or "conflict") + ")")
-    stamp = now_iso()
-    booking = storage.update("freight_bookings", booking_id, {"status": "booked", "updated_at": stamp})
-    if profile.get("id"):
-        storage.update("freight_truck_profiles", profile["id"], {"availability_status": "booked", "updated_at": stamp})
+    # Per-truck mutex: one booking flow at a time per truck, across loads and
+    # processes. The single-statement compare-and-set is atomic in both SQLite
+    # and Postgres, so two concurrent bookings for one truck cannot both pass
+    # the window check.
+    profile_id = str(profile.get("id") or "")
+    locked = False
+    if profile_id:
+        if not storage.claim_field_not("freight_truck_profiles", profile_id, "availability_status", "booking", "booking"):
+            raise ValueError("Another booking is in progress for this truck; retry in a moment")
+        locked = True
+    previous_availability = str(profile.get("availability_status") or "available")
+    try:
+        # Atomic reservation: the compare-and-set claim closes the read-then-write
+        # race - a second concurrent booking of the same load loses the claim.
+        if not storage.claim_status_not("freight_loads", load["id"], "booked", "booked"):
+            raise ValueError("Load is already booked")
+        if profile_id:
+            # Re-verify the truck window after claiming: a booking for the same
+            # truck may have landed between the readiness check and the claim.
+            conflict = _truck_window_conflict(profile_id, load, storage)
+            if conflict:
+                storage.update("freight_loads", load["id"], {"status": load.get("status") or "negotiating", "updated_at": now_iso()})
+                raise ValueError("Booking is not ready: truck availability (" + conflict + ")")
+        stamp = now_iso()
+        booking = storage.update("freight_bookings", booking_id, {"status": "booked", "updated_at": stamp})
+        if profile_id:
+            storage.update("freight_truck_profiles", profile_id, {"availability_status": "booked", "updated_at": stamp})
+    except Exception:
+        if locked:
+            current = storage.get("freight_truck_profiles", profile_id) or {}
+            if current.get("availability_status") == "booking":
+                # A concurrent booking may have completed while this one failed;
+                # never clobber its legitimately booked status on the way out.
+                still_booked = storage.list("freight_loads", {"truck_profile_id": profile_id, "status": "booked"}, order="", limit=1)
+                storage.update("freight_truck_profiles", profile_id, {
+                    "availability_status": "booked" if still_booked else previous_availability,
+                    "updated_at": now_iso()})
+        raise
     thread = storage.get("freight_threads", booking["thread_id"])
     if thread:
         _set_stage(thread, load, "booked", storage)
@@ -598,8 +652,9 @@ def parse_destinations(
     labels: list[str],
     kinds: list[str],
     radii: list[str],
-    states: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """One source of truth per destination: the label carries city and state
+    ("Dallas, TX"); no parallel state input to disagree with it."""
     result: list[dict[str, Any]] = []
     allowed = {"city", "state", "region", "anywhere"}
     for index, raw_label in enumerate(labels):
@@ -609,9 +664,6 @@ def parse_destinations(
         kind = str(kinds[index] if index < len(kinds) else "city").lower()
         if kind not in allowed:
             kind = "city"
-        state = str(states[index] if states and index < len(states) else "").strip().upper()
-        if kind == "city" and state and "," not in label:
-            label = f"{label}, {state}"
         radius = int(_number(radii[index] if index < len(radii) else 0) or 0)
         result.append({"label": label, "kind": kind, "radius_miles": max(0, radius)})
     return result
@@ -1228,6 +1280,10 @@ def _sync_load_stops(load: dict, classification: dict, message_id: str, storage)
                 "created_at": stamp,
                 "updated_at": stamp,
             })
+    # Removals only on a complete route restatement: a partial update ("the
+    # second pickup moved to 3pm") mentions one stop and must not wipe the rest.
+    if (classification.get("route_scope") or "partial") != "complete":
+        return
     removed = [row for row in active if row["id"] not in matched_ids]
     for row in removed:
         storage.update("freight_load_stops", row["id"], {"removed_at": stamp, "updated_at": stamp})
@@ -1453,6 +1509,8 @@ def _booking_readiness_blockers(load: dict, mission: dict, profile: dict, storag
         broker = (storage or store).get("freight_brokers", load["broker_id"]) or {}
         if broker.get("blocked"):
             blockers.append(f"blocked broker ({broker.get('legal_name') or broker.get('domain') or 'unknown'})")
+        if not broker.get("identity_confirmed", True):
+            blockers.append("broker identity confirmation")
         if broker.get("credit_status") not in {"approved", "exempt"}:
             blockers.append("broker credit approval")
         if broker.get("setup_status") != "complete":
@@ -1471,7 +1529,12 @@ def _booking_readiness_blockers(load: dict, mission: dict, profile: dict, storag
         blockers.append("pickup and delivery schedule")
     if not load.get("destination_verified"):
         blockers.append("broker destination")
-    if (mission.get("pickup_start") or mission.get("pickup_end")) and not load.get("pickup_date_verified"):
+    pickup_value = str(load.get("pickup_date") or "")[:10]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", pickup_value):
+        # Without a pickup date there is no occupancy window, so collision
+        # checks cannot run: booking must never skip them.
+        blockers.append("broker pickup date")
+    elif (mission.get("pickup_start") or mission.get("pickup_end")) and not load.get("pickup_date_verified"):
         blockers.append("broker pickup date")
     if not (_number(profile.get("max_weight_lbs")) or _number(mission.get("max_weight_lbs"))):
         blockers.append("truck weight capacity")
@@ -1718,7 +1781,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
     mission = storage.get("freight_missions", load.get("mission_id")) or {}
     profile_id = load.get("truck_profile_id") or mission.get("truck_profile_id")
     profile = storage.get("freight_truck_profiles", profile_id) or {}
-    broker = resolve_broker(load.get("broker_email"), load.get("broker_company"), storage)
+    broker = resolve_broker(load.get("broker_email"), load.get("broker_company"), storage, thread_id=thread["id"])
     if broker and not load.get("broker_id"):
         load = storage.update("freight_loads", load["id"], {"broker_id": broker["id"], "updated_at": now_iso()})
     if not mission.get("active", True) or not profile.get("active", True):
@@ -2205,7 +2268,8 @@ def _handle_rate_con_attachments(thread: dict, message: dict, attachments: list[
         _create_alert(thread["id"], "rate_con_parse_failed",
                       f"Could not read {filename}. Enter the rate confirmation details manually on the load page.", storage)
         return
-    updated = submit_rate_con(booking["id"], fields, storage, source="pdf")
+    source_ref = f"gmail:{message.get('provider_message_id') or message.get('id') or ''}:{filename}"
+    updated = submit_rate_con(booking["id"], fields, storage, source="pdf", source_ref=source_ref)
     diffs = updated.get("rate_con_diffs") or []
     if diffs:
         def _describe(d: dict) -> str:
@@ -2215,7 +2279,13 @@ def _handle_rate_con_attachments(thread: dict, message: dict, attachments: list[
         detail = "; ".join(_describe(d) for d in diffs[:5])
         summary = f"Rate confirmation has {len(diffs)} issue(s): {detail}"
     else:
-        summary = "Rate confirmation matches the agreement exactly. Review and approve it on the load page."
+        snap_stops = (booking.get("snapshot") or {}).get("stops") or []
+        if len(snap_stops) > 2:
+            summary = (f"Rate confirmation matches on the compared fields (first pickup, final delivery, pickup date, "
+                       f"equipment, weight, total). This route has {len(snap_stops)} stops: the parser reads endpoints "
+                       f"only, so verify intermediate stops and appointments against {filename} before approving.")
+        else:
+            summary = "Rate confirmation matches the agreement exactly. Review and approve it on the load page."
     _create_alert(thread["id"], "rate_con_compared", summary, storage)
 
 
@@ -2275,26 +2345,45 @@ def reconcile_unprocessed_inbound(storage=None) -> int:
     forever: the next poll skipped it on provider_message_id. Anything still
     pending/failed is reprocessed here; _create_draft and record_agreement are
     idempotent per message, so a retried message does not double-reply.
+
+    The pending/failed filter happens in the query (paged) so a long processed
+    history can never push unprocessed rows out of the window. A message whose
+    thread closed while it waited is surfaced with an alert instead of being
+    dropped silently, and a message that fails a repeated attempt escalates to
+    the dispatcher.
     """
     storage = storage or store
     recovered = 0
-    rows = storage.list("freight_messages", {"direction": "in"}, order="created_at asc", limit=1000)
-    for message in rows:
-        if message.get("processing_state") not in {"pending", "failed"}:
-            continue
-        thread = storage.get("freight_threads", message["thread_id"])
-        if not thread or thread.get("state") == "closed":
-            storage.update("freight_messages", message["id"], {"processing_state": "processed", "processing_error": None})
-            continue
-        try:
-            # The raw RFC822 is gone; attachments were already stored on the
-            # first pass, so only the evaluation needs to be replayed.
-            _process_inbound(thread, message, None, storage)
-            recovered += 1
-        except Exception as exc:
-            logger.warning("Reconcile failed for message %s: %s", message["id"], exc, exc_info=True)
-            storage.update("freight_messages", message["id"], {"processing_state": "failed", "processing_error": str(exc)[:500]})
-    return recovered
+    attempted: set[str] = set()
+    while True:
+        pending = storage.list("freight_messages", {"direction": "in", "processing_state": "pending"}, order="created_at asc", limit=200)
+        failed = storage.list("freight_messages", {"direction": "in", "processing_state": "failed"}, order="created_at asc", limit=200)
+        batch = [row for row in pending + failed if row["id"] not in attempted]
+        if not batch:
+            return recovered
+        for message in batch:
+            attempted.add(message["id"])
+            repeated = message.get("processing_state") == "failed"
+            thread = storage.get("freight_threads", message["thread_id"])
+            if not thread or thread.get("state") == "closed":
+                storage.update("freight_messages", message["id"], {"processing_state": "processed", "processing_error": None})
+                if thread:
+                    _create_alert(thread["id"], "inbound_stranded_closed",
+                                  "A broker message was never processed before this thread closed. Review the message before reopening or booking.",
+                                  storage)
+                continue
+            try:
+                # The raw RFC822 is gone; attachments were already stored on the
+                # first pass, so only the evaluation needs to be replayed.
+                _process_inbound(thread, message, None, storage)
+                recovered += 1
+            except Exception as exc:
+                logger.warning("Reconcile failed for message %s: %s", message["id"], exc, exc_info=True)
+                storage.update("freight_messages", message["id"], {"processing_state": "failed", "processing_error": str(exc)[:500]})
+                if repeated:
+                    _create_alert(thread["id"], "inbound_reprocess_failed",
+                                  f"A broker reply could not be processed after repeated attempts: {str(exc)[:160]}",
+                                  storage)
 
 
 def poll_freight_replies(storage=None) -> dict[str, int]:
