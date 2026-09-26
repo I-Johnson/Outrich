@@ -1,0 +1,7 @@
+{
+  "name": "rate confirmation mention stops for review",
+  "turns": [
+    {"body": "Rate is $4,000 all in", "expect": {"action": ["sent"]}},
+    {"body": "I sent the rate con", "expect": {"action": ["alert"], "alert_kind": "rate_confirmation"}}
+  ]
+}
