@@ -23,12 +23,14 @@ JSON_FIELDS = {
     "freight_messages": {"classification"},
     "freight_drafts": {"policy_snapshot"},
     "freight_negotiation_events": {"details"},
+    "freight_bookings": {"snapshot", "rate_con_diffs", "rate_con_terms"},
+    "freight_brokers": {"emails", "unconfirmed_emails"},
 }
 # Freight tables that carry owner_id + vertical (gmail_senders, freight_settings
 # and email_templates are handled separately).
 OWNED_FREIGHT_TABLES = (
-    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_threads",
-    "freight_messages", "freight_drafts", "freight_negotiation_events", "freight_alerts",
+    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_bookings", "freight_threads",
+    "freight_messages", "freight_attachments", "freight_drafts", "freight_negotiation_events", "freight_alerts",
     "freight_mail_cursors",
 )
 BOOL_FIELDS = {
@@ -157,6 +159,38 @@ class SQLiteStore:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN schedule_verified INTEGER NOT NULL DEFAULT 0")
             if "weight_lbs" not in load_columns:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN weight_lbs REAL")
+            if "broker_id" not in load_columns:
+                con.execute("ALTER TABLE freight_loads ADD COLUMN broker_id TEXT")
+            stop_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_load_stops)")}
+            if "removed_at" not in stop_columns:
+                con.execute("ALTER TABLE freight_load_stops ADD COLUMN removed_at TEXT")
+            booking_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_bookings)")}
+            for column, ddl in (
+                ("rate_con_terms", "TEXT NOT NULL DEFAULT '{}'"),
+                ("rate_con_version", "TEXT NOT NULL DEFAULT ''"),
+                ("rate_con_source", "TEXT NOT NULL DEFAULT ''"),
+                ("rate_con_review_version", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_handoff_version", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if column not in booking_columns:
+                    con.execute(f"ALTER TABLE freight_bookings ADD COLUMN {column} {ddl}")
+            message_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_messages)")}
+            if "processing_state" not in message_columns:
+                con.execute("ALTER TABLE freight_messages ADD COLUMN processing_state TEXT")
+            if "processing_error" not in message_columns:
+                con.execute("ALTER TABLE freight_messages ADD COLUMN processing_error TEXT")
+            profile_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_truck_profiles)")}
+            for column, ddl in (
+                ("truck_vin", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_name", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_cdl_number", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_cdl_state", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_phone", "TEXT NOT NULL DEFAULT ''"),
+                ("availability_status", "TEXT NOT NULL DEFAULT 'available'"),
+                ("available_from", "TEXT"),
+            ):
+                if column not in profile_columns:
+                    con.execute(f"ALTER TABLE freight_truck_profiles ADD COLUMN {column} {ddl}")
             self._upgrade_after_schema(con)
 
     def list(self, table: str, filters: dict | None = None, order: str = "id desc", limit: int = 1000, select: str = "*"):
@@ -170,7 +204,7 @@ class SQLiteStore:
             else: clauses.append(f"{key} = ?"); args.append(value)
         sql = f"SELECT {select} FROM {table}" + (" WHERE " + " AND ".join(clauses) if clauses else "")
         if order:
-            allowed = {"created_at", "updated_at", "sent_at", "scheduled_for", "uploaded_at", "business_name", "name", "id"}
+            allowed = {"created_at", "updated_at", "sent_at", "scheduled_for", "uploaded_at", "business_name", "name", "id", "seq"}
             parts = order.split(); col = parts[0] if parts[0] in allowed else "created_at"
             direction = "DESC" if len(parts) > 1 and parts[1].lower() == "desc" else "ASC"; sql += f" ORDER BY {col} {direction}"
         sql += " LIMIT ?"; args.append(limit)
@@ -205,6 +239,31 @@ class SQLiteStore:
     def claim_status(self, table: str, row_id: Any, expected: str, new_status: str) -> bool:
         with self.connect() as con:
             result = con.execute(f"UPDATE {table} SET status=?, updated_at=? WHERE id=? AND status=?", (new_status, now_iso(), row_id, expected))
+            con.commit()
+            return result.rowcount == 1
+
+    def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        return self.claim_field_not(table, row_id, "status", disallowed, new_status)
+
+    def claim_field_not(self, table: str, row_id: Any, field: str, disallowed: str, new_value: str) -> bool:
+        with self.connect() as con:
+            result = con.execute(f"UPDATE {table} SET {field}=?, updated_at=? WHERE id=? AND {field}<>?", (new_value, now_iso(), row_id, disallowed))
+            con.commit()
+            return result.rowcount == 1
+
+    def claim_booking_lease(self, row_id: Any, claim_at: str, stale_before: str) -> bool:
+        """Take the per-truck booking lease, reclaiming stale claims atomically.
+
+        Succeeds when the truck is not mid-booking, or its claim is stale
+        (timestamp older than stale_before, or missing - e.g. a crash before
+        the timestamp landed). The claim value and its timestamp are written
+        in the same statement, so there is no window between them.
+        """
+        with self.connect() as con:
+            result = con.execute(
+                "UPDATE freight_truck_profiles SET availability_status='booking', booking_claim_at=?, updated_at=? "
+                "WHERE id=? AND (availability_status<>'booking' OR booking_claim_at IS NULL OR booking_claim_at<?)",
+                (claim_at, now_iso(), row_id, stale_before))
             con.commit()
             return result.rowcount == 1
 
@@ -265,6 +324,21 @@ class SupabaseStore:
         rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}", json=values, headers={"Prefer": "return=representation"}); return rows[0] if rows else values
     def claim_status(self, table: str, row_id: Any, expected: str, new_status: str) -> bool:
         rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&status=eq.{quote(expected)}", json={"status": new_status, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
+        return bool(rows)
+    def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        return self.claim_field_not(table, row_id, "status", disallowed, new_status)
+
+    def claim_field_not(self, table: str, row_id: Any, field: str, disallowed: str, new_value: str) -> bool:
+        rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&{quote(field)}=neq.{quote(disallowed)}", json={field: new_value, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
+        return bool(rows)
+
+    def claim_booking_lease(self, row_id: Any, claim_at: str, stale_before: str) -> bool:
+        # Same semantics as the SQLite lease claim, via a PostgREST or-filter.
+        query = (f"or=(availability_status.neq.booking,booking_claim_at.is.null,"
+                 f"booking_claim_at.lt.{quote(stale_before)})")
+        rows = self._request("PATCH", f"/freight_truck_profiles?id=eq.{quote(str(row_id))}&{query}",
+                             json={"availability_status": "booking", "booking_claim_at": claim_at, "updated_at": now_iso()},
+                             headers={"Prefer": "return=representation"})
         return bool(rows)
     def delete(self, table: str, filters: dict[str, Any]):
         query = "&".join(f"{quote(k)}=eq.{quote(str(v))}" for k, v in filters.items())

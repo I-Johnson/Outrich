@@ -16,8 +16,8 @@ from app.db import new_id
 ADMIN_OWNER_ID = "00000000-0000-0000-0000-000000000001"
 
 OWNED_TABLES = frozenset({
-    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_threads",
-    "freight_messages", "freight_drafts", "freight_negotiation_events", "freight_alerts",
+    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_bookings", "freight_threads",
+    "freight_messages", "freight_attachments", "freight_drafts", "freight_negotiation_events", "freight_alerts",
     "freight_mail_cursors", "freight_settings", "gmail_senders", "email_templates",
 })
 
@@ -94,6 +94,25 @@ class OwnerStore:
             except LookupError:
                 return False
         return self.base.claim_status(table, row_id, expected, new_status)
+
+    def claim_status_not(self, table: str, row_id: Any, disallowed: str, new_status: str) -> bool:
+        return self.claim_field_not(table, row_id, "status", disallowed, new_status)
+
+    def claim_field_not(self, table: str, row_id: Any, field: str, disallowed: str, new_value: str) -> bool:
+        if table in OWNED_TABLES:
+            try:
+                self._require(table, row_id)
+            except LookupError:
+                return False
+        return self.base.claim_field_not(table, row_id, field, disallowed, new_value)
+
+    def claim_booking_lease(self, row_id: Any, claim_at: str, stale_before: str) -> bool:
+        if "freight_truck_profiles" in OWNED_TABLES:
+            try:
+                self._require("freight_truck_profiles", row_id)
+            except LookupError:
+                return False
+        return self.base.claim_booking_lease(row_id, claim_at, stale_before)
 
     def delete(self, table: str, filters: dict[str, Any]):
         if table in OWNED_TABLES:

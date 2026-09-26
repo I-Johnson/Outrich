@@ -80,16 +80,21 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertNotIn("equipment_type", classify_reply("This is a dry van load. Rate is $4,000 all in.")["questions"])
         self.assertIn("equipment_type", classify_reply("Do you have a dry van?")["questions"])
 
-    def test_repeated_profile_question_does_not_send_same_answer_twice(self):
+    def test_repeated_profile_question_offers_manual_restate_instead_of_stopping(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
         first = inject_broker_reply(self.storage, load_id, "Do you have a dry van?")
         second = inject_broker_reply(self.storage, load_id, "Is it a dry van?")
         self.assertEqual(first["decision"]["action"], "sent")
-        self.assertEqual(second["decision"]["action"], "alert")
+        # A repeated question never kills the turn and never auto-resends: a
+        # manual restate draft is prepared and an alert explains the repeat.
+        self.assertEqual(second["decision"]["action"], "draft")
+        self.assertEqual(second["decision"]["draft"]["reason"], "profile_fact_restate")
+        self.assertTrue(second["decision"]["draft"]["policy_snapshot"]["manual_only"])
         self.assertEqual([row["direction"] for row in second["state"]["messages"]], ["in", "out", "in"])
+        self.assertTrue(self.storage.list("freight_alerts", {"kind": "repeated_question"}, order="", limit=1))
 
-    def test_confirmed_facts_enable_auto_counter_without_repeating_it(self):
+    def test_confirmed_facts_enable_auto_counter_with_bounded_restate(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4500})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
@@ -109,9 +114,14 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(confirmed["state"]["auto_send_blockers"], [])
         self.assertEqual(len(confirmed["state"]["pending_drafts"]), 0)
         repeated = inject_broker_reply(self.storage, load_id, "Could you do $4,100 all in?")
-        self.assertEqual(repeated["decision"]["action"], "alert")
-        self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in"])
-        self.assertEqual(len(self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)), 1)
+        # A new broker message resets the turn: the same counter is restated,
+        # flagged as a restate, and never consumes another counter round.
+        self.assertEqual(repeated["decision"]["action"], "sent")
+        self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in", "out"])
+        events = self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)
+        self.assertEqual(len(events), 2)
+        self.assertEqual([(event.get("details") or {}).get("restate", False) for event in events], [False, True])
+        self.assertEqual(self.storage.get("freight_loads", load_id)["current_round"], 1)
 
     def test_auto_mode_sends_missing_load_details_request(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
@@ -152,6 +162,34 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(manual["state"]["open_alerts"], [])
         approved = approve_test_draft(self.storage, draft["id"])
         self.assertEqual(approved["state"]["load"]["current_round"], 1)
+
+    def test_city_only_pickup_uses_exact_mission_state_and_explicit_date(self):
+        self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
+        self.storage.update("freight_missions", self.mission_id, {
+            "pickup_start": "2026-09-27", "pickup_end": "2026-09-29", "target_total": 3500,
+        })
+        load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
+        reading = {
+            "kind": "offer", "intent": "offer", "source": "gemini", "summary": "Two Dallas stops for $2,250.",
+            "protected": [], "questions": [], "offer": 2250, "rate_per_mile": None, "ambiguous_offer": False,
+            "numeric_facts": [{"unit": "weight", "value": 30000, "evidence": "30,000 lb"}],
+            "origin": None, "destination": {"city": "Dallas", "state": "TX", "evidence": "Dallas TX"},
+            "equipment": {"type": "dry van", "evidence": "dry van"}, "pickup_date": None,
+            "pickup_schedule_evidence": "Oct 2 at 0900", "delivery_schedule_evidence": "Oct 4 at 0700",
+            "stops": [{"kind": "delivery", "city": "Dallas", "state": "TX", "facility": "retail DC", "appointment": "Oct 4 at 0700", "evidence": "Dallas TX stop 1 retail DC Oct 4 at 0700"}],
+            "route_scope": "complete", "required_equipment": "dry van", "suggested_reply": "",
+        }
+        text = "Phoenix pickup Oct 2 at 0900. Dallas TX stop 1 retail DC Oct 4 at 0700. 30,000 lb dry van. $2,250 all in."
+        with patch("app.core.freight.settings.FREIGHT_AGENT_MODE", "model"), patch("app.core.freight.interpret_broker_reply", return_value=reading):
+            result = inject_broker_reply(self.storage, load_id, text)
+        load = result["state"]["load"]
+        self.assertEqual((load["origin_city"], load["origin_state"]), ("Phoenix", "AZ"))
+        self.assertTrue(load["origin_verified"])
+        self.assertEqual(load["pickup_date"], "2026-10-02")
+        self.assertFalse(load["pickup_date_verified"])
+        self.assertEqual(result["decision"]["action"], "alert")
+        self.assertIn("outside the mission pickup window", result["decision"]["summary"])
+        self.assertNotIn("pickup city and state", " ".join(message["body_text"] for message in result["state"]["messages"]))
 
     def test_reload_preserves_approvals_and_reset_cascades_only_this_test(self):
         from fastapi.testclient import TestClient
@@ -393,10 +431,11 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         with patch("app.core.freight.settings.FREIGHT_AGENT_MODE", "model"), patch("app.core.freight.interpret_broker_reply", return_value=reading), patch("app.core.freight.compose_counter_reply", return_value="Could you meet us at $4,500 all in?") as compose:
             result = inject_broker_reply(self.storage, load_id, "Can do 4k all in")
         self.assertEqual(result["decision"]["action"], "sent")
-        self.assertEqual(result["state"]["messages"][-1]["body_text"], "Could you meet us at $4,500 all in?")
+        # Booking readiness now always requires a pickup date, so the counter asks for it.
+        self.assertEqual(result["state"]["messages"][-1]["body_text"], "Could you meet us at $4,500 all in? Also, please confirm pickup date.")
         self.assertEqual(compose.call_args.args[2], 4500)
 
-    def test_details_followup_uses_active_offer_once(self):
+    def test_details_followup_never_resends_counter_for_same_message(self):
         self.add_mission({"auto_profile_reply": True, "auto_counter": True, "auto_pass": True})
         self.storage.update("freight_missions", self.mission_id, {"target_total": 4500})
         load_id = create_local_test_session(self.storage, {"mission_id": self.mission_id, "truck_profile_id": self.profile_id})["load"]["id"]
@@ -418,8 +457,10 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.assertEqual(second["decision"]["action"], "sent")
         self.assertIn("$4,500", second["state"]["messages"][-1]["body_text"])
         self.assertEqual(second["state"]["messages"][-2]["classification"]["active_offer"], 4000)
-        self.assertEqual(final["decision"]["action"], "waiting")
-        self.assertEqual(final["state"]["messages"][-1]["body_text"], "Could you do $4,500 all in?")
+        # Re-evaluating the same broker message after manual fact confirmation
+        # must not resend the counter that already went out for it.
+        self.assertEqual(final["decision"]["action"], "duplicate")
+        self.assertEqual(final["state"]["messages"][-1]["body_text"], "Could you do $4,500 all in? Also, please confirm pickup date.")
         self.assertEqual(model.call_count, 2)
         events = self.storage.list("freight_negotiation_events", {"event_type": "offer"}, order="", limit=10)
         self.assertEqual(len(events), 1)

@@ -1,0 +1,54 @@
+{
+  "name": "keep-alive: partial repeats never stall the thread",
+  "turns": [
+    {
+      "body": "True team?",
+      "expect": {
+        "action": [
+          "sent"
+        ]
+      }
+    },
+    {
+      "body": "Can do 3450",
+      "expect": {
+        "action": [
+          "sent"
+        ]
+      }
+    },
+    {
+      "body": "Could you meet me at $4,200?",
+      "expect": {
+        "action": [
+          "sent"
+        ]
+      }
+    },
+    {
+      "body": "What are the delivery schedules?",
+      "expect": {
+        "action": [
+          "draft"
+        ],
+        "draft_reason": "clarify_load_details"
+      }
+    },
+    {
+      "body": "Thirty pallets of manufactured components.",
+      "expect": {
+        "action": [
+          "draft"
+        ]
+      }
+    },
+    {
+      "body": "Please hold while I get customer approval",
+      "expect": {
+        "action": [
+          "draft"
+        ]
+      }
+    }
+  ]
+}

@@ -118,6 +118,14 @@ CREATE TABLE IF NOT EXISTS freight_truck_profiles (
   dot_number TEXT NOT NULL DEFAULT '',
   dispatcher_name TEXT NOT NULL DEFAULT '',
   dispatcher_phone TEXT NOT NULL DEFAULT '',
+  truck_vin TEXT NOT NULL DEFAULT '',
+  driver_name TEXT NOT NULL DEFAULT '',
+  driver_cdl_number TEXT NOT NULL DEFAULT '',
+  driver_cdl_state TEXT NOT NULL DEFAULT '',
+  driver_phone TEXT NOT NULL DEFAULT '',
+  availability_status TEXT NOT NULL DEFAULT 'available',
+  booking_claim_at TEXT,
+  available_from TEXT,
   shareable_fields TEXT NOT NULL DEFAULT '[]',
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -169,6 +177,7 @@ CREATE TABLE IF NOT EXISTS freight_loads (
   truck_profile_id TEXT REFERENCES freight_truck_profiles(id) ON DELETE SET NULL,
   broker_email TEXT NOT NULL,
   broker_company TEXT NOT NULL DEFAULT '',
+  broker_id TEXT,
   origin_city TEXT NOT NULL,
   origin_state TEXT NOT NULL DEFAULT '',
   origin_verified INTEGER NOT NULL DEFAULT 0,
@@ -196,7 +205,68 @@ CREATE TABLE IF NOT EXISTS freight_loads (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS freight_brokers (
+  id TEXT PRIMARY KEY,
+  legal_name TEXT NOT NULL DEFAULT '',
+  mc_number TEXT NOT NULL DEFAULT '',
+  domain TEXT NOT NULL DEFAULT '',
+  emails TEXT NOT NULL DEFAULT '[]',
+  credit_status TEXT NOT NULL DEFAULT 'unknown',
+  credit_score REAL,
+  credit_notes TEXT NOT NULL DEFAULT '',
+  setup_status TEXT NOT NULL DEFAULT 'not_started',
+  blocked INTEGER NOT NULL DEFAULT 0,
+  identity_confirmed INTEGER NOT NULL DEFAULT 1,
+  unconfirmed_emails TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_brokers_domain_idx ON freight_brokers(domain);
+
 CREATE INDEX IF NOT EXISTS freight_loads_status_idx ON freight_loads(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS freight_load_stops (
+  id TEXT PRIMARY KEY,
+  load_id TEXT NOT NULL REFERENCES freight_loads(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('pickup', 'delivery')),
+  facility_name TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT '',
+  appointment TEXT,
+  appointment_verified INTEGER NOT NULL DEFAULT 0,
+  verified INTEGER NOT NULL DEFAULT 0,
+  evidence TEXT NOT NULL DEFAULT '',
+  source_message_id TEXT NOT NULL DEFAULT '',
+  removed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_load_stops_load_idx ON freight_load_stops(load_id, seq);
+
+CREATE TABLE IF NOT EXISTS freight_bookings (
+  id TEXT PRIMARY KEY,
+  load_id TEXT NOT NULL REFERENCES freight_loads(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES freight_threads(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'agreed' CHECK (status IN ('agreed', 'rate_con_review', 'booked', 'cancelled')),
+  agreed_rate REAL NOT NULL,
+  snapshot TEXT NOT NULL DEFAULT '{}',
+  rate_con_amount REAL,
+  rate_con_terms TEXT NOT NULL DEFAULT '{}',
+  rate_con_version TEXT NOT NULL DEFAULT '',
+  rate_con_source TEXT NOT NULL DEFAULT '',
+  rate_con_source_ref TEXT NOT NULL DEFAULT '',
+  rate_con_diffs TEXT NOT NULL DEFAULT '[]',
+  rate_con_reviewed INTEGER NOT NULL DEFAULT 0,
+  route_revision_pending INTEGER NOT NULL DEFAULT 0,
+  rate_con_review_version TEXT NOT NULL DEFAULT '',
+  driver_handoff_approved INTEGER NOT NULL DEFAULT 0,
+  driver_handoff_version TEXT NOT NULL DEFAULT '',
+  source_message_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_bookings_thread_idx ON freight_bookings(thread_id, created_at);
 
 CREATE TABLE IF NOT EXISTS freight_threads (
   id TEXT PRIMARY KEY,
@@ -225,8 +295,21 @@ CREATE TABLE IF NOT EXISTS freight_messages (
   body_text TEXT NOT NULL DEFAULT '',
   classification TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'received',
+  processing_state TEXT,
+  processing_error TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS freight_attachments (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES freight_threads(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES freight_messages(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL DEFAULT '',
+  content_b64 TEXT NOT NULL DEFAULT '',
+  byte_size INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_attachments_message_idx ON freight_attachments(message_id);
+
 -- freight_messages provider uniqueness is per owner; created in SQLiteStore.init after owner_id exists.
 
 CREATE TABLE IF NOT EXISTS freight_drafts (
