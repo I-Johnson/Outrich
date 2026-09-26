@@ -11,6 +11,8 @@ os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key")
 
 from app.adapters.base import SendResult
 from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, classify_reply, evaluate_inbound, extract_offer, extract_numeric_facts, load_economics, mission_price_comparison, parse_destinations, recover_uncertain_freight_sends, reevaluate_verified_load, seed_freight_template, send_draft, sensitive_outbound_fields, set_thread_state, verify_load_facts
+from app.core import freight as freight_module
+from app.core import freight_agent as freight_agent_module
 from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import SQLiteStore, new_id, now_iso
 
@@ -812,3 +814,87 @@ class FreightKeepAliveTests(unittest.TestCase):
         self.assertTrue(self.storage.list("freight_alerts", {"thread_id": self.thread_id, "kind": "counter_restate_limit"}, order="", limit=1))
         # Restates never consume counter rounds: one initial counter, two restates.
         self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 1)
+
+
+class FreightStopsTests(unittest.TestCase):
+    """Phase 2: ordered stops with per-stop verification."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/stops.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        self.profile_id, self.mission_id = new_id(), new_id()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': self.profile_id, 'name': 'T', 'current_city': 'Phoenix', 'current_state': 'AZ', 'equipment_type': 'dry van', 'max_weight_lbs': 45000, 'team_status': 'team', 'shareable_fields': ['team_status'], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': self.mission_id, 'name': 'M', 'truck_profile_id': self.profile_id, 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'equipment_type': 'dry van', 'destinations': [{'kind': 'city', 'label': 'Dallas, TX', 'radius_miles': 0}], 'floor_total': 3900, 'target_total': 4500, 'maximum_counter_rounds': 2, 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _load(self):
+        stamp = now_iso()
+        return self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': self.mission_id, 'truck_profile_id': self.profile_id, 'broker_email': 'b@x.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+
+    def test_sync_inserts_stops_in_order(self):
+        load = self._load()
+        classification = {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': 'ABC Warehouse', 'appointment': 'Mon 8am-10am', 'evidence': 'pick up at ABC Warehouse in Phoenix, AZ Mon 8am-10am'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver to Dallas, TX Tue 1pm'},
+        ]}
+        freight_module._sync_load_stops(load, classification, 'msg-1', self.storage)
+        stops = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='seq asc', limit=10)
+        self.assertEqual([s['kind'] for s in stops], ['pickup', 'delivery'])
+        self.assertEqual([s['seq'] for s in stops], [1, 2])
+        self.assertEqual(stops[0]['facility_name'], 'ABC Warehouse')
+        self.assertFalse(stops[0]['verified'])
+
+    def test_sync_unverifies_stop_when_appointment_changes(self):
+        load = self._load()
+        classification = {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix, AZ Mon 8am'},
+        ]}
+        freight_module._sync_load_stops(load, classification, 'msg-1', self.storage)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='', limit=1)[0]
+        freight_module.verify_load_stop(stop['id'], {}, self.storage)
+        changed = {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Wed 6am', 'evidence': 'actually pick up Phoenix, AZ Wed 6am'},
+        ]}
+        freight_module._sync_load_stops(load, changed, 'msg-2', self.storage)
+        stop = self.storage.get('freight_load_stops', stop['id'])
+        self.assertEqual(stop['appointment'], 'Wed 6am')
+        self.assertFalse(stop['verified'])
+
+    def test_readiness_blocks_on_unverified_stops(self):
+        load = self._load()
+        mission = self.storage.get('freight_missions', self.mission_id)
+        profile = self.storage.get('freight_truck_profiles', self.profile_id)
+        self.assertEqual(freight_module._booking_readiness_blockers(load, mission, profile, self.storage), [])
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': 'Mon 8am', 'evidence': 'pick up Phoenix, AZ Mon 8am'},
+            {'kind': 'delivery', 'city': 'Dallas', 'state': 'TX', 'facility': '', 'appointment': 'Tue 1pm', 'evidence': 'deliver Dallas, TX Tue 1pm'},
+        ]}, 'msg-1', self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(len(blockers), 2)
+        self.assertIn('stop 1 pickup (Phoenix, AZ) confirmed', blockers)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id'], 'kind': 'pickup'}, order='', limit=1)[0]
+        freight_module.verify_load_stop(stop['id'], {}, self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(blockers, ['stop 2 delivery (Dallas, TX) confirmed'])
+
+    def test_verify_load_stop_requires_appointment(self):
+        load = self._load()
+        freight_module._sync_load_stops(load, {'source': 'gemini', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': '', 'evidence': 'pick up Phoenix, AZ'},
+        ]}, 'msg-1', self.storage)
+        stop = self.storage.list('freight_load_stops', {'load_id': load['id']}, order='', limit=1)[0]
+        with self.assertRaises(ValueError):
+            freight_module.verify_load_stop(stop['id'], {'appointment': ''}, self.storage)
+
+    def test_gemini_stop_extraction_requires_evidence(self):
+        raw = {'intent': 'details', 'stops': [
+            {'kind': 'pickup', 'city': 'Phoenix', 'state': 'AZ', 'facility': '', 'appointment': '', 'evidence': 'pick up in Phoenix, AZ Friday'},
+            {'kind': 'delivery', 'city': 'Nowhere', 'state': 'ZZ', 'facility': '', 'appointment': '', 'evidence': 'not in the message at all'},
+        ]}
+        result = freight_agent_module._validated(raw, 'Pick up in Phoenix, AZ Friday. Rate $4,000.')
+        self.assertEqual(len(result['stops']), 1)
+        self.assertEqual(result['stops'][0]['city'], 'Phoenix')
