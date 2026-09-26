@@ -343,6 +343,59 @@
       </details>
       {% endif %}
     </div>
+    {% if L.booking %}
+    {% set B = L.booking %}
+    <div>
+      <h3>Booking <span class="fx-source" style="margin-left:6px">{{ B.status.replace('_', ' ') }}</span></h3>
+      <div class="fx-facts">
+        <div class="k">Agreed rate</div><div class="v num">${{ '{:,}'.format(B.agreed_rate|int) }}</div><div class="s"><svg class="i sm"><use href="#i-check"/></svg></div>
+        {% if B.snapshot.origin %}<div class="k">Route</div><div class="v">{{ B.snapshot.origin }} → {{ B.snapshot.destination }}</div><div class="s"></div>{% endif %}
+        {% if B.snapshot.pickup_date %}<div class="k">Pickup</div><div class="v">{{ B.snapshot.pickup_date }}</div><div class="s"></div>{% endif %}
+        {% if B.snapshot.broker %}<div class="k">Broker</div><div class="v">{{ B.snapshot.broker }}</div><div class="s"></div>{% endif %}
+        {% if B.rate_con_amount is not none %}<div class="k">Rate con</div><div class="v num">${{ '{:,}'.format(B.rate_con_amount|int) }}</div><div class="s">{% if B.rate_con_reviewed %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>{% endif %}
+      </div>
+      {% if B.rate_con_diffs %}
+      <div style="margin-top:8px;padding:8px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2">
+        <strong style="font-size:12.5px;color:#b91c1c">Rate con differences</strong>
+        {% for d in B.rate_con_diffs %}
+        <div style="font-size:12.5px;margin-top:4px">{{ d.field }}: agreed <strong>{{ d.agreed }}</strong> vs rate con <strong>{{ d.rate_con }}</strong></div>
+        {% endfor %}
+      </div>
+      {% elif B.status == 'rate_con_review' %}
+      <p class="fx-muted" style="font-size:12.5px;margin-top:6px">Rate con matches the agreement exactly.</p>
+      {% endif %}
+      {% if L.thread.id and B.status != 'booked' %}
+      <details style="margin-top:10px">
+        <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Enter rate confirmation</summary>
+        <form action="/freight/bookings/{{ B.id }}/rate-con" method="post" class="fx-verify-form">
+          <label>Total rate<input type="number" name="total_rate" min="1" step="1" value="{{ B.rate_con_amount|int if B.rate_con_amount is not none else '' }}" required></label>
+          <label>Pickup city<input name="pickup_city" placeholder="City"></label>
+          <label>State<input name="pickup_state" maxlength="2" placeholder="AZ"></label>
+          <label>Delivery city<input name="delivery_city" placeholder="City"></label>
+          <label>State<input name="delivery_state" maxlength="2" placeholder="TX"></label>
+          <label>Pickup date<input type="date" name="pickup_date"></label>
+          <label>Equipment<input name="equipment" placeholder="e.g. Dry Van"></label>
+          <label>Weight (lbs)<input type="number" name="weight_lbs" min="1" step="1"></label>
+          <button type="submit" class="fx-btn primary wide" style="justify-content:center">Compare rate con</button>
+        </form>
+      </details>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        {% if B.status == 'rate_con_review' and not B.rate_con_reviewed %}
+        <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="approve"><button type="submit" class="fx-btn sm primary">Approve rate con{{ ' with differences' if B.rate_con_diffs else '' }}</button></form>
+        <form action="/freight/bookings/{{ B.id }}/review-rate-con" method="post"><input type="hidden" name="decision" value="reject"><button type="submit" class="fx-btn sm">Send back</button></form>
+        {% endif %}
+        {% if B.rate_con_reviewed and not B.driver_handoff_approved %}
+        <form action="/freight/bookings/{{ B.id }}/handoff" method="post"><button type="submit" class="fx-btn sm primary">Approve driver handoff</button></form>
+        {% endif %}
+        {% if B.rate_con_reviewed and B.driver_handoff_approved %}
+        <form action="/freight/bookings/{{ B.id }}/book" method="post"><button type="submit" class="fx-btn sm primary">Mark booked</button></form>
+        {% endif %}
+      </div>
+      {% elif B.status == 'booked' %}
+      <p style="font-size:13px;color:#15803d;font-weight:700;margin-top:8px">Booked. Agreement snapshot is locked.</p>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if L.broker %}
     <div>
       <h3>Broker</h3>
