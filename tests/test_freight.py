@@ -1091,3 +1091,113 @@ class FreightBookingTests(unittest.TestCase):
         back = freight_module.review_rate_con(booking['id'], False, self.storage)
         self.assertEqual(back['status'], 'agreed')
         self.assertEqual(back['rate_con_diffs'], [])
+
+
+def _make_pdf(lines):
+    """Minimal one-page PDF containing the given text lines."""
+    def esc(s):
+        return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    content = "BT /F1 11 Tf 40 780 Td 14 TL " + " ".join(f"({esc(line)}) Tj T*" for line in lines) + " ET"
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
+    ]
+    out = "%PDF-1.4\n"
+    offsets = []
+    for i, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{body}\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n"
+    out += f"trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
+    return out.encode("latin-1")
+
+
+RATE_CON_LINES = [
+    "RATE CONFIRMATION",
+    "Load #: 12345",
+    "Total Rate: $4,200.00",
+    "Shipper: ABC Warehouse",
+    "Pickup: Phoenix, AZ 85001",
+    "Pickup Date: 09/28/2026",
+    "Consignee: XYZ Distribution",
+    "Delivery: Dallas, TX 75201",
+    "Equipment: Dry Van",
+    "Weight: 40,000 lbs",
+]
+
+
+class FreightRateConPdfTests(unittest.TestCase):
+    """Phase 6: rate-con PDF parsing into the booking compare."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/ratecon.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'destination_city': 'Dallas', 'destination_state': 'TX', 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        self.thread = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': self.load['id'], 'sender_account': '1', 'recipient_email': 'a@b.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_parse_extracts_booking_fields(self):
+        from app.core.rate_con import parse_rate_con_pdf
+        fields = parse_rate_con_pdf(_make_pdf(RATE_CON_LINES))
+        self.assertEqual(fields['total_rate'], 4200.0)
+        self.assertEqual(fields['pickup_city'], 'Phoenix')
+        self.assertEqual(fields['pickup_state'], 'AZ')
+        self.assertEqual(fields['delivery_city'], 'Dallas')
+        self.assertEqual(fields['delivery_state'], 'TX')
+        self.assertEqual(fields['pickup_date'], '09/28/2026')
+        self.assertEqual(fields['equipment'], 'dry van')
+        self.assertEqual(fields['weight_lbs'], 40000.0)
+
+    def test_parse_rejects_unreadable_pdf(self):
+        from app.core.rate_con import parse_rate_con_pdf
+        with self.assertRaises(ValueError):
+            parse_rate_con_pdf(b"not a pdf at all")
+
+    def test_matching_rate_con_alerts_exact_match(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)
+        updated = self.storage.get('freight_bookings', booking['id'])
+        self.assertEqual(updated['status'], 'rate_con_review')
+        self.assertEqual(updated['rate_con_amount'], 4200.0)
+        self.assertEqual(updated['rate_con_diffs'], [])
+        alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_compared'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn('matches the agreement', alerts[0]['summary'])
+
+    def test_mismatched_rate_con_alerts_with_diffs(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4500.0, 'msg-1', self.storage)
+        freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)
+        updated = self.storage.get('freight_bookings', booking['id'])
+        fields = {d['field'] for d in updated['rate_con_diffs']}
+        self.assertIn('total rate', fields)
+        alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_compared'}, order='', limit=5)
+        self.assertIn('difference', alerts[0]['summary'])
+
+    def test_rate_con_without_booking_alerts(self):
+        freight_module._handle_rate_con_attachments(self.thread, {}, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)
+        alerts = self.storage.list('freight_alerts', {'thread_id': self.thread['id'], 'kind': 'rate_con_no_booking'}, order='', limit=5)
+        self.assertEqual(len(alerts), 1)
+
+    def test_pdf_attachments_filters_non_pdf(self):
+        import email
+        raw = (b"From: a@b.com\r\nSubject: RC\r\nContent-Type: multipart/mixed; boundary=BB\r\n\r\n"
+               b"--BB\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n"
+               b"--BB\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=rc.pdf\r\n\r\n" + _make_pdf(RATE_CON_LINES) + b"\r\n"
+               b"--BB\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=notes.txt\r\n\r\nhello\r\n"
+               b"--BB--\r\n")
+        message = email.message_from_bytes(raw)
+        found = freight_module._pdf_attachments(message)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0], 'rc.pdf')
