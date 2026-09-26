@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 PROTECTED_PATTERNS = {
     "call_requested": re.compile(r"\b(call me|give me a call|call us|phone me|ring me|(?:reach|call|phone|text) me at\s*\+?\d+)\b", re.I),
     "sensitive_driver_info": re.compile(
-        r"\b(full (?:drivers?|drv) info|drivers?(?:'s)? info|drv info|driver details|driver license|cdl|date of birth|dob|social security|ssn)\b",
+        r"\b(full (?:drivers?|drv) info(?:rmation)?|drivers?(?:'s)? info(?:rmation)?|drv info(?:rmation)?|"
+        r"driver(?:'s)? (?:details|information|info|data)|driver details|driver license|cdl|date of birth|dob|social security|ssn|"
+        r"(?:send|share|give|provide|forward)(?:\s+(?:me|us|over))?\s+their\s+details?)\b",
         re.I,
     ),
     "rate_confirmation": re.compile(r"\b(rate[\s_-]*con(?:firmation)?|confirmation attached|sign(?:ed)? confirmation)\b", re.I),
@@ -681,7 +683,8 @@ def _counter_count(thread_id: str, load: dict, storage=None) -> int:
         amount = extract_offer(draft.get("body_text") or "") or _number((draft.get("policy_snapshot") or {}).get("counter"))
         if amount is not None:
             _record_negotiation_event(thread_id, draft["id"], "counter", amount, {"legacy_backfill": True}, storage)
-    count = len(storage.list("freight_negotiation_events", {"thread_id": thread_id, "event_type": "counter"}, order="", limit=10000))
+    events = storage.list("freight_negotiation_events", {"thread_id": thread_id, "event_type": "counter"}, order="", limit=10000)
+    count = sum(1 for event in events if not (event.get("details") or {}).get("restate"))
     if int(load.get("current_round") or 0) != count:
         storage.update("freight_loads", load["id"], {"current_round": count, "updated_at": now_iso()})
     return count
@@ -951,20 +954,89 @@ def _create_draft(thread_id: str, subject: str, body: str, reason: str, policy: 
     })
 
 
-def _already_sent_reply(thread_id: str, body: str, reason: str, storage=None) -> bool:
-    """Avoid repeating a counter or profile answer already sent in this conversation."""
+def _already_sent_reply(thread_id: str, body: str, reason: str, storage=None, *, in_reply_to: str = "") -> bool:
+    """Suppress only a true duplicate: the same counter to the SAME broker message.
+
+    Text overlap with older turns is never a reason to stop replying: a broker's
+    new message always gets an answer, even when parts of that answer repeat
+    what was said before. Re-evaluating one broker message (for example after
+    manual fact confirmation) must not resend its counter, so dedupe keys on
+    the triggering message, never on message text.
+    """
     storage = storage or store
-    if reason.startswith("counter_"):
-        amount = extract_offer(body)
-        if amount is not None:
-            counters = storage.list("freight_negotiation_events", {"thread_id": thread_id, "event_type": "counter"}, order="", limit=1000)
-            if any(_number(event.get("amount")) == amount for event in counters):
-                return True
-    normalized = " ".join(body.casefold().split())
-    if reason in {"profile_fact_reply", "clarify_load_details", "agent_suggested_reply"}:
-        messages = storage.list("freight_messages", {"thread_id": thread_id, "direction": "out"}, order="created_at desc", limit=100)
-        return any(normalized in " ".join((message.get("body_text") or "").casefold().split()) for message in messages)
-    return False
+    if not reason.startswith("counter_") or not in_reply_to:
+        return False
+    amount = extract_offer(body)
+    if amount is None:
+        return False
+    duplicates = [
+        draft for draft in storage.list("freight_drafts", {"thread_id": thread_id}, order="", limit=500)
+        if draft.get("status") == "sent"
+        and str(draft.get("reason") or "").startswith("counter_")
+        and str(draft.get("in_reply_to_message_id") or "") == str(in_reply_to)
+    ]
+    return any(extract_offer(draft.get("body_text") or "") == amount for draft in duplicates)
+
+
+def _sent_draft_policies(thread_id: str, reason: str, storage=None) -> list[dict]:
+    storage = storage or store
+    return [
+        draft.get("policy_snapshot") or {}
+        for draft in storage.list("freight_drafts", {"thread_id": thread_id}, order="", limit=500)
+        if draft.get("status") == "sent" and str(draft.get("reason") or "") == reason
+    ]
+
+
+def _answered_profile_questions(thread_id: str, storage=None) -> set[str]:
+    """Broker questions already answered on an earlier turn of this thread."""
+    answered: set[str] = set()
+    for policy in _sent_draft_policies(thread_id, "profile_fact_reply", storage):
+        answered.update(policy.get("answered_questions") or [])
+    return answered
+
+
+def _counter_send_count(thread_id: str, amount: float, storage=None) -> int:
+    """How many times this exact counter amount was already sent on the thread."""
+    storage = storage or store
+    events = storage.list("freight_negotiation_events", {"thread_id": thread_id, "event_type": "counter"}, order="", limit=1000)
+    return sum(1 for event in events if _number(event.get("amount")) == amount)
+
+
+def _profile_answers(questions: list[str], profile: dict, mission: dict) -> tuple[list[str], list[str], list[str]]:
+    """Answer broker questions about our truck from shareable profile facts.
+
+    Returns (answers, missing_labels, answered_questions).
+    """
+    shareable = set(profile.get("shareable_fields") or [])
+    answers: list[str] = []
+    missing: list[str] = []
+    answered: list[str] = []
+    for question in questions:
+        if question == "team_status":
+            if profile.get("team_status") and "team_status" in shareable:
+                value = str(profile["team_status"]).lower()
+                answers.append("Yes, this is a true team." if value in {"team", "true team", "yes"} else f"This is a {profile['team_status']} truck.")
+                answered.append(question)
+            else:
+                missing.append("team status")
+        elif question == "equipment_type":
+            equipment = profile.get("equipment_type") or mission.get("equipment_type")
+            if equipment and "equipment_type" in shareable:
+                length = profile.get("trailer_length_ft") or mission.get("trailer_length_ft")
+                answers.append(f"We have a {length} ft {equipment}." if length else f"We have a {equipment}.")
+                answered.append(question)
+            else:
+                missing.append("equipment type")
+        elif question == "mc_or_dot":
+            pieces = []
+            if profile.get("mc_number") and "mc_number" in shareable: pieces.append(f"MC {profile['mc_number']}")
+            if profile.get("dot_number") and "dot_number" in shareable: pieces.append(f"DOT {profile['dot_number']}")
+            if pieces:
+                answers.append(" / ".join(pieces))
+                answered.append(question)
+            else:
+                missing.append("MC/DOT")
+    return answers, missing, answered
 
 
 def record_test_send(draft_id: str, storage=None) -> dict[str, Any]:
@@ -988,7 +1060,8 @@ def record_test_send(draft_id: str, storage=None) -> dict[str, Any]:
     storage.update("freight_drafts", draft_id, {"status": "sent", "updated_at": stamp})
     counter_amount = extract_offer(draft.get("body_text") or "") if str(draft.get("reason") or "").startswith("counter_") else None
     if counter_amount is not None:
-        _record_negotiation_event(thread["id"], draft_id, "counter", counter_amount, {"reason": draft.get("reason"), "transport": "local"}, storage)
+        restate = _counter_send_count(thread["id"], counter_amount, storage) > 0
+        _record_negotiation_event(thread["id"], draft_id, "counter", counter_amount, {"reason": draft.get("reason"), "transport": "local", "restate": restate}, storage)
     next_state = "negotiating" if counter_amount is not None else "passed" if draft.get("reason") == "pass_below_floor" else "waiting"
     storage.update("freight_threads", thread["id"], {"last_message_id": message_id, "state": next_state, "last_activity_at": stamp, "updated_at": stamp})
     if load.get("id"):
@@ -1185,29 +1258,9 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             return {"action": "alert", "classification": classification, "summary": summary}
         _set_stage(thread, load, "negotiating", storage)
 
-    shareable = set(profile.get("shareable_fields") or [])
-    answers: list[str] = []
-    missing: list[str] = []
-    for question in classification["questions"]:
-        if question == "team_status":
-            if profile.get("team_status") and "team_status" in shareable:
-                value = str(profile["team_status"]).lower()
-                answers.append("Yes, this is a true team." if value in {"team", "true team", "yes"} else f"This is a {profile['team_status']} truck.")
-            else:
-                missing.append("team status")
-        elif question == "equipment_type":
-            equipment = profile.get("equipment_type") or mission.get("equipment_type")
-            if equipment and "equipment_type" in shareable:
-                length = profile.get("trailer_length_ft") or mission.get("trailer_length_ft")
-                answers.append(f"We have a {length} ft {equipment}." if length else f"We have a {equipment}.")
-            else:
-                missing.append("equipment type")
-        elif question == "mc_or_dot":
-            pieces = []
-            if profile.get("mc_number") and "mc_number" in shareable: pieces.append(f"MC {profile['mc_number']}")
-            if profile.get("dot_number") and "dot_number" in shareable: pieces.append(f"DOT {profile['dot_number']}")
-            if pieces: answers.append(" / ".join(pieces))
-            else: missing.append("MC/DOT")
+    answered_before = _answered_profile_questions(thread["id"], storage)
+    new_questions = [q for q in classification["questions"] if q not in answered_before]
+    answers, missing, answered_now = _profile_answers(new_questions, profile, mission)
     if missing:
         summary = f"Complete or allow sharing for: {', '.join(missing)}."
         _create_alert(thread["id"], "profile_missing", summary, storage)
@@ -1267,6 +1320,7 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
                 body = "Thanks for the rate. Before we confirm, please send the remaining load details: " + ", ".join(requested_details) + "."
                 policy = {
                     "offer": offer, "floor": floor, "counter": None, "includes_profile_answers": False,
+                    "requested_details": requested_details,
                     "safe_to_auto_send": not auto_blockers, "auto_send_blockers": auto_blockers,
                     "booking_readiness_blockers": booking_blockers, **economics,
                 }
@@ -1292,51 +1346,74 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
             body = " ".join(answers + [body])
         if reason.startswith("counter_") and requested_details:
             body += " Also, please confirm " + ", ".join(requested_details) + "."
+        if reason.startswith("counter_") and counter is not None and _counter_send_count(thread["id"], counter, storage) >= 2:
+            auto_blockers = auto_blockers + [f"counter {_money(counter)} already sent twice"]
+            summary = f"The counter {_money(counter)} was already sent twice on this thread. Follow up personally before repeating it."
+            _create_alert(thread["id"], "counter_restate_limit", summary, storage)
         policy = {
             "offer": offer, "floor": floor, "counter": counter, "includes_profile_answers": bool(answers),
             "safe_to_auto_send": not auto_blockers, "auto_send_blockers": auto_blockers,
             "booking_readiness_blockers": booking_blockers, **economics,
         }
-        if _already_sent_reply(thread["id"], body, reason, storage):
-            if carried_offer and reason.startswith("counter_"):
-                summary = "Load details recorded. Waiting for the broker to respond to the counter already sent."
-                _set_stage(thread, load, "negotiating", storage)
-                return {"action": "waiting", "classification": classification, "summary": summary}
-            summary = "The agent already sent this response. Review the broker's new message before replying again."
-            _create_alert(thread["id"], "repeated_reply", summary, storage)
-            _set_stage(thread, load, "needs_attention", storage)
-            return {"action": "alert", "classification": classification, "summary": summary}
+        if _already_sent_reply(thread["id"], body, reason, storage, in_reply_to=message.get("provider_message_id") or ""):
+            # The same broker message was re-evaluated after its counter went out.
+            return {"action": "duplicate", "classification": classification, "summary": "This reply was already sent for this broker message."}
         draft = _create_draft(thread["id"], thread["subject"], body, reason, policy, message.get("provider_message_id") or "", storage)
         if auto_blockers:
             _create_alert(thread["id"], "auto_send_blocked", f"Automatic rate reply paused: {', '.join(auto_blockers)}.", storage)
         _set_stage(thread, load, "draft_ready", storage)
         return {"classification": classification, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
 
+    if classification["questions"] and not new_questions:
+        # Every question in this turn was already answered earlier. Never go
+        # silent: prepare a manual restate so the human can re-send the answers.
+        restate_answers, _, restate_answered = _profile_answers(classification["questions"], profile, mission)
+        if restate_answers:
+            body = " ".join(restate_answers)
+            policy = {"manual_only": True, "answered_questions": restate_answered, "restate": True}
+            draft = _create_draft(thread["id"], thread["subject"], body, "profile_fact_restate", policy, message.get("provider_message_id") or "", storage)
+            summary = "Broker repeated a question that was already answered. Review and re-send the answer if needed."
+            _create_alert(thread["id"], "repeated_question", summary, storage)
+            _set_stage(thread, load, "draft_ready", storage)
+            return {"action": "draft", "draft": draft, "classification": classification, "summary": summary}
+
     if answers:
         body = " ".join(answers)
-        if _already_sent_reply(thread["id"], body, "profile_fact_reply", storage):
-            summary = "The agent already answered this truck question. Review the broker's follow-up before replying again."
-            _create_alert(thread["id"], "repeated_reply", summary, storage)
-            _set_stage(thread, load, "needs_attention", storage)
-            return {"action": "alert", "classification": classification, "summary": summary}
-        draft = _create_draft(thread["id"], thread["subject"], body, "profile_fact_reply", {}, message.get("provider_message_id") or "", storage)
+        policy = {"answered_questions": answered_now}
+        draft = _create_draft(thread["id"], thread["subject"], body, "profile_fact_reply", policy, message.get("provider_message_id") or "", storage)
         _set_stage(thread, load, "draft_ready", storage)
         return {"classification": classification, **_finish_permitted_draft(draft, mission, storage, transport=transport)}
 
     suggested = classification.get("suggested_reply") or ""
     if suggested and classification.get("source") == "gemini":
-        if _already_sent_reply(thread["id"], suggested, "agent_suggested_reply", storage):
-            summary = "The agent already sent this response. Review the broker's follow-up before replying again."
-            _create_alert(thread["id"], "repeated_reply", summary, storage)
-            _set_stage(thread, load, "needs_attention", storage)
-            return {"action": "alert", "classification": classification, "summary": summary}
         draft = _create_draft(thread["id"], thread["subject"], suggested, "agent_suggested_reply", {"manual_only": True, "agent_summary": classification.get("summary")}, message.get("provider_message_id") or "", storage)
         _set_stage(thread, load, "draft_ready", storage)
         return {"action": "draft", "draft": draft, "classification": classification, "summary": classification.get("summary") or "Review the suggested reply."}
-    summary = "The broker reply needs review because it did not match a permitted reply type."
+    # Never end a turn silently. When the broker's message does not fit a known
+    # shape, keep the thread working: ask for the most valuable missing load
+    # detail, or hand the human a follow-up draft with an explicit next action.
+    booking_blockers = _booking_readiness_blockers(load, mission, profile)
+    auto_blockers = _auto_send_blockers(load, mission, profile)
+    previous = storage.list("freight_messages", {"thread_id": thread["id"], "direction": "in"}, order="created_at asc", limit=100)
+    readings = [row.get("classification") or {} for row in previous if row["id"] != message["id"]] + [classification]
+    requested_details = _broker_detail_labels(booking_blockers, readings)
+    if requested_details:
+        body = "Thanks for the details. When you can, please also confirm " + ", ".join(requested_details) + "."
+        policy = {
+            "requested_details": requested_details, "includes_profile_answers": False,
+            "safe_to_auto_send": not auto_blockers, "auto_send_blockers": auto_blockers,
+            "booking_readiness_blockers": booking_blockers,
+        }
+        policy["manual_only"] = True
+        draft = _create_draft(thread["id"], thread["subject"], body, "clarify_load_details", policy, message.get("provider_message_id") or "", storage)
+        summary = "Broker reply did not match a standard reply type; review the follow-up question that keeps the thread moving."
+        _set_stage(thread, load, "draft_ready", storage)
+        return {"action": "draft", "draft": draft, "classification": classification, "summary": summary}
+    summary = "The broker reply needs review because it did not match a permitted reply type. A follow-up draft is ready to edit."
+    draft = _create_draft(thread["id"], thread["subject"], "Just checking in on this load - is it still available?", "follow_up_nudge", {"manual_only": True}, message.get("provider_message_id") or "", storage)
     _create_alert(thread["id"], "ambiguous_reply", summary, storage)
-    _set_stage(thread, load, "needs_attention", storage)
-    return {"action": "alert", "classification": classification, "summary": summary}
+    _set_stage(thread, load, "draft_ready", storage)
+    return {"action": "draft", "draft": draft, "classification": classification, "summary": summary}
 
 
 def reevaluate_verified_load(thread_id: str, message: dict, storage=None, *, transport: str = "gmail") -> dict[str, Any]:
@@ -1426,7 +1503,8 @@ def send_draft(draft_id: str, storage=None, *, confirm_sensitive: bool = False) 
     })
     storage.update("freight_drafts", draft_id, {"status": "sent", "updated_at": stamp})
     if counter_amount is not None:
-        _record_negotiation_event(thread["id"], draft_id, "counter", counter_amount, {"reason": draft.get("reason")}, storage)
+        restate = _counter_send_count(thread["id"], counter_amount, storage) > 0
+        _record_negotiation_event(thread["id"], draft_id, "counter", counter_amount, {"reason": draft.get("reason"), "restate": restate}, storage)
     next_state = "negotiating" if counter_amount is not None else "passed" if draft.get("reason") == "pass_below_floor" else "waiting"
     storage.update("freight_threads", thread["id"], {"last_message_id": real_message_id, "state": next_state, "last_activity_at": stamp, "updated_at": stamp})
     storage.update("freight_loads", load["id"], {"status": next_state, "updated_at": stamp})
