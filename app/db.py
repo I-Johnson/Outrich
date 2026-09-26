@@ -157,6 +157,18 @@ class SQLiteStore:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN schedule_verified INTEGER NOT NULL DEFAULT 0")
             if "weight_lbs" not in load_columns:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN weight_lbs REAL")
+            profile_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_truck_profiles)")}
+            for column, ddl in (
+                ("truck_vin", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_name", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_cdl_number", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_cdl_state", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_phone", "TEXT NOT NULL DEFAULT ''"),
+                ("availability_status", "TEXT NOT NULL DEFAULT 'available'"),
+                ("available_from", "TEXT"),
+            ):
+                if column not in profile_columns:
+                    con.execute(f"ALTER TABLE freight_truck_profiles ADD COLUMN {column} {ddl}")
             self._upgrade_after_schema(con)
 
     def list(self, table: str, filters: dict | None = None, order: str = "id desc", limit: int = 1000, select: str = "*"):
