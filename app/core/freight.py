@@ -241,7 +241,9 @@ def _rate_con_diffs(snapshot: dict, agreed_rate: float, rate_con: dict) -> list[
     def check(field: str, agreed, received, label: str) -> None:
         agreed_norm = (str(agreed).strip().casefold() if agreed is not None else "")
         received_norm = (str(received).strip().casefold() if received is not None else "")
-        if received_norm and agreed_norm != received_norm:
+        # A rate-con value filling a fact the agreement did not record is new
+        # information, not a disagreement.
+        if agreed_norm and received_norm and agreed_norm != received_norm:
             diffs.append({"field": label, "agreed": agreed, "rate_con": received})
     rate = _number(rate_con.get("total_rate"))
     if rate is not None and rate != _number(agreed_rate):
@@ -1924,6 +1926,54 @@ def _message_text(message: Message) -> str:
     return text
 
 
+def _pdf_attachments(message: Message) -> list[tuple[str, bytes]]:
+    """(filename, bytes) for PDF parts of an inbound email."""
+    found: list[tuple[str, bytes]] = []
+    parts = message.walk() if message.is_multipart() else [message]
+    for part in parts:
+        if part.get_content_disposition() != "attachment":
+            continue
+        filename = str(part.get_filename() or "")
+        if not (filename.lower().endswith(".pdf") or part.get_content_type() == "application/pdf"):
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+        except Exception:
+            payload = None
+        if isinstance(payload, bytes) and payload:
+            found.append((filename or "rate-con.pdf", payload))
+    return found
+
+
+def _handle_rate_con_attachments(thread: dict, message: dict, attachments: list[tuple[str, bytes]], storage) -> None:
+    """Parse a rate-con PDF and compare it against the open booking."""
+    from app.core.rate_con import parse_rate_con_pdf
+
+    bookings = [b for b in storage.list("freight_bookings", {"thread_id": thread["id"]}, order="created_at desc", limit=5)
+                if b.get("status") in {"agreed", "rate_con_review"}]
+    if not bookings:
+        _create_alert(thread["id"], "rate_con_no_booking",
+                      "Rate confirmation arrived but no agreement is recorded. Review the thread first.", storage)
+        return
+    booking = bookings[0]
+    filename, payload = attachments[0]
+    try:
+        fields = parse_rate_con_pdf(payload)
+    except Exception:
+        logger.warning("Rate-con PDF parse failed for thread %s", thread["id"])
+        _create_alert(thread["id"], "rate_con_parse_failed",
+                      f"Could not read {filename}. Enter the rate confirmation details manually on the load page.", storage)
+        return
+    updated = submit_rate_con(booking["id"], fields, storage)
+    diffs = updated.get("rate_con_diffs") or []
+    if diffs:
+        detail = "; ".join(f"{d['field']}: agreed {d['agreed']} vs rate con {d['rate_con']}" for d in diffs[:5])
+        summary = f"Rate confirmation has {len(diffs)} difference(s): {detail}"
+    else:
+        summary = "Rate confirmation matches the agreement exactly. Review and approve it on the load page."
+    _create_alert(thread["id"], "rate_con_compared", summary, storage)
+
+
 def _normalize_subject(subject: str) -> str:
     value = str(subject or "").strip().lower()
     while re.match(r"^(re|fw|fwd)\s*:", value):
@@ -2045,7 +2095,15 @@ def poll_freight_replies(storage=None) -> dict[str, int]:
                     })
                     stamp = now_iso()
                     storage.update("freight_threads", thread["id"], {"last_message_id": provider_id, "last_imap_uid": uid, "last_activity_at": stamp, "updated_at": stamp})
-                    evaluate_inbound({**thread, "last_message_id": provider_id}, incoming, storage)
+                    result = evaluate_inbound({**thread, "last_message_id": provider_id}, incoming, storage)
+                    classification = result.get("classification") or {}
+                    if "rate_confirmation" in (classification.get("protected") or []):
+                        attachments = _pdf_attachments(parsed)
+                        if attachments:
+                            try:
+                                _handle_rate_con_attachments(thread, incoming, attachments, storage)
+                            except Exception:
+                                logger.warning("Rate-con handling failed for thread %s", thread["id"], exc_info=True)
                     totals["matched"] += 1
                 stamp = now_iso()
                 values = {"last_imap_uid": max_uid, "last_checked_at": stamp, "error": None, "updated_at": stamp}
