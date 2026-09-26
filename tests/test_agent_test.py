@@ -403,7 +403,8 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         with patch("app.core.freight.settings.FREIGHT_AGENT_MODE", "model"), patch("app.core.freight.interpret_broker_reply", return_value=reading), patch("app.core.freight.compose_counter_reply", return_value="Could you meet us at $4,500 all in?") as compose:
             result = inject_broker_reply(self.storage, load_id, "Can do 4k all in")
         self.assertEqual(result["decision"]["action"], "sent")
-        self.assertEqual(result["state"]["messages"][-1]["body_text"], "Could you meet us at $4,500 all in?")
+        # Booking readiness now always requires a pickup date, so the counter asks for it.
+        self.assertEqual(result["state"]["messages"][-1]["body_text"], "Could you meet us at $4,500 all in? Also, please confirm pickup date.")
         self.assertEqual(compose.call_args.args[2], 4500)
 
     def test_details_followup_never_resends_counter_for_same_message(self):
@@ -431,7 +432,7 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         # Re-evaluating the same broker message after manual fact confirmation
         # must not resend the counter that already went out for it.
         self.assertEqual(final["decision"]["action"], "duplicate")
-        self.assertEqual(final["state"]["messages"][-1]["body_text"], "Could you do $4,500 all in?")
+        self.assertEqual(final["state"]["messages"][-1]["body_text"], "Could you do $4,500 all in? Also, please confirm pickup date.")
         self.assertEqual(model.call_count, 2)
         events = self.storage.list("freight_negotiation_events", {"event_type": "offer"}, order="", limit=10)
         self.assertEqual(len(events), 1)
