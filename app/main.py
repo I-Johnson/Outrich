@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -1195,6 +1195,29 @@ def freight_booking_handoff(booking_id: str, request: Request):
     return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote('Driver handoff approved')}", 303)
 
 
+@app.get("/freight/bookings/{booking_id}/rate-con.pdf")
+def freight_booking_rate_con_pdf(booking_id: str, request: Request):
+    """Re-open the original rate-con PDF retained with the booking."""
+    import base64 as _b64
+    db = freight_store(request)
+    booking = db.get("freight_bookings", booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    ref = str(booking.get("rate_con_source_ref") or "")
+    if not ref.startswith("att:"):
+        raise HTTPException(404, "No retained rate confirmation PDF for this booking")
+    attachment = db.get("freight_attachments", ref.split(":")[1])
+    if not attachment:
+        raise HTTPException(404, "Retained rate confirmation PDF not found")
+    try:
+        payload = _b64.b64decode(attachment.get("content_b64") or "")
+    except Exception:
+        raise HTTPException(404, "Retained rate confirmation PDF is unreadable")
+    filename = str(attachment.get("filename") or "rate-con.pdf").replace('"', "")
+    return Response(payload, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{filename}"'})
+
+
 @app.post("/freight/bookings/{booking_id}/book")
 def freight_booking_book(booking_id: str, request: Request):
     db = freight_store(request)
@@ -1217,6 +1240,7 @@ async def freight_broker_update(broker_id: str, request: Request):
     form = await request.form()
     values = dict(form)
     values["blocked"] = bool(form.get("blocked"))
+    values["identity_confirm_emails"] = [str(item) for item in form.getlist("identity_confirm_emails")]
     try:
         update_broker(broker_id, values, storage=db)
     except ValueError as exc:

@@ -24,13 +24,13 @@ JSON_FIELDS = {
     "freight_drafts": {"policy_snapshot"},
     "freight_negotiation_events": {"details"},
     "freight_bookings": {"snapshot", "rate_con_diffs", "rate_con_terms"},
-    "freight_brokers": {"emails"},
+    "freight_brokers": {"emails", "unconfirmed_emails"},
 }
 # Freight tables that carry owner_id + vertical (gmail_senders, freight_settings
 # and email_templates are handled separately).
 OWNED_FREIGHT_TABLES = (
     "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_bookings", "freight_threads",
-    "freight_messages", "freight_drafts", "freight_negotiation_events", "freight_alerts",
+    "freight_messages", "freight_attachments", "freight_drafts", "freight_negotiation_events", "freight_alerts",
     "freight_mail_cursors",
 )
 BOOL_FIELDS = {

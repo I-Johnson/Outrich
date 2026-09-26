@@ -53,7 +53,7 @@
               <span>Open Destinations</span>
             </div>
           </div>
-          <span class="badge {{ 'running' if m.active else 'paused' }}">{{ 'Active' if m.active else 'Paused' }}</span>
+          <span class="fx-status {{ 'on' if m.active else 'off' }}">{{ 'Active' if m.active else 'Paused' }}</span>
         </div>
 
         <!-- Destination chips -->
@@ -98,7 +98,7 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="panel fx-empty">
+  <div class="fx-panel fx-empty">
     <h3>No dispatch missions created yet</h3>
     <p>
       A mission specifies which origin city your truck is departing from, where you want to go, and the negotiation rate floor.
@@ -128,7 +128,7 @@
       {% endif %}
     </div>
 
-    <form action="/freight/missions/save" method="post" class="stack" id="mission-form">
+    <form action="/freight/missions/save" method="post" class="fx-stack" id="mission-form">
       <input type="hidden" name="id" value="{{ edit_mission.id if edit_mission else '' }}">
 
       <!-- SECTION 1: TRUCK & ROUTE BASICS -->
@@ -338,7 +338,7 @@
       </div>
 
       <div class="fx-form-foot">
-        <label class="check fx-m0">
+        <label class="fx-check fx-m0">
           <input type="checkbox" name="active" {% if not edit_mission or edit_mission.active %}checked{% endif %}>
           <span class="fx-strong">Mission active for broker outreach</span>
         </label>
@@ -373,7 +373,7 @@
               <span>Base: {{ p.current_city or 'Unset' }}, {{ p.current_state or 'Unset' }}</span>
             </div>
           </div>
-          <span class="badge {{ 'running' if p.active else 'paused' }}">{{ 'Active' if p.active else 'Inactive' }}</span>
+          <span class="fx-status {{ 'on' if p.active else 'off' }}">{{ 'Active' if p.active else 'Inactive' }}</span>
         </div>
 
         <div class="spec-pills">
@@ -412,7 +412,7 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="panel fx-empty">
+  <div class="fx-panel fx-empty">
     <h3>No truck profiles created yet</h3>
     <p>
       Add your vehicle dimensions, equipment type, and authority credentials so the AI can represent your fleet accurately to brokers.
@@ -435,7 +435,7 @@
       {% endif %}
     </div>
 
-    <form action="/freight/profiles/save" method="post" class="stack">
+    <form action="/freight/profiles/save" method="post" class="fx-stack">
       <input type="hidden" name="id" value="{{ edit_profile.id if edit_profile else '' }}">
 
       <div class="form-section-title">
@@ -567,7 +567,7 @@
       </p>
       <div class="fx-row-wrap">
         {% for field,label in [('equipment_type','Equipment type'),('team_status','Team driver status'),('mc_number','MC number'),('dot_number','USDOT number')] %}
-        <label class="check fx-semibold">
+        <label class="fx-check fx-semibold">
           <input type="checkbox" name="shareable_fields" value="{{ field }}" {% if edit_profile and field in edit_profile.shareable_fields %}checked{% elif not edit_profile and field in ['equipment_type', 'team_status'] %}checked{% endif %}>
           <span>{{ label }}</span>
         </label>
@@ -575,7 +575,7 @@
       </div>
 
       <div class="fx-form-foot">
-        <label class="check fx-m0">
+        <label class="fx-check fx-m0">
           <input type="checkbox" name="active" {% if not edit_profile or edit_profile.active %}checked{% endif %}>
           <span class="fx-strong">Truck profile active</span>
         </label>

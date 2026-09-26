@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS freight_truck_profiles (
   driver_cdl_state TEXT NOT NULL DEFAULT '',
   driver_phone TEXT NOT NULL DEFAULT '',
   availability_status TEXT NOT NULL DEFAULT 'available',
+  booking_claim_at TEXT,
   available_from TEXT,
   shareable_fields TEXT NOT NULL DEFAULT '[]',
   active INTEGER NOT NULL DEFAULT 1,
@@ -216,6 +217,7 @@ CREATE TABLE IF NOT EXISTS freight_brokers (
   setup_status TEXT NOT NULL DEFAULT 'not_started',
   blocked INTEGER NOT NULL DEFAULT 0,
   identity_confirmed INTEGER NOT NULL DEFAULT 1,
+  unconfirmed_emails TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -296,6 +298,17 @@ CREATE TABLE IF NOT EXISTS freight_messages (
   processing_error TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS freight_attachments (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES freight_threads(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES freight_messages(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL DEFAULT '',
+  content_b64 TEXT NOT NULL DEFAULT '',
+  byte_size INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS freight_attachments_message_idx ON freight_attachments(message_id);
+
 -- freight_messages provider uniqueness is per owner; created in SQLiteStore.init after owner_id exists.
 
 CREATE TABLE IF NOT EXISTS freight_drafts (
