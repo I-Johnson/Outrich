@@ -1,3 +1,5 @@
+import base64 as _b64
+import email as _email
 import os
 import tempfile
 import unittest
@@ -592,6 +594,75 @@ class FreightConversationTests(unittest.TestCase):
         # Alerts dedupe per thread; every one of the 250 rows still drained.
         alerts = self.storage.list("freight_alerts", {"kind": "inbound_reprocess_failed"}, order="", limit=500)
         self.assertGreaterEqual(len(alerts), 1)
+
+    def test_reconcile_drains_mixed_pending_and_failed(self):
+        # A mixed window (150 pending + 150 failed) drains deterministically:
+        # pass one fails the pendings and kills the faileds, pass two kills
+        # the rest - all within ordinary reconcile calls, nothing stuck.
+        def row(index, state):
+            return {
+                "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+                "provider_message_id": f"<mix-{state}-{index}@example.com>", "from_email": "broker@example.com",
+                "to_email": "carrier@example.com", "subject": "Re: Truck available",
+                "body_text": "ok", "classification": {}, "status": "received",
+                "processing_state": state, "created_at": f"2026-09-01T00:{index // 60:02d}:{index % 60:02d}+00:00",
+            }
+        self.storage.insert_many("freight_messages", [row(i, "pending") for i in range(150)] + [row(i, "failed") for i in range(150)])
+        def boom(*args, **kwargs):
+            raise RuntimeError("permanent failure")
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            freight_module.reconcile_unprocessed_inbound(self.storage)
+        by_state = lambda state: self.storage.list("freight_messages", {"direction": "in", "processing_state": state}, order="", limit=500)
+        self.assertEqual(len(by_state("pending")), 0)
+        self.assertEqual(len(by_state("failed")), 150)
+        self.assertEqual(len(by_state("dead")), 150)
+        with patch.object(freight_module, "evaluate_inbound", side_effect=boom):
+            freight_module.reconcile_unprocessed_inbound(self.storage)
+        self.assertEqual(len(by_state("failed")), 0)
+        self.assertEqual(len(by_state("dead")), 300)
+
+    def test_replay_without_retained_attachment_alerts_instead_of_skipping(self):
+        # Crash landed before the PDF store: the replay must surface the lost
+        # comparison, not mark the message processed in silence.
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<lost-att@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "rate confirmation attached", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso()})
+        result = {"classification": {"protected": ["rate_confirmation"]}}
+        thread = self.storage.get("freight_threads", self.thread_id)
+        with patch.object(freight_module, "evaluate_inbound", return_value=result):
+            freight_module._process_inbound(thread, message, None, self.storage)
+        done = self.storage.get("freight_messages", message["id"])
+        self.assertEqual(done["processing_state"], "processed")
+        alerts = self.storage.list("freight_alerts", {"kind": "rate_con_attachment_lost"}, order="", limit=5)
+        self.assertEqual(len(alerts), 1)
+
+    def test_attachments_persist_before_evaluation(self):
+        # The PDF bytes must be durable before evaluate_inbound runs: a crash
+        # inside evaluation must still leave the document recoverable.
+        message = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in",
+            "provider_message_id": "<att-order@example.com>", "from_email": "broker@example.com",
+            "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": "rate confirmation attached", "classification": {}, "status": "received",
+            "processing_state": "pending", "created_at": now_iso()})
+        pdf_b64 = _b64.b64encode(b"%PDF-1.4 fake-but-present")
+        raw = (b"From: broker@example.com\r\nSubject: RC\r\nContent-Type: multipart/mixed; boundary=bb\r\n\r\n"
+               b"--bb\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n"
+               b"--bb\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=ratecon.pdf\r\n"
+               b"Content-Transfer-Encoding: base64\r\n\r\n" + pdf_b64 + b"\r\n--bb--\r\n")
+        parsed = _email.message_from_bytes(raw)
+        seen = {}
+        def spy(*args, **kwargs):
+            seen["attachments"] = self.storage.list("freight_attachments", {"message_id": message["id"]}, order="", limit=5)
+            return {"classification": {"protected": []}}
+        thread = self.storage.get("freight_threads", self.thread_id)
+        with patch.object(freight_module, "evaluate_inbound", side_effect=spy):
+            freight_module._process_inbound(thread, message, parsed, self.storage)
+        self.assertEqual(len(seen["attachments"]), 1)
+        self.assertEqual(seen["attachments"][0]["filename"], "ratecon.pdf")
 
     def test_review_and_state_endpoints(self):
         from fastapi.testclient import TestClient
@@ -1577,16 +1648,52 @@ class FreightBookingTests(unittest.TestCase):
         kept = self.storage.get('freight_bookings', booking['id'])
         self.assertFalse(kept['rate_con_reviewed'])
         self.assertFalse(kept['driver_handoff_approved'])
-        # ...and even a fresh review cannot book while the route change is unconfirmed.
+        # ...the booking row carries the revision gate: booking against the old
+        # (immutable) agreement is refused even after a fresh review.
+        kept = self.storage.get('freight_bookings', booking['id'])
+        self.assertTrue(kept['route_revision_pending'])
+        self.assertEqual(len(kept['snapshot']['stops']), 2)
         freight_module.review_rate_con(booking['id'], True, self.storage)
         freight_module.approve_driver_handoff(booking['id'], self.storage)
         with self.assertRaises(ValueError) as ctx:
             freight_module.mark_booked(booking['id'], self.storage)
-        self.assertIn('route change review', str(ctx.exception))
-        # The dispatcher confirms the new route and the gate lifts.
-        self.storage.update('freight_alerts', alerts[0]['id'], {'status': 'resolved', 'resolved_at': now_iso()})
+        self.assertIn('route changed', str(ctx.exception))
+        # The dispatcher approves the revised route: the agreement snapshot is
+        # re-captured against the new stops, the alert resolves, and the gates
+        # reset for a fresh rate-con review.
+        revised = freight_module.approve_route_revision(booking['id'], self.storage)
+        self.assertFalse(revised['route_revision_pending'])
+        self.assertEqual(len(revised['snapshot']['stops']), 1)
+        self.assertEqual(revised['snapshot']['stops'][0]['kind'], 'pickup')
+        self.assertEqual(self.storage.list('freight_alerts', {'kind': 'stop_removed', 'status': 'open'}, order='', limit=5), [])
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
         done = freight_module.mark_booked(booking['id'], self.storage)
         self.assertEqual(done['status'], 'booked')
+
+    def test_mark_booked_reclaims_stale_stored_claim(self):
+        # A crashed booking left the lease in the database: an atomic
+        # timestamp-aware claim must reclaim it, not refuse forever.
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.storage.update('freight_truck_profiles', 'p1', {'availability_status': 'booking', 'booking_claim_at': stale})
+        done = freight_module.mark_booked(booking['id'], self.storage)
+        self.assertEqual(done['status'], 'booked')
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        self.assertEqual(profile['availability_status'], 'available')
+        self.assertIsNone(profile['booking_claim_at'])
+
+    def test_mark_booked_refused_under_fresh_stored_claim(self):
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        freight_module.submit_rate_con(booking['id'], self._full_con(), self.storage)
+        freight_module.review_rate_con(booking['id'], True, self.storage)
+        freight_module.approve_driver_handoff(booking['id'], self.storage)
+        self.storage.update('freight_truck_profiles', 'p1', {'availability_status': 'booking', 'booking_claim_at': now_iso()})
+        with self.assertRaises(ValueError):
+            freight_module.mark_booked(booking['id'], self.storage)
 
     def test_rejected_rate_con_returns_to_agreed(self):
         booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
@@ -1720,6 +1827,61 @@ class FreightRateConPdfTests(unittest.TestCase):
             freight_module._process_inbound(self.thread, message, None, self.storage)
         kept = self.storage.get('freight_bookings', booking['id'])
         self.assertTrue(kept['rate_con_reviewed'])
+
+    def test_unmatched_reply_is_parked_with_alert(self):
+        # A broker reply that matches no open thread must never be dropped
+        # silently: it is parked with a visible alert for the dispatcher.
+        header = _email.message_from_bytes(b"From: stranger@broker.com\r\nSubject: Re: Lane?\r\nMessage-ID: <u1@x>\r\n\r\n")
+        parsed = _email.message_from_bytes(b"From: stranger@broker.com\r\nTo: us@c.com\r\nSubject: Re: Lane?\r\n\r\nbody here")
+        thread = freight_module._record_unmatched_reply(header, parsed, "<u1@x>", "acct-1", self.storage)
+        self.assertEqual(thread["state"], "unmatched")
+        load = self.storage.get("freight_loads", thread["load_id"])
+        self.assertEqual(load["status"], "unmatched")
+        alerts = self.storage.list("freight_alerts", {"kind": "unmatched_reply"}, order="", limit=5)
+        self.assertEqual(len(alerts), 1)
+        messages = self.storage.list("freight_messages", {"thread_id": thread["id"]}, order="", limit=5)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["processing_state"], "processed")
+        # A follow-up on the same conversation parks on the same thread.
+        again = freight_module._record_unmatched_reply(header, parsed, "<u2@x>", "acct-1", self.storage)
+        self.assertEqual(again["id"], thread["id"])
+        self.assertEqual(len(self.storage.list("freight_alerts", {"kind": "unmatched_reply"}, order="", limit=5)), 1)
+
+    def test_rate_con_pdf_route_scopes_attachment_to_booking_thread(self):
+        from fastapi.testclient import TestClient
+        from app import main
+        stamp = now_iso()
+        booking = freight_module.record_agreement(self.thread['id'], 4200.0, 'msg-1', self.storage)
+        message = self.storage.insert('freight_messages', {
+            'id': new_id(), 'thread_id': self.thread['id'], 'direction': 'in',
+            'provider_message_id': '<rc-pdf@x>', 'from_email': 'a@b.com', 'to_email': 'c@d.com',
+            'subject': 'RC', 'body_text': 'attached', 'classification': {}, 'status': 'received',
+            'processing_state': 'processed', 'created_at': stamp})
+        freight_module._store_attachments(message, [('ratecon.pdf', _make_pdf(RATE_CON_LINES))], self.storage)
+        attachment = self.storage.list('freight_attachments', {'message_id': message['id']}, order='', limit=1)[0]
+        freight_module.submit_rate_con(booking['id'], {'total_rate': '4200'}, self.storage, source='pdf', source_ref=f"att:{attachment['id']}:ratecon.pdf")
+        # A second booking (other thread) pointing at the same attachment.
+        load2 = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_email': 'x@y.com', 'origin_city': 'A', 'destination_city': 'B', 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        thread2 = self.storage.insert('freight_threads', {'id': new_id(), 'load_id': load2['id'], 'sender_account': '1', 'recipient_email': 'x@y.com', 'subject': 's', 'state': 'waiting', 'last_activity_at': stamp, 'created_at': stamp, 'updated_at': stamp})
+        booking2 = freight_module.record_agreement(thread2['id'], 1000.0, 'msg-2', self.storage)
+        self.storage.update('freight_bookings', booking2['id'], {'rate_con_source_ref': f"att:{attachment['id']}:ratecon.pdf"})
+        # A booking whose retained bytes are not a PDF.
+        bad_message = self.storage.insert('freight_messages', {
+            'id': new_id(), 'thread_id': thread2['id'], 'direction': 'in',
+            'provider_message_id': '<rc-bad@x>', 'from_email': 'x@y.com', 'to_email': 'c@d.com',
+            'subject': 'RC', 'body_text': 'attached', 'classification': {}, 'status': 'received',
+            'processing_state': 'processed', 'created_at': stamp})
+        freight_module._store_attachments(bad_message, [('notapdf.pdf', b'not a pdf at all')], self.storage)
+        bad_att = self.storage.list('freight_attachments', {'message_id': bad_message['id']}, order='', limit=1)[0]
+        self.storage.update('freight_bookings', booking2['id'], {'rate_con_source_ref': f"att:{bad_att['id']}:notapdf.pdf"})
+        with patch.object(main, "store", self.storage.base), patch.object(freight_module, "store", self.storage.base):
+            client = TestClient(main.app)
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
+            ok = client.get(f"/freight/bookings/{booking['id']}/rate-con.pdf")
+            self.assertEqual(ok.status_code, 200)
+            self.assertEqual(ok.content, _make_pdf(RATE_CON_LINES))
+            # Cross-booking reference: attachment belongs to another thread.
+            self.assertEqual(client.get(f"/freight/bookings/{booking2['id']}/rate-con.pdf").status_code, 404)
 
     def test_line_haul_is_not_the_total(self):
         from app.core.rate_con import parse_rate_con_pdf

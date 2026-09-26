@@ -514,12 +514,41 @@ def approve_driver_handoff(booking_id: str, storage=None) -> dict:
     })
 
 
+def approve_route_revision(booking_id: str, storage=None) -> dict:
+    """Dispatcher confirms the broker's changed route.
+
+    Re-captures the agreement snapshot against the current stops, clears the
+    revision gate, resolves the open stop_removed alerts, and resets the
+    rate-con review so the con is compared against the route now agreed.
+    """
+    storage = storage or store
+    booking = storage.get("freight_bookings", booking_id)
+    if not booking:
+        raise ValueError("Booking not found")
+    if not booking.get("route_revision_pending"):
+        raise ValueError("No route change is waiting for approval")
+    load = storage.get("freight_loads", booking["load_id"]) or {}
+    broker = storage.get("freight_brokers", load.get("broker_id")) if load.get("broker_id") else None
+    stamp = now_iso()
+    for alert in storage.list("freight_alerts", {"thread_id": booking["thread_id"], "kind": "stop_removed", "status": "open"}, order="", limit=10):
+        storage.update("freight_alerts", alert["id"], {"status": "resolved", "resolved_at": stamp})
+    return storage.update("freight_bookings", booking_id, {
+        "snapshot": _agreement_snapshot(load, broker, storage),
+        "route_revision_pending": False,
+        "rate_con_reviewed": False, "rate_con_review_version": "",
+        "driver_handoff_approved": False, "driver_handoff_version": "",
+        "updated_at": stamp,
+    })
+
+
 def mark_booked(booking_id: str, storage=None) -> dict:
     """Final commitment: every gate must be green."""
     storage = storage or store
     booking = storage.get("freight_bookings", booking_id)
     if not booking:
         raise ValueError("Booking not found")
+    if booking.get("route_revision_pending"):
+        raise ValueError("The route changed after this agreement; approve the revised route before booking")
     if booking.get("status") == "booked":
         return booking
     if not booking.get("rate_con_reviewed"):
@@ -546,13 +575,19 @@ def mark_booked(booking_id: str, storage=None) -> dict:
     profile_id = str(profile.get("id") or "")
     locked = False
     if profile_id:
-        if not storage.claim_field_not("freight_truck_profiles", profile_id, "availability_status", "booking", "booking"):
+        # Leased claim with atomic reclaim: one statement takes the lease when
+        # the truck is free OR its claim is stale (crashed flow), writing the
+        # claim timestamp in the same operation - no crash window between them.
+        claim_at = now_iso()
+        stale_before = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        if not storage.claim_booking_lease(profile_id, claim_at, stale_before):
             raise ValueError("Another booking is in progress for this truck; retry in a moment")
         locked = True
-        # Leased claim: the timestamp lets a crashed flow's leftover claim be
-        # recognized as stale and recovered instead of stranding the truck.
-        storage.update("freight_truck_profiles", profile_id, {"booking_claim_at": now_iso(), "updated_at": now_iso()})
-    previous_availability = str(profile.get("availability_status") or "available")
+    raw_availability = str(profile.get("availability_status") or "available")
+    # Reaching the claim with 'booking' still stored means this call reclaimed
+    # a stale (crashed) claim; the state it hid is unknown, so restore to
+    # available on release - never restore the claim itself.
+    previous_availability = "available" if raw_availability == "booking" else raw_availability
     try:
         # Atomic reservation: the compare-and-set claim closes the read-then-write
         # race - a second concurrent booking of the same load loses the claim.
@@ -1332,7 +1367,11 @@ def _sync_load_stops(load: dict, classification: dict, message_id: str, storage)
             # is a durable booking gate (checked in _booking_readiness_blockers).
             for booking in storage.list("freight_bookings", {"thread_id": threads[0]["id"]}, order="", limit=10):
                 if booking.get("status") in {"agreed", "rate_con_review"}:
+                    # The agreement snapshot still holds the old route; booking
+                    # must wait for an explicit revised-route approval that
+                    # re-captures the snapshot (see approve_route_revision).
                     storage.update("freight_bookings", booking["id"], {
+                        "route_revision_pending": True,
                         "rate_con_reviewed": False, "rate_con_review_version": "",
                         "driver_handoff_approved": False, "driver_handoff_version": "",
                         "updated_at": stamp})
@@ -2396,7 +2435,7 @@ def _find_thread(message: Message, sender_account: str, storage=None) -> dict | 
     subject = _normalize_subject(message.get("Subject", ""))
     # Message-ID references do not authenticate the sender. An unrelated party
     # can quote or guess one; never route their reply into a broker's thread.
-    candidates = [thread for thread in storage.list("freight_threads", {"sender_account": sender_account}, order="updated_at desc", limit=500)
+    candidates = [thread for thread in storage.list("freight_threads", {"sender_account": sender_account}, order="updated_at desc", limit=10000)
                   if thread.get("state") != "closed" and message_from == str(thread.get("recipient_email") or "").lower()]
     matched_references = []
     for thread in candidates:
@@ -2418,19 +2457,26 @@ def _process_inbound(thread: dict, message: dict, parsed, storage) -> dict:
     Split out from the poll loop so the reconcile path runs the exact same
     steps for messages a crash left behind.
     """
+    # PDF bytes persist BEFORE evaluation: a crash after this point replays
+    # from the durable store, never from the lost RFC822 fetch.
+    if parsed is not None:
+        _store_attachments(message, _pdf_attachments(parsed), storage)
     result = evaluate_inbound({**thread, "last_message_id": message.get("provider_message_id") or thread.get("last_message_id")}, message, storage)
     classification = result.get("classification") or {}
     if "rate_confirmation" in (classification.get("protected") or []):
-        if parsed is not None:
-            # Persist the PDF bytes before any processing so a crash mid-parse
-            # can never lose the document.
-            _store_attachments(message, _pdf_attachments(parsed), storage)
         attachments = _stored_attachments(message, storage)
         if attachments:
-            try:
-                _handle_rate_con_attachments(thread, message, attachments, storage)
-            except Exception:
-                logger.warning("Rate-con handling failed for thread %s", thread["id"], exc_info=True)
+            # Handler failures must propagate: swallowing them would mark the
+            # message processed while the comparison never ran. A raised error
+            # fails the message and the reconcile retries; the handler is
+            # idempotent per attachment, so a retry never resets a review.
+            _handle_rate_con_attachments(thread, message, attachments, storage)
+        elif parsed is None:
+            # Replay path with no retained bytes: the crash landed before the
+            # store. Do not silently skip the comparison - surface it.
+            _create_alert(thread["id"], "rate_con_attachment_lost",
+                          "A rate confirmation attachment on this message could not be recovered after an "
+                          "interruption. Ask the broker to resend the PDF or enter the terms manually.", storage)
     storage.update("freight_messages", message["id"], {"processing_state": "processed", "processing_error": None})
     return result
 
@@ -2450,10 +2496,11 @@ def reconcile_unprocessed_inbound(storage=None) -> int:
     the dispatcher.
     """
     storage = storage or store
-    # Rows drain out of the pending/failed window: processed on success,
-    # failed on a first failure, dead on a repeated failure. A permanent
-    # failure can therefore never occupy the first page forever and starve the
-    # rows behind it, however many of them there are.
+    # One attempt per message per call (a transient error must get until the
+    # next poll, not an instant second strike), while every attempted row
+    # leaves the pending/failed window - pending -> failed or processed,
+    # failed -> dead or processed - so each pass strictly shrinks what is left
+    # and any mixture of states drains within the call, however deep the queue.
     recovered = 0
     attempted: set[str] = set()
     while True:
@@ -2494,13 +2541,50 @@ def reconcile_unprocessed_inbound(storage=None) -> int:
                                   storage)
 
 
+def _record_unmatched_reply(header_msg, parsed, provider_id: str, account_id: str, storage) -> dict:
+    """Park a broker reply that matches no open thread and alert the dispatcher.
+
+    The reply gets a real (unmatched) load, thread and message so nothing is
+    silently dropped: it shows up for a human to triage or link. Replies to the
+    same parked conversation attach to the existing unmatched thread.
+    """
+    storage = storage or store
+    from_email = parseaddr(header_msg.get("From", ""))[1].lower()
+    subject = str(header_msg.get("Subject", "") or "").strip()
+    stamp = now_iso()
+    thread = next((row for row in storage.list(
+        "freight_threads", {"sender_account": account_id, "state": "unmatched"}, order="updated_at desc", limit=100)
+        if str(row.get("recipient_email") or "").lower() == from_email
+        and _normalize_subject(row.get("subject", "")) == _normalize_subject(subject)), None)
+    if not thread:
+        load = storage.insert("freight_loads", {
+            "id": new_id(), "mission_id": None, "truck_profile_id": None,
+            "broker_email": from_email, "broker_company": "",
+            "origin_city": "", "origin_state": "", "destination_city": "", "destination_state": "",
+            "subject": subject, "status": "unmatched", "created_at": stamp, "updated_at": stamp})
+        thread = storage.insert("freight_threads", {
+            "id": new_id(), "load_id": load["id"], "sender_account": account_id,
+            "recipient_email": from_email, "subject": subject, "state": "unmatched",
+            "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp})
+    storage.insert("freight_messages", {
+        "id": new_id(), "thread_id": thread["id"], "direction": "in", "provider_message_id": provider_id,
+        "from_email": from_email, "to_email": ", ".join(addr for _, addr in getaddresses(parsed.get_all("To", []))),
+        "subject": subject, "body_text": _message_text(parsed), "classification": {},
+        "status": "received", "processing_state": "processed", "created_at": stamp})
+    storage.update("freight_threads", thread["id"], {"last_activity_at": stamp, "updated_at": stamp})
+    _create_alert(thread["id"], "unmatched_reply",
+                  f"A reply from {from_email} ({subject or 'no subject'}) did not match any open freight thread. "
+                  "It was parked as unmatched - review it and start a thread manually if it is a real load.", storage)
+    return thread
+
+
 def poll_freight_replies(storage=None) -> dict[str, int]:
     storage = storage or store
     active_threads = storage.list("freight_threads", order="updated_at desc", limit=1)
     if not active_threads:
         return {"accounts": 0, "messages": 0, "matched": 0}
     cfg = storage.get("settings", 1) or {}
-    account_ids = {str(row.get("sender_account")) for row in storage.list("freight_threads", order="", limit=1000) if row.get("state") != "closed"}
+    account_ids = {str(row.get("sender_account")) for row in storage.list("freight_threads", order="", limit=10000) if row.get("state") != "closed"}
     senders = [row for row in list_gmail_senders(active_only=True, storage=storage, cfg=cfg) if str(row.get("id")) in account_ids and row.get("provider", "gmail") == "gmail"]
     totals = {"accounts": 0, "messages": 0, "matched": 0}
     totals["recovered"] = reconcile_unprocessed_inbound(storage)
@@ -2557,6 +2641,12 @@ def poll_freight_replies(storage=None) -> dict[str, int]:
                         continue
                     thread = _find_thread(header_msg, account_id, storage)
                     if not thread:
+                        status, raw_parts = mailbox.uid("fetch", str(uid), "(RFC822)")
+                        raw = next((part[1] for part in raw_parts if isinstance(part, tuple) and isinstance(part[1], bytes)), None) if status == "OK" and raw_parts else None
+                        if raw:
+                            _record_unmatched_reply(header_msg, email.message_from_bytes(raw), provider_id, account_id, storage)
+                            totals["messages"] += 1
+                            max_uid = max(max_uid, uid)
                         continue
                     broker_parent = header_msg.get("In-Reply-To") or (header_msg.get("References", "").split()[0] if header_msg.get("References") else None)
                     if broker_parent and broker_parent != thread.get("root_message_id"):

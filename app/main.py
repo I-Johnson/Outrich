@@ -29,7 +29,7 @@ from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
-from app.core.freight import SensitiveOutboundConfirmationRequired, add_load_stop, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, approve_driver_handoff, mark_booked, review_rate_con, submit_rate_con, update_broker, verify_load_facts, verify_load_stop, filter_shareable_fields
+from app.core.freight import SensitiveOutboundConfirmationRequired, add_load_stop, approve_route_revision, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, approve_driver_handoff, mark_booked, review_rate_con, submit_rate_con, update_broker, verify_load_facts, verify_load_stop, filter_shareable_fields
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
@@ -1207,15 +1207,32 @@ def freight_booking_rate_con_pdf(booking_id: str, request: Request):
     if not ref.startswith("att:"):
         raise HTTPException(404, "No retained rate confirmation PDF for this booking")
     attachment = db.get("freight_attachments", ref.split(":")[1])
-    if not attachment:
+    # The reference alone is not authorization: the attachment must belong to
+    # this booking's own thread, or one booking could open another's document.
+    if not attachment or str(attachment.get("thread_id")) != str(booking.get("thread_id")):
         raise HTTPException(404, "Retained rate confirmation PDF not found")
     try:
         payload = _b64.b64decode(attachment.get("content_b64") or "")
     except Exception:
         raise HTTPException(404, "Retained rate confirmation PDF is unreadable")
+    if not payload.startswith(b"%PDF"):
+        raise HTTPException(404, "Retained rate confirmation PDF is unreadable")
     filename = str(attachment.get("filename") or "rate-con.pdf").replace('"', "")
     return Response(payload, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{filename}"'})
+
+
+@app.post("/freight/bookings/{booking_id}/approve-route")
+def freight_booking_approve_route(booking_id: str, request: Request):
+    db = freight_store(request)
+    booking = db.get("freight_bookings", booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    try:
+        approve_route_revision(booking_id, storage=db)
+    except ValueError as exc:
+        return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&error={quote(str(exc))}", 303)
+    return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote('Revised route approved; review the rate con against the new agreement')}", 303)
 
 
 @app.post("/freight/bookings/{booking_id}/book")

@@ -258,6 +258,7 @@ CREATE TABLE IF NOT EXISTS freight_bookings (
   rate_con_source_ref TEXT NOT NULL DEFAULT '',
   rate_con_diffs TEXT NOT NULL DEFAULT '[]',
   rate_con_reviewed INTEGER NOT NULL DEFAULT 0,
+  route_revision_pending INTEGER NOT NULL DEFAULT 0,
   rate_con_review_version TEXT NOT NULL DEFAULT '',
   driver_handoff_approved INTEGER NOT NULL DEFAULT 0,
   driver_handoff_version TEXT NOT NULL DEFAULT '',

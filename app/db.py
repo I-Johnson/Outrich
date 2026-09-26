@@ -251,6 +251,22 @@ class SQLiteStore:
             con.commit()
             return result.rowcount == 1
 
+    def claim_booking_lease(self, row_id: Any, claim_at: str, stale_before: str) -> bool:
+        """Take the per-truck booking lease, reclaiming stale claims atomically.
+
+        Succeeds when the truck is not mid-booking, or its claim is stale
+        (timestamp older than stale_before, or missing - e.g. a crash before
+        the timestamp landed). The claim value and its timestamp are written
+        in the same statement, so there is no window between them.
+        """
+        with self.connect() as con:
+            result = con.execute(
+                "UPDATE freight_truck_profiles SET availability_status='booking', booking_claim_at=?, updated_at=? "
+                "WHERE id=? AND (availability_status<>'booking' OR booking_claim_at IS NULL OR booking_claim_at<?)",
+                (claim_at, now_iso(), row_id, stale_before))
+            con.commit()
+            return result.rowcount == 1
+
     def delete(self, table: str, filters: dict[str, Any]):
         clauses, args = [], []
         for key, value in filters.items(): clauses.append(f"{key}=?"); args.append(value)
@@ -314,6 +330,15 @@ class SupabaseStore:
 
     def claim_field_not(self, table: str, row_id: Any, field: str, disallowed: str, new_value: str) -> bool:
         rows = self._request("PATCH", f"/{table}?id=eq.{quote(str(row_id))}&{quote(field)}=neq.{quote(disallowed)}", json={field: new_value, "updated_at": now_iso()}, headers={"Prefer": "return=representation"})
+        return bool(rows)
+
+    def claim_booking_lease(self, row_id: Any, claim_at: str, stale_before: str) -> bool:
+        # Same semantics as the SQLite lease claim, via a PostgREST or-filter.
+        query = (f"or=(availability_status.neq.booking,booking_claim_at.is.null,"
+                 f"booking_claim_at.lt.{quote(stale_before)})")
+        rows = self._request("PATCH", f"/freight_truck_profiles?id=eq.{quote(str(row_id))}&{query}",
+                             json={"availability_status": "booking", "booking_claim_at": claim_at, "updated_at": now_iso()},
+                             headers={"Prefer": "return=representation"})
         return bool(rows)
     def delete(self, table: str, filters: dict[str, Any]):
         query = "&".join(f"{quote(k)}=eq.{quote(str(v))}" for k, v in filters.items())

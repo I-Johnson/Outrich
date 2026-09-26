@@ -364,6 +364,13 @@
       <p class="fx-muted fx-mt6-fs">Rate con matches the agreement exactly{% if B.rate_con_source_ref and B.rate_con_source_ref.startswith('att:') %} (<a href="/freight/bookings/{{ B.id }}/rate-con.pdf">open PDF</a>){% endif %}.</p>
       {% endif %}
       {% endif %}
+      {% if B.route_revision_pending %}
+      <div class="fx-diff-box">
+        <strong class="fx-diff-head">Route changed by the broker</strong>
+        <div class="fx-diff-line">A stop was removed after this agreement was made. Approving re-captures the agreement against the new route and resets the rate-con review.</div>
+        <form action="/freight/bookings/{{ B.id }}/approve-route" method="post" class="fx-mt10"><button type="submit" class="fx-btn sm primary">Approve revised route</button></form>
+      </div>
+      {% endif %}
       {% if L.thread.id and B.status != 'booked' %}
       <details class="fx-mt10">
         <summary class="fx-muted fx-summary">Enter rate confirmation</summary>
