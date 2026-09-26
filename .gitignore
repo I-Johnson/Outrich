@@ -14,3 +14,4 @@ raw_screenshots*
 raw_videos*
 .pytest_cache/
 supabase/.temp/
+outrich/
