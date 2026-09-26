@@ -186,6 +186,148 @@ def update_broker(broker_id: str, values: dict[str, Any], storage=None) -> dict:
     })
 
 
+BOOKING_STATUSES = {"agreed", "rate_con_review", "booked", "cancelled"}
+
+
+def _agreement_snapshot(load: dict, broker: dict | None, storage) -> dict:
+    """Immutable record of what was agreed, captured at acceptance time."""
+    stops = storage.list("freight_load_stops", {"load_id": load["id"]}, order="seq asc", limit=50)
+    return {
+        "agreed_at": now_iso(),
+        "origin": route_label(load.get("origin_city"), load.get("origin_state")),
+        "destination": route_label(load.get("destination_city"), load.get("destination_state")),
+        "pickup_date": load.get("pickup_date") or "",
+        "equipment": load.get("equipment_type") or "",
+        "weight_lbs": load.get("weight_lbs"),
+        "loaded_miles": load.get("loaded_miles"),
+        "broker": (broker or {}).get("legal_name") or load.get("broker_company") or load.get("broker_email") or "",
+        "stops": [{"kind": s.get("kind"), "city": s.get("city"), "state": s.get("state"),
+                   "facility": s.get("facility_name"), "appointment": s.get("appointment")} for s in stops],
+    }
+
+
+def record_agreement(thread_id: str, amount: float, source_message_id: str, storage=None) -> dict | None:
+    """Capture the immutable agreement snapshot when a price is accepted."""
+    storage = storage or store
+    thread = storage.get("freight_threads", thread_id)
+    if not thread:
+        return None
+    existing = [b for b in storage.list("freight_bookings", {"thread_id": thread_id}, order="", limit=10)
+                if b.get("status") != "cancelled"]
+    if existing:
+        return existing[0]
+    load = storage.get("freight_loads", thread["load_id"]) or {}
+    broker = storage.get("freight_brokers", load["broker_id"]) if load.get("broker_id") else None
+    stamp = now_iso()
+    return storage.insert("freight_bookings", {
+        "id": new_id(),
+        "load_id": thread["load_id"],
+        "thread_id": thread_id,
+        "status": "agreed",
+        "agreed_rate": amount,
+        "snapshot": _agreement_snapshot(load, broker, storage),
+        "rate_con_diffs": [],
+        "rate_con_reviewed": False,
+        "driver_handoff_approved": False,
+        "source_message_id": source_message_id,
+        "created_at": stamp,
+        "updated_at": stamp,
+    })
+
+
+def _rate_con_diffs(snapshot: dict, agreed_rate: float, rate_con: dict) -> list[dict]:
+    """Exact field-by-field comparison of the rate con against the agreement."""
+    diffs: list[dict] = []
+    def check(field: str, agreed, received, label: str) -> None:
+        agreed_norm = (str(agreed).strip().casefold() if agreed is not None else "")
+        received_norm = (str(received).strip().casefold() if received is not None else "")
+        if received_norm and agreed_norm != received_norm:
+            diffs.append({"field": label, "agreed": agreed, "rate_con": received})
+    rate = _number(rate_con.get("total_rate"))
+    if rate is not None and rate != _number(agreed_rate):
+        diffs.append({"field": "total rate", "agreed": agreed_rate, "rate_con": rate})
+    check("destination", snapshot.get("destination"), route_label(rate_con.get("delivery_city"), rate_con.get("delivery_state")) if rate_con.get("delivery_city") else None, "delivery")
+    check("origin", snapshot.get("origin"), route_label(rate_con.get("pickup_city"), rate_con.get("pickup_state")) if rate_con.get("pickup_city") else None, "pickup")
+    check("pickup_date", snapshot.get("pickup_date"), rate_con.get("pickup_date"), "pickup date")
+    check("equipment", snapshot.get("equipment"), rate_con.get("equipment"), "equipment")
+    agreed_weight = _number(snapshot.get("weight_lbs"))
+    con_weight = _number(rate_con.get("weight_lbs"))
+    if con_weight is not None and agreed_weight is not None and con_weight != agreed_weight:
+        diffs.append({"field": "weight", "agreed": agreed_weight, "rate_con": con_weight})
+    return diffs
+
+
+def submit_rate_con(booking_id: str, values: dict[str, Any], storage=None) -> dict:
+    """Record the broker's rate confirmation terms and compute exact diffs."""
+    storage = storage or store
+    booking = storage.get("freight_bookings", booking_id)
+    if not booking:
+        raise ValueError("Booking not found")
+    if booking.get("status") == "booked":
+        raise ValueError("Load is already booked")
+    diffs = _rate_con_diffs(booking.get("snapshot") or {}, booking.get("agreed_rate"), values)
+    return storage.update("freight_bookings", booking_id, {
+        "status": "rate_con_review",
+        "rate_con_amount": _number(values.get("total_rate")),
+        "rate_con_diffs": diffs,
+        "rate_con_reviewed": False,
+        "updated_at": now_iso(),
+    })
+
+
+def review_rate_con(booking_id: str, approve: bool, storage=None) -> dict:
+    """Dispatcher decision on the rate con. Differences require explicit override."""
+    storage = storage or store
+    booking = storage.get("freight_bookings", booking_id)
+    if not booking:
+        raise ValueError("Booking not found")
+    if booking.get("status") != "rate_con_review":
+        raise ValueError("No rate confirmation is waiting for review")
+    if not approve:
+        return storage.update("freight_bookings", booking_id, {"status": "agreed", "rate_con_diffs": [], "updated_at": now_iso()})
+    return storage.update("freight_bookings", booking_id, {"rate_con_reviewed": True, "updated_at": now_iso()})
+
+
+def approve_driver_handoff(booking_id: str, storage=None) -> dict:
+    """Human gate: releasing driver identity to the broker."""
+    storage = storage or store
+    booking = storage.get("freight_bookings", booking_id)
+    if not booking:
+        raise ValueError("Booking not found")
+    if not booking.get("rate_con_reviewed"):
+        raise ValueError("Review the rate confirmation before releasing driver details")
+    return storage.update("freight_bookings", booking_id, {"driver_handoff_approved": True, "updated_at": now_iso()})
+
+
+def mark_booked(booking_id: str, storage=None) -> dict:
+    """Final commitment: every gate must be green."""
+    storage = storage or store
+    booking = storage.get("freight_bookings", booking_id)
+    if not booking:
+        raise ValueError("Booking not found")
+    if booking.get("status") == "booked":
+        return booking
+    if not booking.get("rate_con_reviewed"):
+        raise ValueError("Rate confirmation review is required before booking")
+    if not booking.get("driver_handoff_approved"):
+        raise ValueError("Driver handoff approval is required before booking")
+    load = storage.get("freight_loads", booking["load_id"]) or {}
+    mission = storage.get("freight_missions", load.get("mission_id")) or {}
+    profile = storage.get("freight_truck_profiles", load.get("truck_profile_id") or mission.get("truck_profile_id")) or {}
+    blockers = _booking_readiness_blockers(load, mission, profile, storage)
+    if blockers:
+        raise ValueError("Booking is not ready: " + ", ".join(blockers))
+    stamp = now_iso()
+    booking = storage.update("freight_bookings", booking_id, {"status": "booked", "updated_at": stamp})
+    storage.update("freight_loads", load["id"], {"status": "booked", "updated_at": stamp})
+    if profile.get("id"):
+        storage.update("freight_truck_profiles", profile["id"], {"availability_status": "booked", "updated_at": stamp})
+    thread = storage.get("freight_threads", booking["thread_id"])
+    if thread:
+        _set_stage(thread, load, "booked", storage)
+    return booking
+
+
 # A broker describing a price as "quoted" while asking another question has not
 # made a clean new offer. This check runs after model interpretation as well.
 MIXED_QUOTED_RATE = re.compile(r"\bquoted\s+\$?\d[\d,]*(?:\.\d+)?\b", re.I)
@@ -1389,6 +1531,10 @@ def evaluate_inbound(thread: dict, message: dict, storage=None, *, preserve_veri
         }
         summary = " ".join(labels[item] for item in protected)
         _create_alert(thread["id"], protected[0], summary, storage)
+        if "price_accepted" in protected:
+            accepted_amount = _number(classification.get("offer")) or _number(load.get("current_offer")) or _number(load.get("posted_rate"))
+            if accepted_amount:
+                record_agreement(thread["id"], accepted_amount, message.get("provider_message_id") or message["id"], storage)
         next_state = "booked" if prior_state == "booked" else "accepted_pending_review" if {"rate_confirmation", "price_accepted"} & set(protected) else "protected_review"
         _set_stage(thread, load, next_state, storage)
         return {"action": "alert", "classification": classification, "summary": summary}

@@ -29,7 +29,7 @@ from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
-from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, update_broker, verify_load_facts, verify_load_stop, filter_shareable_fields
+from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, approve_driver_handoff, mark_booked, review_rate_con, submit_rate_con, update_broker, verify_load_facts, verify_load_stop, filter_shareable_fields
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
@@ -455,6 +455,8 @@ def freight_dashboard(request: Request, load_id: str = ""):
         load["group"] = freight_group(load)
         load["stops"] = stops_by_load.get(str(load["id"]), [])
         load["broker"] = db.get("freight_brokers", str(load["broker_id"])) if load.get("broker_id") else None
+        bookings = db.list("freight_bookings", {"thread_id": str(thread.get("id"))}, order="created_at desc", limit=5) if thread.get("id") else []
+        load["booking"] = next((b for b in bookings if b.get("status") != "cancelled"), None)
     selected = next((row for row in loads if str(row["id"]) == str(load_id)), None) or (loads[0] if loads else None)
     confirmation_preview = None
     if selected and selected.get("status") == "confirmation_required":
@@ -1131,6 +1133,62 @@ async def freight_load_facts(load_id: str, request: Request):
         return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(str(exc))}", 303)
     notice = "Load details saved and broker reply rechecked" if rechecked else "Load details saved"
     return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(notice)}", 303)
+
+
+@app.post("/freight/bookings/{booking_id}/rate-con")
+async def freight_booking_rate_con(booking_id: str, request: Request):
+    db = freight_store(request)
+    booking = db.get("freight_bookings", booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    form = await request.form()
+    try:
+        submit_rate_con(booking_id, dict(form), storage=db)
+    except ValueError as exc:
+        return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote(str(exc))}", 303)
+    return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote('Rate confirmation compared')}", 303)
+
+
+@app.post("/freight/bookings/{booking_id}/review-rate-con")
+async def freight_booking_review_rate_con(booking_id: str, request: Request):
+    db = freight_store(request)
+    booking = db.get("freight_bookings", booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    form = await request.form()
+    approve = str(form.get("decision") or "") == "approve"
+    try:
+        review_rate_con(booking_id, approve, storage=db)
+    except ValueError as exc:
+        return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote(str(exc))}", 303)
+    notice = "Rate confirmation approved" if approve else "Rate confirmation sent back"
+    return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote(notice)}", 303)
+
+
+@app.post("/freight/bookings/{booking_id}/handoff")
+def freight_booking_handoff(booking_id: str, request: Request):
+    db = freight_store(request)
+    booking = db.get("freight_bookings", booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    try:
+        approve_driver_handoff(booking_id, storage=db)
+    except ValueError as exc:
+        return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote(str(exc))}", 303)
+    return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote('Driver handoff approved')}", 303)
+
+
+@app.post("/freight/bookings/{booking_id}/book")
+def freight_booking_book(booking_id: str, request: Request):
+    db = freight_store(request)
+    booking = db.get("freight_bookings", booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    try:
+        mark_booked(booking_id, storage=db)
+    except ValueError as exc:
+        return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote(str(exc))}", 303)
+    return RedirectResponse(f"/freight?load_id={booking.get('load_id','')}&notice={quote('Load booked')}", 303)
 
 
 @app.post("/freight/brokers/{broker_id}/update")
