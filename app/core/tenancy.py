@@ -106,6 +106,14 @@ class OwnerStore:
                 return False
         return self.base.claim_field_not(table, row_id, field, disallowed, new_value)
 
+    def claim_booking_lease(self, row_id: Any, claim_at: str, stale_before: str) -> bool:
+        if "freight_truck_profiles" in OWNED_TABLES:
+            try:
+                self._require("freight_truck_profiles", row_id)
+            except LookupError:
+                return False
+        return self.base.claim_booking_lease(row_id, claim_at, stale_before)
+
     def delete(self, table: str, filters: dict[str, Any]):
         if table in OWNED_TABLES:
             filters = {**filters, "owner_id": self.owner_id}
