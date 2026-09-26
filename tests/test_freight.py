@@ -321,8 +321,13 @@ class FreightConversationTests(unittest.TestCase):
         self.assertEqual(self.inbound("Reach me at 555-0100")["action"], "alert")
         self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "protected_review")
         set_thread_state(self.thread_id, "negotiating", self.storage)
-        self.assertEqual(self.inbound("Can you pick up tonight at 2200?")["action"], "alert")
-        self.assertEqual(self.inbound("Cargo weight is at 42,000 lbs")["action"], "alert")
+        tonight = self.inbound("Can you pick up tonight at 2200?")
+        self.assertEqual(tonight["action"], "draft")
+        self.assertEqual(tonight["draft"]["reason"], "clarify_load_details")
+        weight = self.inbound("Cargo weight is at 42,000 lbs")
+        self.assertEqual(weight["action"], "draft")
+        self.assertEqual(weight["draft"]["reason"], "clarify_load_details")
+        self.assertTrue(weight["draft"]["policy_snapshot"]["manual_only"])
         rpm = self.inbound("Rate is $2.45 per mile")
         self.assertEqual(rpm["action"], "draft")
         self.assertEqual(rpm["draft"]["reason"], "clarify_load_details")
@@ -687,3 +692,123 @@ class FreightIsolationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreightKeepAliveTests(unittest.TestCase):
+    """A broker turn must never end silently because part of the answer repeats."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.raw = SQLiteStore(os.path.join(self.temp.name, "freight.db"))
+        self.raw.init()
+        self.storage = OwnerStore(self.raw, ADMIN_OWNER_ID)
+        stamp = now_iso()
+        self.profile_id, self.mission_id, self.load_id, self.thread_id = (new_id() for _ in range(4))
+        self.storage.insert("freight_truck_profiles", {
+            "id": self.profile_id, "name": "Truck 1", "current_city": "Phoenix", "current_state": "AZ",
+            "equipment_type": "dry van", "trailer_length_ft": 53, "max_weight_lbs": 45000,
+            "team_status": "team", "mc_number": "123456", "shareable_fields": ["equipment_type", "team_status", "mc_number"],
+            "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_missions", {
+            "id": self.mission_id, "name": "Phoenix to Dallas", "truck_profile_id": self.profile_id,
+            "origin_city": "Phoenix", "origin_state": "AZ", "pickup_start": "2026-09-23", "pickup_end": "2026-09-23",
+            "equipment_type": "dry van", "destinations": [{"label": "Dallas, TX", "kind": "city", "radius_miles": 0}],
+            "floor_total": 3900, "target_total": 4500, "maximum_counter_rounds": 2,
+            "permissions": {"auto_counter": False, "auto_profile_reply": False, "auto_pass": False},
+            "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_loads", {
+            "id": self.load_id, "mission_id": self.mission_id, "truck_profile_id": self.profile_id,
+            "broker_email": "broker@example.com", "origin_city": "Phoenix", "origin_state": "AZ",
+            "destination_city": "Open destinations", "subject": "Truck available", "status": "waiting",
+            "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_threads", {
+            "id": self.thread_id, "load_id": self.load_id, "sender_account": "1", "recipient_email": "broker@example.com",
+            "subject": "Truck available", "root_message_id": "<first@example.com>", "last_message_id": "<first@example.com>",
+            "state": "waiting", "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp,
+        })
+        self.received = 0
+        self.sent = 0
+
+    def inbound(self, body):
+        self.received += 1
+        message_id = f"<broker-{self.received}@example.com>"
+        msg = self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "in", "provider_message_id": message_id,
+            "from_email": "broker@example.com", "to_email": "carrier@example.com", "subject": "Re: Truck available",
+            "body_text": body, "classification": {}, "created_at": now_iso(),
+        })
+        self.storage.update("freight_threads", self.thread_id, {"last_message_id": message_id})
+        return evaluate_inbound(self.storage.get("freight_threads", self.thread_id), msg, self.storage)
+
+    def send(self, draft):
+        self.sent += 1
+        provider = Mock()
+        provider.send.return_value = SendResult(True, f"<sent-{self.sent}@example.com>")
+        sender = {"id": "1", "email": "carrier@example.com", "provider": "gmail", "display_name": "Dispatch"}
+        with patch("app.core.freight.get_gmail_sender", return_value=sender), patch("app.core.freight.get_provider", return_value=provider):
+            return send_draft(draft["id"], self.storage)
+
+    def test_new_question_after_answered_one_still_goes_out(self):
+        first = self.inbound("Is this a true team?")
+        self.assertEqual(first["action"], "draft")
+        self.assertEqual(first["draft"]["reason"], "profile_fact_reply")
+        self.send(first["draft"])
+        # Broker's next message repeats part of the last exchange but asks something new.
+        second = self.inbound("Thanks. And is it a 53 ft dry van?")
+        self.assertEqual(second["action"], "draft")
+        self.assertEqual(second["draft"]["reason"], "profile_fact_reply")
+        self.assertIn("dry van", second["draft"]["body_text"])
+        self.assertNotIn("true team", second["draft"]["body_text"])
+
+    def test_unrecognized_broker_message_produces_keepalive_draft_not_silence(self):
+        result = self.inbound("Thirty pallets of manufactured components.")
+        self.assertEqual(result["action"], "draft")
+        self.assertEqual(result["draft"]["reason"], "clarify_load_details")
+        self.assertTrue(result["draft"]["policy_snapshot"]["manual_only"])
+        self.assertIn("delivery city and state", result["draft"]["body_text"])
+        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "draft_ready")
+
+    def test_fully_covered_load_gets_followup_nudge_draft_and_alert(self):
+        verify_load_facts(self.load_id, {
+            "origin_city": "Phoenix", "origin_state": "AZ", "origin_confirmed": "yes",
+            "destination_city": "Dallas", "destination_state": "TX",
+            "equipment_type": "dry van", "equipment_confirmed": "yes",
+            "pickup_date": "2026-09-23", "pickup_date_confirmed": "yes",
+            "loaded_miles": 1000, "deadhead_miles": 100,
+            "weight_lbs": 40000, "schedule_confirmed": "yes",
+        }, self.storage)
+        result = self.inbound("Ok, noted.")
+        self.assertEqual(result["action"], "draft")
+        self.assertEqual(result["draft"]["reason"], "follow_up_nudge")
+        self.assertTrue(self.storage.list("freight_alerts", {"thread_id": self.thread_id, "kind": "ambiguous_reply"}, order="", limit=1))
+
+    def test_driver_information_request_never_gets_keepalive(self):
+        result = self.inbound("Send me full driver information.")
+        self.assertEqual(result["action"], "alert")
+        self.assertEqual(self.storage.get("freight_threads", self.thread_id)["state"], "protected_review")
+        self.assertEqual(self.storage.list("freight_drafts", {"thread_id": self.thread_id, "status": "pending"}, order="", limit=10), [])
+
+    def test_counter_restate_after_two_sends_goes_manual(self):
+        verify_load_facts(self.load_id, {
+            "destination_city": "Dallas", "destination_state": "TX",
+            "loaded_miles": 1000, "deadhead_miles": 100,
+        }, self.storage)
+        first = self.inbound("Rate is $4,000 all in.")
+        self.assertEqual(first["action"], "draft")
+        self.assertEqual(first["draft"]["reason"], "counter_to_target")
+        self.send(first["draft"])
+        second = self.inbound("Could you do $4,100?")
+        self.assertEqual(second["action"], "draft")
+        self.assertEqual(second["draft"]["reason"], "counter_to_target")
+        self.assertTrue(second["draft"]["policy_snapshot"]["safe_to_auto_send"])
+        self.send(second["draft"])
+        third = self.inbound("Best I can do is $4,150.")
+        self.assertEqual(third["action"], "draft")
+        self.assertFalse(third["draft"]["policy_snapshot"]["safe_to_auto_send"])
+        self.assertTrue(self.storage.list("freight_alerts", {"thread_id": self.thread_id, "kind": "counter_restate_limit"}, order="", limit=1))
+        # Restates never consume counter rounds: one initial counter, two restates.
+        self.assertEqual(self.storage.get("freight_loads", self.load_id)["current_round"], 1)
