@@ -29,7 +29,7 @@ from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_password, seed_legacy_gmail_senders, sender_context
-from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts
+from app.core.freight import SensitiveOutboundConfirmationRequired, auto_lane_issue, evaluate_inbound, extract_offer, format_freight_message, freight_config, load_economics, mission_price_comparison, parse_destinations, poll_freight_replies, prepare_first_touch, reevaluate_verified_load, seed_freight_settings, seed_freight_template, send_draft, send_first_touch, set_thread_state, verify_load_facts, verify_load_stop
 from app.core.importer import FIELDS, build_preview, confirm_import, remap_preview, undo_import
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
@@ -437,6 +437,10 @@ def freight_dashboard(request: Request, load_id: str = ""):
         alerts_by_thread.setdefault(str(alert.get("thread_id")), []).append(alert)
     pending_drafts = db.list("freight_drafts", {"status": "pending"}, order="created_at desc", limit=500)
     drafts_by_thread = {str(row["thread_id"]): row for row in pending_drafts}
+    all_stops = db.list("freight_load_stops", order="seq asc", limit=2000)
+    stops_by_load: dict[str, list[dict]] = {}
+    for stop in all_stops:
+        stops_by_load.setdefault(str(stop.get("load_id")), []).append(stop)
     for load in loads:
         mission = mission_map.get(str(load.get("mission_id"))) or {}
         profile_id = load.get("truck_profile_id") or mission.get("truck_profile_id")
@@ -449,6 +453,7 @@ def freight_dashboard(request: Request, load_id: str = ""):
         load["alerts"] = alerts_by_thread.get(str(thread.get("id")), [])
         load["draft"] = drafts_by_thread.get(str(thread.get("id")))
         load["group"] = freight_group(load)
+        load["stops"] = stops_by_load.get(str(load["id"]), [])
     selected = next((row for row in loads if str(row["id"]) == str(load_id)), None) or (loads[0] if loads else None)
     confirmation_preview = None
     if selected and selected.get("status") == "confirmation_required":
@@ -1115,6 +1120,20 @@ async def freight_load_facts(load_id: str, request: Request):
         return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(str(exc))}", 303)
     notice = "Load details saved and broker reply rechecked" if rechecked else "Load details saved"
     return RedirectResponse(f"/freight?load_id={load_id}&notice={quote(notice)}", 303)
+
+
+@app.post("/freight/stops/{stop_id}/verify")
+async def freight_stop_verify(stop_id: str, request: Request):
+    db = freight_store(request)
+    stop = db.get("freight_load_stops", stop_id)
+    if not stop:
+        raise HTTPException(404, "Stop not found")
+    form = await request.form()
+    try:
+        verify_load_stop(stop_id, dict(form), storage=db)
+    except ValueError as exc:
+        return RedirectResponse(f"/freight?load_id={stop.get('load_id','')}&notice={quote(str(exc))}", 303)
+    return RedirectResponse(f"/freight?load_id={stop.get('load_id','')}&notice={quote('Stop confirmed')}", 303)
 
 
 @app.post("/freight/threads/{thread_id}/reply")
