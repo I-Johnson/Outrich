@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS freight_load_stops (
   verified INTEGER NOT NULL DEFAULT 0,
   evidence TEXT NOT NULL DEFAULT '',
   source_message_id TEXT NOT NULL DEFAULT '',
+  removed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
