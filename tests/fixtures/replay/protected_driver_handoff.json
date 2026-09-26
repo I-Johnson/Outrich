@@ -1,0 +1,7 @@
+{
+  "name": "driver info request always stops for a human",
+  "turns": [
+    {"body": "Do you have two drivers? Send their details.", "expect": {"action": ["alert"], "state": "protected_review", "no_draft": true}},
+    {"body": "What is the estimated delivery arrival?", "expect": {"action": ["alert"]}}
+  ]
+}
