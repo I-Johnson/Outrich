@@ -17,7 +17,7 @@ ADMIN_OWNER_ID = "00000000-0000-0000-0000-000000000001"
 
 OWNED_TABLES = frozenset({
     "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_bookings", "freight_threads",
-    "freight_messages", "freight_drafts", "freight_negotiation_events", "freight_alerts",
+    "freight_messages", "freight_attachments", "freight_drafts", "freight_negotiation_events", "freight_alerts",
     "freight_mail_cursors", "freight_settings", "gmail_senders", "email_templates",
 })
 

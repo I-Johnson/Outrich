@@ -9,15 +9,15 @@
 {% include "freight_setup_steps.html" %}
 
 <!-- SECTION 1: SENDER IDENTITY & SIGNATURE -->
-<section class="panel setting-form" style="margin-bottom:24px">
-  <div class="panel-head">
+<section class="fx-panel setting-form fx-mb24">
+  <div class="fx-panel-head">
     <div>
-      <h2 style="font-size:16px;margin:0 0 4px">Sender Identity & Signature</h2>
+      <h2 class="fx-h2">Sender Identity & Signature</h2>
       <p class="fx-form-sub">These settings apply exclusively to Freight load inquiries and replies.</p>
     </div>
   </div>
 
-  <form action="/freight/settings" method="post" class="stack" style="margin-top:16px">
+  <form action="/freight/settings" method="post" class="fx-stack fx-mt16">
     <div class="field-grid">
       <label>
         Company / Sender display name
@@ -32,20 +32,20 @@
       </label>
 
       <div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <label style="font-weight:600;margin:0">Sending Gmail account</label>
-          <button type="button" class="button link" onclick="document.getElementById('add-freight-email-dialog').showModal()" style="font-size:12px;font-weight:700;color:#0284c7;background:none;border:none;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+        <div class="fx-row-between fx-mb6">
+          <label class="fx-label">Sending Gmail account</label>
+          <button type="button" class="fx-link-btn" onclick="document.getElementById('add-freight-email-dialog').showModal()">
             + Add new email
           </button>
         </div>
-        <select name="default_sender_account" required style="width:100%">
+        <select name="default_sender_account" required class="fx-w100">
           <option value="">Choose Gmail account</option>
           {% for s in gmail_senders %}
           <option value="{{ s.id }}" {% if freight_settings.default_sender_account|string == s.id|string %}selected{% endif %}>{{ s.email }}{% if s.display_name %} ({{ s.display_name }}){% endif %}</option>
           {% endfor %}
         </select>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px">
-          <span class="field-hint" style="margin:0">The connected Gmail account used to send inquiries and poll broker replies.</span>
+        <div class="fx-row-between fx-mt4">
+          <span class="field-hint fx-m0">The connected Gmail account used to send inquiries and poll broker replies.</span>
           {% if gmail_senders %}<button type="submit" class="fx-btn sm" formaction="/freight/senders/test" formnovalidate>Test connection</button>{% endif %}
         </div>
       </div>
@@ -63,19 +63,19 @@
 
       <label class="wide">
         <span>Company signature &amp; contact info</span>
-        <textarea id="input-signature" name="email_signature" rows="4" required style="font-family:inherit">{{ freight_settings.email_signature or 'Freight Dispatch' }}</textarea>
+        <textarea id="input-signature" name="email_signature" rows="4" required class="fx-font-inherit">{{ freight_settings.email_signature or 'Freight Dispatch' }}</textarea>
         <span class="field-hint">Appended to every outbound email via the <code>{{'{{'}}signature{{'}}'}}</code> tag. Put your company name, dispatcher name, phone, and MC/DOT here.</span>
       </label>
     </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
+    <div class="fx-form-foot">
       <button class="fx-btn primary fx-btn-lg">Save Freight settings</button>
       {% if not gmail_senders %}
-      <div style="display:flex;align-items:center;gap:10px;background:#fef2f2;border:1px solid #fecaca;padding:8px 14px;border-radius:8px">
-        <span style="color:var(--danger);font-size:12.5px;font-weight:600">
+      <div class="fx-alert-strip">
+        <span class="fx-alert-text">
           No Gmail account connected yet.
         </span>
-        <button type="button" class="button" onclick="document.getElementById('add-freight-email-dialog').showModal()" style="font-size:11.5px;padding:4px 10px;background:#dc2626;color:#ffffff;border:none;border-radius:6px;cursor:pointer;font-weight:700">
+        <button type="button" class="fx-btn sm danger-solid" onclick="document.getElementById('add-freight-email-dialog').showModal()">
           + Connect Gmail Now
         </button>
       </div>
@@ -87,34 +87,34 @@
 <!-- SECTION 2: FREIGHT TEMPLATES & SUBJECT LINES -->
 <div class="templates-layout">
   <!-- LEFT: Templates List -->
-  <section class="panel">
-    <div class="panel-head">
+  <section class="fx-panel">
+    <div class="fx-panel-head">
       <div>
-        <h2 style="font-size:16px;margin:0 0 4px">Email Templates & Subject Lines ({{ freight_templates|length }})</h2>
+        <h2 class="fx-h2">Email Templates & Subject Lines ({{ freight_templates|length }})</h2>
         <p class="fx-form-sub">Reusable templates for load inquiries, counters, and rate confirmations.</p>
       </div>
       <a class="fx-btn ghost" href="/freight/settings?edit_template=new#template-editor">+ New template</a>
     </div>
 
-    <div style="margin-top:14px">
+    <div class="fx-mt14">
       {% for t in freight_templates %}
       <article class="template-item {{ 'is-editing' if edit_template and edit_template.id|string == t.id|string else '' }}">
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div class="fx-flex1">
+          <div class="fx-row fx-mb4">
             <h4>{{ t.name }}</h4>
             {% if t.active %}
-            <span class="badge running">Active</span>
+            <span class="fx-status on">Active</span>
             {% else %}
-            <span class="badge paused">Inactive</span>
+            <span class="fx-status off">Inactive</span>
             {% endif %}
             {% if freight_settings.default_template_id|string == t.id|string %}
-            <span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#bae6fd">Default Inquiry</span>
+            <span class="fx-tag">Default Inquiry</span>
             {% endif %}
           </div>
           <div class="fx-help-block fx-mb4">
             <strong>Subject:</strong> <code>{{ t.subject }}</code>
           </div>
-          <p style="font-size:12px;color:#64748b;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:480px">
+          <p class="fx-snippet">
             {{ t.body|replace('\n', ' ') }}
           </p>
         </div>
@@ -129,10 +129,10 @@
   </section>
 
   <!-- RIGHT: Template Editor -->
-  <section class="panel" id="template-editor">
-    <div class="panel-head">
+  <section class="fx-panel" id="template-editor">
+    <div class="fx-panel-head">
       <div>
-        <h2 style="font-size:16px;margin:0 0 4px">{{ 'Edit template' if edit_template else 'Create freight template' }}</h2>
+        <h2 class="fx-h2">{{ 'Edit template' if edit_template else 'Create freight template' }}</h2>
         <p class="fx-form-sub">Insert variables below into your subject and body.</p>
       </div>
       {% if edit_template %}
@@ -140,7 +140,7 @@
       {% endif %}
     </div>
 
-    <form action="/templates/save" method="post" class="stack" style="margin-top:14px">
+    <form action="/templates/save" method="post" class="fx-stack">
       <input type="hidden" name="id" value="{{ edit_template.id if edit_template else '' }}">
       <input type="hidden" name="vertical" value="freight">
       <input type="hidden" name="type" value="plain">
@@ -174,11 +174,11 @@
           <span class="var-pill" onclick="insertVar('tpl-body', '{{mc_number}}')">&#123;&#123;mc_number&#125;&#125;</span>
           <span class="var-pill" onclick="insertVar('tpl-body', '{{trailer_length}}')">&#123;&#123;trailer_length&#125;&#125;</span>
         </div>
-        <div class="field-hint" style="color:#9a6700">Safety check: MC/USDOT numbers, phone numbers, driver details, insurance, financial data, and vehicle identifiers trigger an explicit confirmation before an initial email is sent.</div>
+        <div class="field-hint fx-amber-hint">Safety check: MC/USDOT numbers, phone numbers, driver details, insurance, financial data, and vehicle identifiers trigger an explicit confirmation before an initial email is sent.</div>
       </label>
 
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;flex-wrap:wrap;gap:12px">
-        <label class="check" style="margin:0">
+      <div class="fx-actions">
+        <label class="fx-check fx-m0">
           <input type="checkbox" name="active" {% if not edit_template or edit_template.active %}checked{% endif %}>
           <span>Template active for load outreach</span>
         </label>
@@ -189,13 +189,13 @@
 </div>
 
 <!-- ACCOUNT -->
-<section class="panel account-panel" style="margin-top:24px">
-  <div class="panel-head">
+<section class="fx-panel account-panel fx-mt24">
+  <div class="fx-panel-head">
     <div>
-      <h2 style="font-size:16px;margin:0 0 4px">Account</h2>
+      <h2 class="fx-h2">Account</h2>
       <p class="fx-form-sub">Signed in as {{ request.session.get('email') or request.session.get('admin') or 'your account' }}.</p>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div class="fx-row-wrap-sm">
       {% if request.session.get('admin_workspace') %}<a class="fx-btn ghost" href="/">Open admin workspace</a>{% else %}<a class="fx-btn ghost" href="/admin/login">Admin login</a>{% endif %}
       <form action="/logout" method="post" class="fx-m0"><button class="fx-btn">Sign out</button></form>
     </div>
@@ -203,11 +203,11 @@
 </section>
 
 <!-- CONNECT GMAIL MODAL DIALOG -->
-<dialog id="add-freight-email-dialog" style="max-width:520px;width:92%;padding:22px">
-  <form action="/freight/senders/add" method="post" class="stack" style="gap:14px">
+<dialog id="add-freight-email-dialog" class="fx-dialog">
+  <form action="/freight/senders/add" method="post" class="fx-stack">
     <div class="dialog-head">
       <div>
-        <h2 style="margin:0 0 2px;font-size:17px;font-weight:750">Connect Gmail / Workspace Email</h2>
+        <h2 class="fx-dialog-title">Connect Gmail / Workspace Email</h2>
         <span class="fx-help-block fx-m0">Use this email to send freight inquiries & negotiate rates with brokers</span>
       </div>
       <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
@@ -228,36 +228,36 @@
 
     <label>
       Email address
-      <input type="email" name="email" placeholder="dispatch@yourcompany.com" required style="font-size:13px">
+      <input type="email" name="email" placeholder="dispatch@yourcompany.com" required class="fx-input-sm">
       <span class="field-hint">Your Gmail or Google Workspace dispatch address.</span>
     </label>
 
     <label>
       Google app password (16 characters)
-      <input type="password" name="app_password" placeholder="xxxx xxxx xxxx xxxx" required autocomplete="off" style="font-size:13px;letter-spacing:1px">
+      <input type="password" name="app_password" placeholder="xxxx xxxx xxxx xxxx" required autocomplete="off" class="fx-input-code">
       <span class="field-hint">Not your normal Gmail password. Spaces are fine. We test it with Gmail before saving, and store it encrypted.</span>
     </label>
 
-    <div class="field-grid" style="grid-template-columns:1fr 1fr;gap:12px">
+    <div class="fx-grid-2col">
       <label>
         Sender display name
-        <input name="display_name" placeholder="Freight Dispatch" style="font-size:13px">
+        <input name="display_name" placeholder="Freight Dispatch" class="fx-input-sm">
         <span class="field-hint">Shown to brokers in email client.</span>
       </label>
 
       <label>
         Reply-to (optional)
-        <input type="email" name="reply_to" placeholder="Defaults to sending email" style="font-size:13px">
+        <input type="email" name="reply_to" placeholder="Defaults to sending email" class="fx-input-sm">
         <span class="field-hint">Where broker replies are routed.</span>
       </label>
     </div>
 
-    <label class="check" style="margin-top:2px">
+    <label class="fx-check fx-mt2">
       <input type="checkbox" name="auto_select" checked>
-      <span style="font-size:12.5px;font-weight:600">Set as default sending account for Freight immediately</span>
+      <span class="fx-check-label">Set as default sending account for Freight immediately</span>
     </label>
 
-    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;padding-top:12px;border-top:1px solid #f1f5f9">
+    <div class="fx-dialog-foot">
       <button type="button" class="fx-btn" onclick="this.closest('dialog').close()">Cancel</button>
       <button type="submit" class="fx-btn primary" onclick="if(this.form.checkValidity()){this.textContent='Testing connection…';}">Test & connect</button>
     </div>
