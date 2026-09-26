@@ -23,7 +23,7 @@ JSON_FIELDS = {
     "freight_messages": {"classification"},
     "freight_drafts": {"policy_snapshot"},
     "freight_negotiation_events": {"details"},
-    "freight_bookings": {"snapshot", "rate_con_diffs"},
+    "freight_bookings": {"snapshot", "rate_con_diffs", "rate_con_terms"},
     "freight_brokers": {"emails"},
 }
 # Freight tables that carry owner_id + vertical (gmail_senders, freight_settings
@@ -161,6 +161,21 @@ class SQLiteStore:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN weight_lbs REAL")
             if "broker_id" not in load_columns:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN broker_id TEXT")
+            booking_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_bookings)")}
+            for column, ddl in (
+                ("rate_con_terms", "TEXT NOT NULL DEFAULT '{}'"),
+                ("rate_con_version", "TEXT NOT NULL DEFAULT ''"),
+                ("rate_con_source", "TEXT NOT NULL DEFAULT ''"),
+                ("rate_con_review_version", "TEXT NOT NULL DEFAULT ''"),
+                ("driver_handoff_version", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if column not in booking_columns:
+                    con.execute(f"ALTER TABLE freight_bookings ADD COLUMN {column} {ddl}")
+            message_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_messages)")}
+            if "processing_state" not in message_columns:
+                con.execute("ALTER TABLE freight_messages ADD COLUMN processing_state TEXT")
+            if "processing_error" not in message_columns:
+                con.execute("ALTER TABLE freight_messages ADD COLUMN processing_error TEXT")
             profile_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_truck_profiles)")}
             for column, ddl in (
                 ("truck_vin", "TEXT NOT NULL DEFAULT ''"),

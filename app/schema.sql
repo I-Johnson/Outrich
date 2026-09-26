@@ -248,9 +248,14 @@ CREATE TABLE IF NOT EXISTS freight_bookings (
   agreed_rate REAL NOT NULL,
   snapshot TEXT NOT NULL DEFAULT '{}',
   rate_con_amount REAL,
+  rate_con_terms TEXT NOT NULL DEFAULT '{}',
+  rate_con_version TEXT NOT NULL DEFAULT '',
+  rate_con_source TEXT NOT NULL DEFAULT '',
   rate_con_diffs TEXT NOT NULL DEFAULT '[]',
   rate_con_reviewed INTEGER NOT NULL DEFAULT 0,
+  rate_con_review_version TEXT NOT NULL DEFAULT '',
   driver_handoff_approved INTEGER NOT NULL DEFAULT 0,
+  driver_handoff_version TEXT NOT NULL DEFAULT '',
   source_message_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -284,6 +289,8 @@ CREATE TABLE IF NOT EXISTS freight_messages (
   body_text TEXT NOT NULL DEFAULT '',
   classification TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'received',
+  processing_state TEXT,
+  processing_error TEXT,
   created_at TEXT NOT NULL
 );
 -- freight_messages provider uniqueness is per owner; created in SQLiteStore.init after owner_id exists.

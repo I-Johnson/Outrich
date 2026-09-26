@@ -54,13 +54,23 @@ def parse_rate_con_pdf(pdf_bytes: bytes) -> dict:
 
     result: dict = {}
 
-    total_line = _labeled(text, r"(?:total(?:\s+rate|\s+amount|\s+pay)?|rate\s+confirmation\s+amount|all[\s-]*in\s+rate|line\s*haul)")
+    total_line = _labeled(text, r"(?:total(?:\s+rate|\s+amount|\s+pay)?|rate\s+confirmation\s+amount|all[\s-]*in\s+rate|carrier\s+(?:total|pay|rate))")
     amounts = _AMOUNT.findall(total_line) if total_line else []
     if not amounts:
-        labeled_amounts = re.findall(r"(?:total|rate|amount|pay)[^\n$]{0,30}(\$\s*\d{1,3}(?:,\d{3})+|\$\s*\d+)", text, re.I)
+        # Fallback stays conservative: only total-carrier-pay labels, never a
+        # bare "rate"/"pay" (that catches per-mile rates and accessorials).
+        labeled_amounts = re.findall(r"(?:total|amount\s+due|carrier\s+(?:pay|rate)|all[\s-]*in)[^\n$]{0,30}(\$\s*\d{1,3}(?:,\d{3})+|\$\s*\d+)", text, re.I)
         amounts = [re.sub(r"[^0-9,]", "", item) for item in labeled_amounts]
     if amounts:
         result["total_rate"] = float(amounts[0].replace(",", ""))
+
+    # Line haul is one component of the pay, never the total: keep it separate
+    # so a con listing line haul + accessorials cannot masquerade as the total.
+    linehaul_line = _labeled(text, r"line\s*haul")
+    if linehaul_line:
+        linehaul = _AMOUNT.findall(linehaul_line)
+        if linehaul:
+            result["line_haul"] = float(linehaul[0].replace(",", ""))
 
     pickup = _section(text, r"\b(?:shipper|pick\s*up|pickup|origin)\b", (r"\bdeliver", r"\bconsignee", r"\bdrop\b"))
     delivery = _section(text, r"\b(?:consignee|deliver\w*|destination|drop(?:\s*off)?)\b", (r"\bpick\s*up", r"\bshipper\b", r"\bequipment", r"\brate\b"))
