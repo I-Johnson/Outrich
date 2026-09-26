@@ -13,7 +13,7 @@
   <div class="panel-head">
     <div>
       <h2 style="font-size:16px;margin:0 0 4px">Sender Identity & Signature</h2>
-      <p style="margin:0;color:var(--muted)">These settings apply exclusively to Freight load inquiries and replies.</p>
+      <p class="fx-form-sub">These settings apply exclusively to Freight load inquiries and replies.</p>
     </div>
   </div>
 
@@ -46,7 +46,7 @@
         </select>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px">
           <span class="field-hint" style="margin:0">The connected Gmail account used to send inquiries and poll broker replies.</span>
-          {% if gmail_senders %}<button type="submit" class="button secondary" formaction="/freight/senders/test" formnovalidate style="font-size:12px;padding:4px 10px;white-space:nowrap">Test connection</button>{% endif %}
+          {% if gmail_senders %}<button type="submit" class="fx-btn sm" formaction="/freight/senders/test" formnovalidate>Test connection</button>{% endif %}
         </div>
       </div>
 
@@ -69,7 +69,7 @@
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid #f1f5f9;flex-wrap:wrap;gap:12px">
-      <button class="primary-btn" style="padding:10px 24px">Save Freight settings</button>
+      <button class="fx-btn primary fx-btn-lg">Save Freight settings</button>
       {% if not gmail_senders %}
       <div style="display:flex;align-items:center;gap:10px;background:#fef2f2;border:1px solid #fecaca;padding:8px 14px;border-radius:8px">
         <span style="color:var(--danger);font-size:12.5px;font-weight:600">
@@ -91,9 +91,9 @@
     <div class="panel-head">
       <div>
         <h2 style="font-size:16px;margin:0 0 4px">Email Templates & Subject Lines ({{ freight_templates|length }})</h2>
-        <p style="margin:0;color:var(--muted)">Reusable templates for load inquiries, counters, and rate confirmations.</p>
+        <p class="fx-form-sub">Reusable templates for load inquiries, counters, and rate confirmations.</p>
       </div>
-      <a class="button ghost" href="/freight/settings?edit_template=new#template-editor">+ New template</a>
+      <a class="fx-btn ghost" href="/freight/settings?edit_template=new#template-editor">+ New template</a>
     </div>
 
     <div style="margin-top:14px">
@@ -111,7 +111,7 @@
             <span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#bae6fd">Default Inquiry</span>
             {% endif %}
           </div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">
+          <div class="fx-help-block fx-mb4">
             <strong>Subject:</strong> <code>{{ t.subject }}</code>
           </div>
           <p style="font-size:12px;color:#64748b;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:480px">
@@ -119,7 +119,7 @@
           </p>
         </div>
         <div>
-          <a class="button secondary" style="font-size:11.5px;padding:4px 10px" href="/freight/settings?edit_template={{ t.id }}#template-editor">Edit</a>
+          <a class="fx-btn sm" href="/freight/settings?edit_template={{ t.id }}#template-editor">Edit</a>
         </div>
       </article>
       {% else %}
@@ -133,10 +133,10 @@
     <div class="panel-head">
       <div>
         <h2 style="font-size:16px;margin:0 0 4px">{{ 'Edit template' if edit_template else 'Create freight template' }}</h2>
-        <p style="margin:0;color:var(--muted)">Insert variables below into your subject and body.</p>
+        <p class="fx-form-sub">Insert variables below into your subject and body.</p>
       </div>
       {% if edit_template %}
-      <a class="button ghost" style="font-size:12px" href="/freight/settings">Cancel</a>
+      <a class="fx-btn ghost" href="/freight/settings">Cancel</a>
       {% endif %}
     </div>
 
@@ -155,7 +155,7 @@
         Subject line
         <input id="tpl-subject" name="subject" required value="{{ edit_template.subject if edit_template else 'Truck available — {{equipment}}' }}" placeholder="Truck available — {{equipment}}">
         <div class="tag-bar">
-          <span style="font-size:11px;color:var(--muted);margin-right:4px">Insert into subject:</span>
+          <span class="fx-muted-xs">Insert into subject:</span>
           <span class="var-pill" onclick="insertVar('tpl-subject', '{{equipment}}')">&#123;&#123;equipment&#125;&#125;</span>
           <span class="var-pill" onclick="insertVar('tpl-subject', '{{origin}}')">&#123;&#123;origin&#125;&#125;</span>
           <span class="var-pill" onclick="insertVar('tpl-subject', '{{destination}}')">&#123;&#123;destination&#125;&#125;</span>
@@ -166,7 +166,7 @@
         Email body
         <textarea id="tpl-body" name="body" rows="8" required placeholder="Hi, is this load still available? We have a {{equipment}} ready in {{origin}}...">{{ edit_template.body if edit_template else 'Hi,\n\nIs this load still available? We have an empty {{equipment}} ready in {{origin}}.\n\nCould you share current rate, cargo weight, and pickup window?\n\n{{signature}}' }}</textarea>
         <div class="tag-bar">
-          <span style="font-size:11px;color:var(--muted);margin-right:4px">Insert into body:</span>
+          <span class="fx-muted-xs">Insert into body:</span>
           <span class="var-pill" onclick="insertVar('tpl-body', '{{equipment}}')">&#123;&#123;equipment&#125;&#125;</span>
           <span class="var-pill" onclick="insertVar('tpl-body', '{{origin}}')">&#123;&#123;origin&#125;&#125;</span>
           <span class="var-pill" onclick="insertVar('tpl-body', '{{destination}}')">&#123;&#123;destination&#125;&#125;</span>
@@ -182,7 +182,7 @@
           <input type="checkbox" name="active" {% if not edit_template or edit_template.active %}checked{% endif %}>
           <span>Template active for load outreach</span>
         </label>
-        <button class="primary-btn">{{ 'Update template' if edit_template else 'Save template' }}</button>
+        <button class="fx-btn primary">{{ 'Update template' if edit_template else 'Save template' }}</button>
       </div>
     </form>
   </section>
@@ -193,11 +193,11 @@
   <div class="panel-head">
     <div>
       <h2 style="font-size:16px;margin:0 0 4px">Account</h2>
-      <p style="margin:0;color:var(--muted)">Signed in as {{ request.session.get('email') or request.session.get('admin') or 'your account' }}.</p>
+      <p class="fx-form-sub">Signed in as {{ request.session.get('email') or request.session.get('admin') or 'your account' }}.</p>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      {% if request.session.get('admin_workspace') %}<a class="button ghost" href="/">Open admin workspace</a>{% else %}<a class="button ghost" href="/admin/login">Admin login</a>{% endif %}
-      <form action="/logout" method="post" style="margin:0"><button class="button secondary">Sign out</button></form>
+      {% if request.session.get('admin_workspace') %}<a class="fx-btn ghost" href="/">Open admin workspace</a>{% else %}<a class="fx-btn ghost" href="/admin/login">Admin login</a>{% endif %}
+      <form action="/logout" method="post" class="fx-m0"><button class="fx-btn">Sign out</button></form>
     </div>
   </div>
 </section>
@@ -208,7 +208,7 @@
     <div class="dialog-head">
       <div>
         <h2 style="margin:0 0 2px;font-size:17px;font-weight:750">Connect Gmail / Workspace Email</h2>
-        <span style="color:var(--muted);font-size:12px">Use this email to send freight inquiries & negotiate rates with brokers</span>
+        <span class="fx-help-block fx-m0">Use this email to send freight inquiries & negotiate rates with brokers</span>
       </div>
       <button type="button" class="close" onclick="this.closest('dialog').close()">×</button>
     </div>
@@ -258,8 +258,8 @@
     </label>
 
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;padding-top:12px;border-top:1px solid #f1f5f9">
-      <button type="button" class="button secondary" onclick="this.closest('dialog').close()">Cancel</button>
-      <button type="submit" class="primary-btn" style="padding:8px 18px;font-size:13px" onclick="if(this.form.checkValidity()){this.textContent='Testing connection…';}">Test & connect</button>
+      <button type="button" class="fx-btn" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="fx-btn primary" onclick="if(this.form.checkValidity()){this.textContent='Testing connection…';}">Test & connect</button>
     </div>
   </form>
 </dialog>

@@ -356,7 +356,12 @@
         {% endfor %}
       </div>
       {% elif B.status == 'rate_con_review' %}
+      {% set snap_stops = B.snapshot.stops or [] %}
+      {% if snap_stops|length > 2 %}
+      <p class="fx-muted fx-mt6-fs">Rate con matches on the compared fields (first pickup, final delivery, pickup date, equipment, weight, total). This route has {{ snap_stops|length }} stops - verify intermediate stops and appointments against the original rate con{% if B.rate_con_source_ref %} ({{ B.rate_con_source_ref }}){% endif %}.</p>
+      {% else %}
       <p class="fx-muted fx-mt6-fs">Rate con matches the agreement exactly.</p>
+      {% endif %}
       {% endif %}
       {% if L.thread.id and B.status != 'booked' %}
       <details class="fx-mt10">
@@ -399,6 +404,7 @@
         <div class="k">MC</div><div class="v {{ '' if L.broker.mc_number else 'none' }}">{{ L.broker.mc_number or 'Not on file' }}</div><div class="s"></div>
         <div class="k">Credit</div><div class="v">{{ L.broker.credit_status|capitalize }}{% if L.broker.credit_score %} ({{ L.broker.credit_score|int }}){% endif %}</div><div class="s">{% if L.broker.credit_status in ['approved', 'exempt'] %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
         <div class="k">Setup</div><div class="v">{{ L.broker.setup_status.replace('_', ' ')|capitalize }}</div><div class="s">{% if L.broker.setup_status == 'complete' %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
+        <div class="k">Identity</div><div class="v">{% if L.broker.identity_confirmed %}Confirmed{% else %}<span class="fx-source fx-danger-text">New email needs confirmation</span>{% endif %}</div><div class="s">{% if L.broker.identity_confirmed %}<svg class="i sm"><use href="#i-check"/></svg>{% endif %}</div>
       </div>
       {% if L.thread.id and L.status not in ['closed', 'booked'] %}
       <details class="fx-mt10">
@@ -410,6 +416,9 @@
           <label>Credit score<input type="number" name="credit_score" min="0" step="1" value="{{ L.broker.credit_score|int if L.broker.credit_score is not none else '' }}"></label>
           <label class="wide">Credit notes<input name="credit_notes" value="{{ L.broker.credit_notes }}"></label>
           <label>Setup<select name="setup_status">{% for s in ['not_started', 'packet_sent', 'complete'] %}<option value="{{ s }}" {% if L.broker.setup_status == s %}selected{% endif %}>{{ s.replace('_', ' ')|capitalize }}</option>{% endfor %}</select></label>
+          {% if not L.broker.identity_confirmed %}
+          <label class="check wide"><input type="checkbox" name="identity_confirmed" value="yes"> Confirm the new email address belongs to {{ L.broker.legal_name or L.broker.domain or 'this broker' }}</label>
+          {% endif %}
           <label class="check wide"><input type="checkbox" name="blocked" value="yes" {% if L.broker.blocked %}checked{% endif %}> Block this broker</label>
           <button type="submit" class="fx-btn primary wide fx-center">Save broker</button>
         </form>
