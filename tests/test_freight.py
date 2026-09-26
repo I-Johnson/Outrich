@@ -959,3 +959,59 @@ class FreightDriverSafetyTests(unittest.TestCase):
         self.assertEqual(freight_module.truck_availability(profile, load, self.storage)['status'], 'conflict')
         later = self._load(pickup_date='2026-10-02')
         self.assertEqual(freight_module.truck_availability(profile, later, self.storage)['status'], 'available')
+
+
+class FreightBrokerTests(unittest.TestCase):
+    """Phase 4: broker identity, credit and setup gating."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = OwnerStore(SQLiteStore(self.tmp.name + '/broker.db'), ADMIN_OWNER_ID)
+        self.storage.init()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_resolve_creates_then_matches_by_email(self):
+        broker = freight_module.resolve_broker('Dispatch@ABCLogistics.com', 'ABC Logistics', self.storage)
+        self.assertEqual(broker['domain'], 'abclogistics.com')
+        self.assertEqual(broker['emails'], ['dispatch@abclogistics.com'])
+        self.assertEqual(broker['credit_status'], 'unknown')
+        again = freight_module.resolve_broker('dispatch@abclogistics.com', '', self.storage)
+        self.assertEqual(again['id'], broker['id'])
+
+    def test_resolve_matches_domain_and_appends_email(self):
+        broker = freight_module.resolve_broker('one@xyz.com', 'XYZ', self.storage)
+        second = freight_module.resolve_broker('two@xyz.com', '', self.storage)
+        self.assertEqual(second['id'], broker['id'])
+        self.assertEqual(sorted(second['emails']), ['one@xyz.com', 'two@xyz.com'])
+
+    def test_update_broker_validates_statuses(self):
+        broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
+        updated = freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'credit_score': '92', 'setup_status': 'complete', 'mc_number': 'MC-123'}, self.storage)
+        self.assertEqual(updated['credit_status'], 'approved')
+        self.assertEqual(updated['credit_score'], 92.0)
+        with self.assertRaises(ValueError):
+            freight_module.update_broker(broker['id'], {'credit_status': 'great'}, self.storage)
+
+    def test_readiness_blocks_until_credit_and_setup_done(self):
+        stamp = now_iso()
+        self.storage.insert('freight_truck_profiles', {'id': 'p1', 'name': 'T', 'max_weight_lbs': 45000, 'shareable_fields': [], 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        self.storage.insert('freight_missions', {'id': 'm1', 'name': 'M', 'truck_profile_id': 'p1', 'permissions': {}, 'active': True, 'created_at': stamp, 'updated_at': stamp})
+        broker = freight_module.resolve_broker('a@b.com', 'B Co', self.storage)
+        load = self.storage.insert('freight_loads', {'id': new_id(), 'mission_id': 'm1', 'truck_profile_id': 'p1', 'broker_id': broker['id'], 'broker_email': 'a@b.com', 'origin_city': 'Phoenix', 'origin_state': 'AZ', 'origin_verified': 1, 'destination_city': 'Dallas', 'destination_state': 'TX', 'destination_verified': 1, 'equipment_verified': 1, 'schedule_verified': 1, 'loaded_miles': 1000, 'loaded_miles_verified': 1, 'deadhead_miles': 50, 'deadhead_miles_verified': 1, 'weight_lbs': 40000, 'subject': 's', 'status': 'waiting', 'created_at': stamp, 'updated_at': stamp})
+        mission = self.storage.get('freight_missions', 'm1')
+        profile = self.storage.get('freight_truck_profiles', 'p1')
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('broker credit approval', blockers)
+        self.assertIn('broker setup packet', blockers)
+        freight_module.update_broker(broker['id'], {'credit_status': 'approved', 'setup_status': 'complete'}, self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertEqual(blockers, [])
+        freight_module.update_broker(broker['id'], {'blocked': True}, self.storage)
+        blockers = freight_module._booking_readiness_blockers(load, mission, profile, self.storage)
+        self.assertIn('blocked broker (B Co)', blockers)
+
+    def test_internal_blockers_never_asked_of_broker(self):
+        labels = freight_module._broker_detail_labels(['broker credit approval', 'broker setup packet', 'blocked broker (B Co)', 'truck availability (Truck is marked off duty)', 'stop 1 pickup (Phoenix, AZ) confirmed', 'broker load weight'], [])
+        self.assertEqual(labels, ['load weight'])

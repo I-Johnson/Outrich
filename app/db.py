@@ -23,11 +23,12 @@ JSON_FIELDS = {
     "freight_messages": {"classification"},
     "freight_drafts": {"policy_snapshot"},
     "freight_negotiation_events": {"details"},
+    "freight_brokers": {"emails"},
 }
 # Freight tables that carry owner_id + vertical (gmail_senders, freight_settings
 # and email_templates are handled separately).
 OWNED_FREIGHT_TABLES = (
-    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_threads",
+    "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_threads",
     "freight_messages", "freight_drafts", "freight_negotiation_events", "freight_alerts",
     "freight_mail_cursors",
 )
@@ -157,6 +158,8 @@ class SQLiteStore:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN schedule_verified INTEGER NOT NULL DEFAULT 0")
             if "weight_lbs" not in load_columns:
                 con.execute("ALTER TABLE freight_loads ADD COLUMN weight_lbs REAL")
+            if "broker_id" not in load_columns:
+                con.execute("ALTER TABLE freight_loads ADD COLUMN broker_id TEXT")
             profile_columns = {row[1] for row in con.execute("PRAGMA table_info(freight_truck_profiles)")}
             for column, ddl in (
                 ("truck_vin", "TEXT NOT NULL DEFAULT ''"),

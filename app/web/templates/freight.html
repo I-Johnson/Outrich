@@ -343,6 +343,32 @@
       </details>
       {% endif %}
     </div>
+    {% if L.broker %}
+    <div>
+      <h3>Broker</h3>
+      <div class="fx-facts">
+        <div class="k">Company</div><div class="v">{{ L.broker.legal_name or L.broker.domain or 'Unknown' }}</div><div class="s">{% if L.broker.blocked %}<span class="fx-source" style="color:#dc2626">Blocked</span>{% endif %}</div>
+        <div class="k">MC</div><div class="v {{ '' if L.broker.mc_number else 'none' }}">{{ L.broker.mc_number or 'Not on file' }}</div><div class="s"></div>
+        <div class="k">Credit</div><div class="v">{{ L.broker.credit_status|capitalize }}{% if L.broker.credit_score %} ({{ L.broker.credit_score|int }}){% endif %}</div><div class="s">{% if L.broker.credit_status in ['approved', 'exempt'] %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
+        <div class="k">Setup</div><div class="v">{{ L.broker.setup_status.replace('_', ' ')|capitalize }}</div><div class="s">{% if L.broker.setup_status == 'complete' %}<svg class="i sm"><use href="#i-check"/></svg>{% else %}<span class="fx-source">Review</span>{% endif %}</div>
+      </div>
+      {% if L.thread.id and L.status not in ['closed', 'booked'] %}
+      <details style="margin-top:10px">
+        <summary class="fx-muted" style="cursor:pointer;font-size:12.5px">Update broker</summary>
+        <form action="/freight/brokers/{{ L.broker.id }}/update" method="post" class="fx-verify-form">
+          <label>Legal name<input name="legal_name" value="{{ L.broker.legal_name }}"></label>
+          <label>MC number<input name="mc_number" value="{{ L.broker.mc_number }}"></label>
+          <label>Credit status<select name="credit_status">{% for s in ['unknown', 'approved', 'denied', 'exempt'] %}<option value="{{ s }}" {% if L.broker.credit_status == s %}selected{% endif %}>{{ s|capitalize }}</option>{% endfor %}</select></label>
+          <label>Credit score<input type="number" name="credit_score" min="0" step="1" value="{{ L.broker.credit_score|int if L.broker.credit_score is not none else '' }}"></label>
+          <label class="wide">Credit notes<input name="credit_notes" value="{{ L.broker.credit_notes }}"></label>
+          <label>Setup<select name="setup_status">{% for s in ['not_started', 'packet_sent', 'complete'] %}<option value="{{ s }}" {% if L.broker.setup_status == s %}selected{% endif %}>{{ s.replace('_', ' ')|capitalize }}</option>{% endfor %}</select></label>
+          <label class="check wide"><input type="checkbox" name="blocked" value="yes" {% if L.broker.blocked %}checked{% endif %}> Block this broker</label>
+          <button type="submit" class="fx-btn primary wide" style="justify-content:center">Save broker</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if L.stops %}
     <div>
       <h3>Route stops</h3>
