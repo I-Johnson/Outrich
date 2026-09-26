@@ -490,6 +490,7 @@ def freight_missions(request: Request, mission_id: str = "", profile_id: str = "
     missions = db.list("freight_missions", order="created_at desc", limit=500)
     profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     fsettings = db.get("freight_settings", 1) or {}
+    gmail_senders = [row for row in list_gmail_senders(active_only=True, storage=db, cfg=db.get("settings", 1) or {}) if row.get("provider", "gmail") == "gmail"]
     active_tab = tab or ("trucks" if profile_id else "missions")
     edit_mission = db.get("freight_missions", mission_id) if mission_id else None
     if not edit_mission and not mission_id:
@@ -497,7 +498,7 @@ def freight_missions(request: Request, mission_id: str = "", profile_id: str = "
     return page(
         request, "freight_missions.html", workspace="freight", missions=missions, profiles=profiles, fx_nav=freight_nav(db),
         loads=db.list("freight_loads", order="updated_at desc", limit=500),
-        freight_settings=fsettings, active_tab=active_tab,
+        freight_settings=fsettings, gmail_senders=gmail_senders, active_tab=active_tab,
         edit_mission=edit_mission,
         edit_profile=db.get("freight_truck_profiles", profile_id) if profile_id else None,
     )
