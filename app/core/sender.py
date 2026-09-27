@@ -363,15 +363,39 @@ def recover_interrupted_sends(now: datetime | None = None, storage=None) -> int:
     return len(stale)
 
 
+# Audience scans use one shared limit so the count shown in the builder
+# covers exactly the leads a queue run can reach.
+AUDIENCE_SCAN_LIMIT = 10000
+
+
+def eligible_client_ids(clients, blocked_emails, blocked_domains, logs, resend_block_days, now=None):
+    """Leads a queue run would actually email: drops replied/do-not-contact/bounced,
+    suppressed emails/domains, and anyone contacted inside the resend block window."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=int(resend_block_days or 90))
+    eligible = []
+    for client in clients:
+        if client.get("status") in {"replied", "do_not_contact", "bounced"}:
+            continue
+        if str(client.get("email") or "").lower() in blocked_emails or str(client.get("domain") or "").lower() in blocked_domains:
+            continue
+        prior = [l for l in logs if l.get("client_id") == client["id"] and l.get("status") in {"queued", "sending", "sent", "replied"}]
+        if any(datetime.fromisoformat((l.get("sent_at") or l.get("created_at")).replace("Z", "+00:00")) >= cutoff for l in prior):
+            continue
+        eligible.append(client)
+    return eligible
+
+
 def queue_campaign(campaign_id: str, client_ids: set[str] | None = None, storage=None) -> dict:
     s = storage or store
     campaign = s.get("campaigns", campaign_id)
     if not campaign: raise ValueError("Campaign not found")
+    previous_state = str(campaign.get("state") or "draft")
     templates = [s.get("email_templates", tid) for tid in campaign.get("template_ids", [])]
     templates = [t for t in templates if t and t.get("active")]
     if not templates: raise ValueError("Select at least one active template")
     cfg = app_settings(s)
-    all_clients = s.list("clients", order="created_at asc", limit=10000)
+    all_clients = s.list("clients", order="created_at asc", limit=AUDIENCE_SCAN_LIMIT)
     if client_ids is None:
         clients = [c for c in all_clients if _matches(c, campaign.get("target_filter") or {})]
     else:
@@ -401,6 +425,16 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None, storage
         gmail_accounts = ["1"]
         
     now = datetime.now(timezone.utc)
+    eligible = eligible_client_ids(clients, blocked_emails, blocked_domains, logs, campaign.get("resend_block_days"), now)
+    pending = any(log.get("campaign_id") == campaign_id and log.get("status") in {"queued", "sending"} for log in logs)
+    if not pending:
+        if not clients:
+            if client_ids is None:
+                raise ValueError("No leads match this audience yet. Adjust the filters, run discovery, or import a list first.")
+            raise ValueError("Those selected leads are no longer in your audience.")
+        if not eligible:
+            raise ValueError("None of the {} matching leads are eligible to send right now - already contacted, replied, bounced, or on the suppression list.".format(len(clients)))
+    skipped += len(clients) - len(eligible)
     global_counts, daily_cursors = _global_schedule_state(logs, schedule_cfg, now)
     assigned_accounts: Counter[str] = Counter()
 
@@ -418,13 +452,7 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None, storage
                     if m > pingram_cursor:
                         pingram_cursor = m
 
-    for client in clients:
-        if client.get("status") in {"replied", "do_not_contact", "bounced"} or str(client.get("email") or "").lower() in blocked_emails or str(client.get("domain") or "").lower() in blocked_domains:
-            skipped += 1; continue
-        prior = [l for l in logs if l.get("client_id") == client["id"] and l.get("status") in {"queued", "sending", "sent", "replied"}]
-        cutoff = datetime.now(timezone.utc) - timedelta(days=int(campaign.get("resend_block_days") or 90))
-        if any(datetime.fromisoformat((l.get("sent_at") or l.get("created_at")).replace("Z", "+00:00")) >= cutoff for l in prior): skipped += 1; continue
-
+    for client in eligible:
         if is_pingram:
             account, cursor, pingram_cursor = _choose_pingram_conveyor_slot(
                 gmail_accounts, pingram_cursor, pingram_counts, pingram_assigned,
@@ -446,7 +474,6 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None, storage
         s.insert("email_log", {"id": new_id(), "client_id": client["id"], "template_id": template["id"], "campaign_id": campaign_id,
             "provider": campaign["provider"], "sender_account": account, "subject_sent": subject, "body_sent": body, "scheduled_for": cursor.isoformat(), "status": "queued", "attempt_count": 0, "created_at": now_iso()})
         s.update("clients", client["id"], {"status": "queued", "updated_at": now_iso()}); queued += 1
-    previous_state = str(campaign.get("state") or "draft")
     if queued:
         next_state = "paused" if previous_state == "paused" else "running"
     elif previous_state in {"running", "paused"} and any(
