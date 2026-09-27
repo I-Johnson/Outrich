@@ -13,6 +13,7 @@ SEND_LEASE_MINUTES = 15
 from app.adapters import get_provider
 from app.adapters.base import SendResult
 from app.config import settings as env
+from app.core import billing
 from app.core.gmail_senders import get_gmail_sender, list_gmail_senders, sender_context
 from app.core.lead_status import set_client_status
 from app.core.schedule import in_send_window, next_send_day_start, next_send_time
@@ -490,6 +491,11 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None, storage
 def send_due(limit: int = 25, only_id: str | None = None, storage=None) -> dict:
     s = storage or store
     stamp = now_iso(); now = datetime.now(timezone.utc)
+    owner = getattr(s, "owner_id", None)
+    if owner and not billing.owner_has_access(getattr(s, "base", s), owner):
+        # Subscription lapsed mid-queue: leave every message queued until
+        # access returns instead of sending mail a lapsed account promised.
+        return {"sent": 0, "failed": 0, "deferred": 0, "paused": True, "dry_run": env.DRY_RUN}
     recover_interrupted_sends(now)
     if only_id:
         target = s.get("email_log", only_id)

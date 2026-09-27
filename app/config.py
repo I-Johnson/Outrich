@@ -56,6 +56,8 @@ class Settings:
     STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+    # Where billing support mail goes; defaults to the operator's admin email.
+    SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", os.getenv("ADMIN_EMAIL", "admin@example.com")).strip()
 
     @property
     def using_supabase(self) -> bool:

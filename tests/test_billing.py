@@ -155,6 +155,7 @@ class BillingTests(unittest.TestCase):
         self.assertIn("Early access", page.text)
         self.assertIn("$0", page.text)
         self.assertIn("free forever", page.text)
+        self.assertNotIn("$25", page.text)
         self.assertNotIn("Cancel anytime", page.text)
         self.assertNotIn("/billing/checkout", page.text)
         settings = self.client.get("/settings")
@@ -220,6 +221,60 @@ class BillingTests(unittest.TestCase):
             response = self.client.post("/billing/portal", follow_redirects=False)
         self.assertEqual(response.headers["location"], "https://billing.stripe.com/test-portal")
         self.assertEqual(create.call_args.kwargs["customer"], "cus_123")
+
+    # --- worker entitlement ---
+
+    def seed_queued_work(self, user):
+        from app.core.tenancy import OwnerStore
+        scoped = OwnerStore(self.raw, str(user["id"]))
+        scoped.insert("campaigns", {"id": "camp_1", "name": "C", "state": "running", "created_at": now_iso(), "updated_at": now_iso()})
+        scoped.insert("email_log", {"id": "log_1", "campaign_id": "camp_1", "provider": "gmail", "subject_sent": "Hi",
+                                    "status": "queued", "scheduled_for": "2020-01-01T00:00:00+00:00", "created_at": now_iso()})
+        scoped.insert("gmail_senders", {"id": "sender_1", "email": "sender@example.com", "created_at": now_iso(), "updated_at": now_iso()})
+        return scoped
+
+    def test_lapsed_account_queued_email_never_sends(self):
+        from app.core import sender as sender_core
+        _, user = self.signup()
+        scoped = self.seed_queued_work(user)
+        self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
+                                                  "stripe_subscription_status": "active", "stripe_current_period_end": self.future(10)})
+        self.assertTrue(billing.owner_has_access(self.raw, str(user["id"])))
+        # The subscription lapses: past due beyond the paid period.
+        self.raw.update("app_users", user["id"], {"stripe_subscription_status": "past_due", "stripe_current_period_end": self.future(-1)})
+        self.assertFalse(billing.owner_has_access(self.raw, str(user["id"])))
+        result = sender_core.send_due(limit=10, storage=scoped)
+        self.assertTrue(result.get("paused"))
+        self.assertEqual(result["sent"], 0)
+        # The queued message is preserved, not dropped or marked sent.
+        self.assertEqual(scoped.get("email_log", "log_1")["status"], "queued")
+        # Access resumes on a confirmed-active subscription.
+        self.raw.update("app_users", user["id"], {"stripe_subscription_status": "active", "stripe_current_period_end": self.future(10)})
+        self.assertTrue(billing.owner_has_access(self.raw, str(user["id"])))
+
+    def test_worker_skips_lapsed_owners_in_both_workspaces(self):
+        from app.jobs import scheduler
+        _, user = self.signup()
+        self.seed_queued_work(user)
+        self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
+                                                  "stripe_subscription_status": "past_due", "stripe_current_period_end": self.future(-1)})
+        with patch.object(scheduler, "store", self.raw), \
+             patch.object(scheduler, "send_due") as send_due, \
+             patch.object(scheduler, "poll_freight_replies") as poll, \
+             patch.object(scheduler, "recover_uncertain_freight_sends"):
+            scheduler.tick()
+        for call in send_due.call_args_list:
+            self.assertNotEqual(call.kwargs["storage"].owner_id, str(user["id"]))
+        poll.assert_not_called()
+        # Grandfathered accounts are never paused.
+        self.grandfather(user)
+        with patch.object(scheduler, "store", self.raw), \
+             patch.object(scheduler, "send_due") as send_due, \
+             patch.object(scheduler, "poll_freight_replies"), \
+             patch.object(scheduler, "recover_uncertain_freight_sends"):
+            scheduler.tick()
+        owners = [call.kwargs["storage"].owner_id for call in send_due.call_args_list]
+        self.assertIn(str(user["id"]), owners)
 
     # --- webhooks ---
 
@@ -305,7 +360,12 @@ class BillingTests(unittest.TestCase):
         page = self.client.get("/billing?billing=pending")
         self.assertIn("Payment submitted", page.text)
         self.assertIn("refresh this page", page.text)
+        self.assertIn("mailto:", page.text)
         self.assertNotIn("Welcome aboard", page.text)
+        # No second Checkout while the first payment is confirming.
+        self.assertNotIn("/billing/checkout", page.text)
+        # The plain Plan page keeps the retry path open.
+        self.assertIn("/billing/checkout", self.client.get("/billing").text)
         self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
                                                   "stripe_subscription_status": "active", "stripe_current_period_end": self.future(30)})
         page = self.client.get("/billing?billing=pending")

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import stripe
 
 from app.config import settings as env
+from app.core.tenancy import ADMIN_OWNER_ID
 
 PLAN_MONTHLY_USD = 25
 ACTIVE_STATUSES = {"trialing", "active"}
@@ -109,7 +110,31 @@ def plan_state(user: dict | None, *, admin: bool = False) -> dict:
         "can_manage": bool(user.get("stripe_customer_id")),
         "renews_at": end.strftime("%b %-d, %Y") if end and status in ACTIVE_STATUSES else "",
         "access_until": end.strftime("%b %-d, %Y") if end and status in {"canceled", "past_due"} and access else "",
+        "support_email": env.SUPPORT_EMAIL,
     }
+
+
+def owner_has_access(base, owner_id: str) -> bool:
+    """Worker-side entitlement gate for queued outbound work.
+
+    Campaign sends and freight polling pause while the owner's subscription
+    is lapsed and resume when access returns - queued rows are preserved,
+    never dropped.
+
+    - Billing off (Stripe keys absent) lets every owner run.
+    - The admin owner and unknown (pre-billing/legacy) owners always run.
+    - Otherwise the owner's app_users row decides; admin and exempt accounts
+      are covered by has_access.
+    """
+    if not configured():
+        return True
+    owner_id = str(owner_id)
+    if owner_id == ADMIN_OWNER_ID:
+        return True
+    user = base.get("app_users", owner_id)
+    if not user:
+        return True
+    return has_access(user, admin=user.get("role") == "admin")
 
 
 def create_checkout_session(user: dict, *, success_url: str, cancel_url: str) -> str:
