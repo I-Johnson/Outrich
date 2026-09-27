@@ -1,6 +1,5 @@
 {% extends "customer/base.html" %}
 {% block title %}Campaigns - Outrich{% endblock %}
-{% block head %}{% if active_job %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
 {% block main %}
 <div class="head">
   <div>
@@ -12,7 +11,7 @@
 <div class="grid two">
   <div class="card">
     <div class="eyebrow">Create campaign</div>
-    <div class="steps" id="steps" role="tablist" aria-label="Campaign steps">
+    <div class="steps" id="steps" role="group" aria-label="Campaign steps">
       <button type="button" class="step selected" data-goto="1" aria-current="step">1 Find</button>
       <button type="button" class="step" data-goto="2">2 Audience</button>
       <button type="button" class="step" data-goto="3">3 Message</button>
@@ -36,11 +35,13 @@
         <div class="field"><label for="f-csv">Or bring your own list (CSV)</label><input type="file" id="f-csv" name="file" accept=".csv" required></div>
         <button class="btn subtle" type="submit">Preview import</button>
       </form>
-      {% if scrape_jobs %}
-      <h3 style="margin-top:22px">Recent discovery</h3>
-      {% for j in scrape_jobs %}<div class="row"><div><b>{{ j.category }} - {{ j.city }}, {{ j.state }}</b><small>{{ j.status|capitalize }} · {{ j.saved_count }} saved of {{ j.found_count }} found</small></div><span class="pill {{ 'amber' if j.status in ('queued','running') else '' }}">{{ j.status }}</span></div>{% endfor %}
-      {% endif %}
-      <div class="note">{% if active_job %}Discovery is running. This page refreshes every 15 seconds until results land.{% else %}Discovery runs in the background. Nothing sends automatically after discovery.{% endif %}</div>
+      <div id="discovery-live" data-active="{{ '1' if active_job else '0' }}">
+        <h3 style="margin-top:22px" id="discovery-head" {{ 'style="display:none"' if not scrape_jobs else '' }}>Recent discovery</h3>
+        <div id="discovery-jobs">
+          {% for j in scrape_jobs %}<div class="row"><div><b>{{ j.category }} - {{ j.city }}, {{ j.state }}</b><small>{{ j.status|capitalize }} · {{ j.saved_count }} saved of {{ j.found_count }} found</small></div><span class="pill {{ 'amber' if j.status in ('queued','running') else '' }}">{{ j.status }}</span></div>{% endfor %}
+        </div>
+        <div class="note" id="discovery-note">{% if active_job %}Discovery is running. This list updates itself - your builder picks stay put.{% else %}Discovery runs in the background. Nothing sends automatically after discovery.{% endif %}</div>
+      </div>
       <div class="builder-nav"><span></span><button class="btn" type="button" data-next="2">Continue to audience</button></div>
     </div>
 
@@ -58,7 +59,7 @@
         <div class="field"><label for="a-city">City</label><input type="text" id="a-city" name="city" placeholder="Austin"></div>
         <div class="field"><label for="a-status">Only leads with status</label><select id="a-status" name="status"><option value="">Any eligible</option><option value="new">New</option></select></div>
       </div>
-      <p class="fine">{% if import_batch %}{{ import_batch.leads }} leads in the imported list.{% else %}{{ lead_count }} leads in your account.{% endif %} Discovery results and imports land here once saved.</p>
+      <p class="fine" id="audience-count" data-total="{{ lead_count }}">{% if import_batch %}{{ import_batch.leads }} leads in the imported list.{% else %}{{ lead_count }} leads in your account.{% endif %} Discovery results and imports land here once saved.</p>
       <div class="builder-nav"><button class="btn subtle" type="button" data-next="1">Back</button><button class="btn" type="button" data-next="3">Continue to message</button></div>
     </div>
 
@@ -119,7 +120,7 @@
         <div><dt>Sender</dt><dd id="rv-senders">None selected yet</dd></div>
         <div><dt>Schedule</dt><dd>{{ cfg.get('send_start') or '09:00' }}-{{ cfg.get('send_end') or '17:00' }} {{ cfg.get('timezone') or 'America/New_York' }}, up to {{ cfg.get('daily_cap') or 20 }} emails per sender per day</dd></div>
       </dl>
-      <div class="mini" id="rv-sample" style="display:none;margin-top:14px"><b id="rv-sample-subject"></b><small id="rv-sample-body"></small></div>
+      <div class="mini" id="rv-sample" style="display:none;margin-top:14px"><b id="rv-sample-subject"></b><small id="rv-sample-body"></small><small style="margin-top:6px">Variables like {{ '{{first_name}}' }} are filled per lead when the email sends.</small></div>
       <div class="note">{% if env.DRY_RUN %}Dry run is on: the campaign queues and tracks everything, but no live email leaves your account until dry run is turned off.{% else %}Live sending is on: once you press Start on the campaign page, real emails go out from your sender on the schedule above.{% endif %} Nothing sends when you create - you press Start on the campaign page.</div>
       <div class="builder-nav"><button class="btn subtle" type="button" data-next="4">Back</button><button class="btn" type="submit" form="builder-form">Create campaign</button></div>
     </div>
@@ -157,13 +158,22 @@
   const steps = document.querySelectorAll('#steps .step');
   const hint = document.getElementById('step-hint');
   let current = 1;
+  let audienceCount = null;
   const tpls = () => [...document.querySelectorAll('input[name="template_ids"]:checked')];
   const snds = () => [...document.querySelectorAll('input[name="gmail_accounts"]:checked')];
   const say = (msg) => { hint.textContent = msg || ''; };
+  const providerMix = () => new Set(snds().map(x => x.dataset.provider || 'gmail')).size > 1;
+  const syncProvider = () => {
+    const chosen = snds();
+    const hidden = document.querySelector('input[name="provider"]');
+    if (hidden && chosen.length && !providerMix()) hidden.value = chosen[0].dataset.provider || 'gmail';
+  };
   const allowed = (n) => {
     if (n <= current) return true;
+    if (n >= 3 && audienceCount === 0) { say('No leads match this audience yet. Adjust the filters, run discovery, or import a list first.'); return false; }
     if (n >= 4 && !tpls().length) { say('Pick at least one template in step 3 before moving on.'); return false; }
     if (n >= 5 && !snds().length) { say('Choose a sender in step 4 before reviewing.'); return false; }
+    if (n >= 5 && providerMix()) { say('Selected senders use different providers. Pick senders from a single provider.'); return false; }
     return true;
   };
   const go = (n) => {
@@ -194,7 +204,8 @@
     if (city.trim()) bits.push(city.trim());
     if (state.trim()) bits.push(state.trim().toUpperCase());
     if (status) bits.push('status: ' + status);
-    return bits.length ? bits.join(' · ') : 'Every eligible lead ({{ lead_count }} in your account)';
+    const countText = audienceCount === null ? '' : (' - ' + audienceCount + (audienceCount === 1 ? ' lead matches' : ' leads match'));
+    return (bits.length ? bits.join(' · ') : 'Every eligible lead') + countText;
   };
   const refresh = () => {
     const nameEl = document.getElementById('campaign-name');
@@ -211,16 +222,73 @@
     const sample = document.getElementById('rv-sample');
     if (first) {
       sample.style.display = '';
-      document.getElementById('rv-sample-subject').textContent = 'Sample - ' + (first.dataset.subject || first.dataset.name);
+      document.getElementById('rv-sample-subject').textContent = 'Template excerpt - ' + (first.dataset.subject || first.dataset.name);
       document.getElementById('rv-sample-body').textContent = first.dataset.body || '';
     } else if (sample) { sample.style.display = 'none'; }
   };
   document.addEventListener('input', (e) => { if (e.target.closest('.card')) refresh(); });
-  document.addEventListener('change', (e) => { if (e.target.closest('.card')) refresh(); });
+  document.addEventListener('change', (e) => { if (e.target.closest('.card')) { syncProvider(); refresh(); } });
   document.getElementById('builder-form').addEventListener('submit', (e) => {
     if (!tpls().length) { e.preventDefault(); go(3); say('Pick at least one template before creating.'); }
     else if (!snds().length) { e.preventDefault(); go(4); say('Choose a sender before creating.'); }
+    else if (providerMix()) { e.preventDefault(); go(4); say('Selected senders use different providers. Pick senders from a single provider.'); }
   });
+
+  // Live audience count (debounced); zero matches halt forward progress
+  let countTimer = null;
+  const countBox = document.getElementById('audience-count');
+  const fetchCount = () => {
+    const params = new URLSearchParams();
+    for (const key of ['category', 'state', 'city', 'status']) {
+      const el = document.querySelector('[name="' + key + '"]');
+      if (el && el.value.trim()) params.set(key, el.value.trim());
+    }
+    const batch = document.querySelector('input[name="import_batch_id"]');
+    if (batch) params.set('import_batch_id', batch.value);
+    fetch('/campaigns/audience-count?' + params.toString(), {headers: {'Accept': 'application/json'}})
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        audienceCount = data.count;
+        if (countBox) countBox.textContent = audienceCount + (audienceCount === 1 ? ' lead matches' : ' leads match') + ' this audience. Discovery results and imports land here once saved.';
+        refresh();
+      })
+      .catch(() => {});
+  };
+  const scheduleCount = () => { clearTimeout(countTimer); countTimer = setTimeout(fetchCount, 350); };
+  for (const key of ['category', 'state', 'city', 'status']) {
+    const el = document.querySelector('[name="' + key + '"]');
+    if (el) { el.addEventListener('input', scheduleCount); el.addEventListener('change', scheduleCount); }
+  }
+  fetchCount();
+
+  // Scoped discovery status polling - DOM updates only, never a page reload
+  const live = document.getElementById('discovery-live');
+  if (live && live.dataset.active === '1') {
+    const jobsBox = document.getElementById('discovery-jobs');
+    const note = document.getElementById('discovery-note');
+    const head = document.getElementById('discovery-head');
+    const timer = setInterval(() => {
+      fetch('/campaigns/discovery-status', {headers: {'Accept': 'application/json'}})
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data) return;
+          if (data.jobs.length && head) head.style.display = '';
+          if (jobsBox) jobsBox.innerHTML = data.jobs.map(j => {
+            const amber = (j.status === 'queued' || j.status === 'running') ? 'amber' : '';
+            const status = j.status.charAt(0).toUpperCase() + j.status.slice(1);
+            return '<div class="row"><div><b>' + j.category + ' - ' + j.city + ', ' + j.state + '</b><small>' + status + ' · ' + j.saved_count + ' saved of ' + j.found_count + ' found</small></div><span class="pill ' + amber + '">' + j.status + '</span></div>';
+          }).join('');
+          if (!data.active) {
+            clearInterval(timer);
+            if (note) note.textContent = 'Discovery finished. Your new leads are ready in the Audience step.';
+            fetchCount();
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+  }
+  syncProvider();
   refresh();
 })();
 </script>

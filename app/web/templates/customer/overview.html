@@ -17,14 +17,13 @@
 {% if metrics.campaigns %}
 <div class="card section">
   <h2>Delivery funnel</h2>
-  <p>How leads move from queued to delivered to replied, across all campaigns.</p>
+  <p>Current backlog versus lifetime delivery, across all campaigns.</p>
   <div class="funnel">
-    {% set total = funnel.queued + funnel.delivered + funnel.replied %}
-    <div class="funnel-stage" style="flex:{{ funnel.queued if funnel.queued else 0.35 }}"><b>{{ funnel.queued }}</b><span>Queued</span></div>
+    <div class="funnel-stage"><b>{{ funnel.queued }}</b><span>Queued right now</span></div>
     <div class="funnel-arrow" aria-hidden="true">→</div>
-    <div class="funnel-stage mid" style="flex:{{ funnel.delivered if funnel.delivered else 0.35 }}"><b>{{ funnel.delivered }}</b><span>Delivered</span></div>
+    <div class="funnel-stage mid"><b>{{ funnel.delivered }}</b><span>Delivered, all time</span></div>
     <div class="funnel-arrow" aria-hidden="true">→</div>
-    <div class="funnel-stage end" style="flex:{{ funnel.replied if funnel.replied else 0.35 }}"><b>{{ funnel.replied }}</b><span>Replied</span></div>
+    <div class="funnel-stage end"><b>{{ funnel.replied }}</b><span>Replies, all time</span></div>
   </div>
 </div>
 {% endif %}

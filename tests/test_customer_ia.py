@@ -68,6 +68,21 @@ class CustomerIATests(unittest.TestCase):
         self.assertIn("roofers.csv", builder.text)
         self.assertIn(f'name="import_batch_id" value="{batch["id"]}"', builder.text)
 
+
+    def test_audience_count_and_discovery_status_are_scoped(self):
+        self.owner.insert("clients", {"id": new_id(), "business_name": "Acme Roofing", "short_name": "Acme", "email": "a@acme.test",
+                                      "status": "new", "source": "manual", "category": "roofing", "state": "TX",
+                                      "created_at": STAMP, "updated_at": STAMP})
+        self.owner.insert("clients", {"id": new_id(), "business_name": "Other Co", "short_name": "Other", "email": "b@other.test",
+                                      "status": "new", "source": "manual", "category": "dental", "state": "CA",
+                                      "created_at": STAMP, "updated_at": STAMP})
+        self.assertEqual(self.client.get("/campaigns/audience-count").json()["count"], 2)
+        self.assertEqual(self.client.get("/campaigns/audience-count?category=roofing").json()["count"], 1)
+        self.assertEqual(self.client.get("/campaigns/audience-count?category=roofing&state=CA").json()["count"], 0)
+        status = self.client.get("/campaigns/discovery-status")
+        self.assertEqual(status.status_code, 200)
+        self.assertIn("active", status.json())
+
     def test_admin_keeps_the_full_tools(self):
         admin = self.admin_client()
         overview = admin.get("/")

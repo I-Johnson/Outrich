@@ -387,9 +387,6 @@ def dashboard(request: Request):
         for c in rows:
             if c["state"] == "paused":
                 attention.append({"label": f"{c['name']} is paused - resume when ready", "href": f"/campaigns/{c['id']}", "kind": "paused"})
-        for c in rows:
-            if c["replies"]:
-                attention.append({"label": f"Review {c['replies']} {'reply' if c['replies'] == 1 else 'replies'} in {c['name']}", "href": f"/campaigns/{c['id']}", "kind": "replies"})
         return templates.TemplateResponse(request=request, name="customer/overview.html",
                                           context={"request": request, "env": env, "metrics": metrics, "campaigns": rows,
                                                    "funnel": funnel, "attention": attention[:4]})
@@ -1757,6 +1754,25 @@ def campaigns(request: Request, edit: str = "", batch_id: str = ""):
     cfg = s.get("settings", 1) or {}
     gmail_accounts = list_gmail_senders(active_only=True, storage=s, cfg=cfg)
     return page(request, "campaigns.html", campaigns=s.list("campaigns"), templates=s.list("email_templates", {"active": True, "vertical": "outreach"}), campaign=s.get("campaigns", edit) if edit else None, selected_batch=batch, batches=batches, batch_id=batch_id, gmail_accounts=gmail_accounts)
+
+
+@app.get("/campaigns/discovery-status")
+def campaign_discovery_status(request: Request):
+    s = outreach_store(request)
+    jobs = s.list("scrape_jobs", order="created_at desc", limit=5)
+    return {"jobs": [{"id": j["id"], "category": j.get("category"), "city": j.get("city"), "state": j.get("state"),
+                      "status": j.get("status"), "saved_count": j.get("saved_count") or 0, "found_count": j.get("found_count") or 0}
+                     for j in jobs],
+            "active": any(j.get("status") in ("queued", "running") for j in jobs)}
+
+
+@app.get("/campaigns/audience-count")
+def campaign_audience_count(request: Request, category: str = "", state: str = "", city: str = "", status: str = "", import_batch_id: str = ""):
+    from app.core.sender import _matches
+    s = outreach_store(request)
+    target = {k: v.strip() for k, v in {"category": category, "state": state, "city": city, "status": status, "import_batch_id": import_batch_id}.items() if v.strip()}
+    clients = s.list("clients", order="", limit=20000)
+    return {"count": sum(1 for c in clients if _matches(c, target))}
 
 
 @app.post("/campaigns/discovery")

@@ -98,7 +98,7 @@ input[type=file]::file-selector-button{border:1px solid var(--line);background:v
 .review dt{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700}
 .review dd{margin:0;font-size:13.5px;color:var(--ink);font-weight:500}
 .funnel{display:flex;align-items:stretch;gap:10px;margin-top:16px}
-.funnel-stage{background:#e6eee8;border:1px solid #c4d5ca;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:2px;min-width:90px;transition:flex .2s}
+.funnel-stage{flex:1;background:#e6eee8;border:1px solid #c4d5ca;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:2px;min-width:90px}
 .funnel-stage.mid{background:#dfeae1}
 .funnel-stage.end{background:var(--pine);color:#fff;border-color:var(--pine)}
 .funnel-stage b{font:600 26px 'Bricolage Grotesque'}

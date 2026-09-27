@@ -15,26 +15,30 @@
       <p>Emails go out from these identities. App passwords are stored encrypted.</p>
       {% if senders %}
       <table>
-        <thead><tr><th>Sender</th><th>Provider</th><th>State</th><th></th></tr></thead>
+        <thead><tr><th>Sender</th><th>Provider</th><th>State</th></tr></thead>
         <tbody>
         {% for snd in senders %}
           <tr>
             <td><b>{{ snd.display_name or snd.email }}</b><small>{{ snd.email }}</small></td>
             <td>{{ (snd.provider or 'gmail')|capitalize }}</td>
             <td><span class="pill {{ '' if snd.active else 'gray' }}">{{ "Active" if snd.active else "Off" }}</span></td>
-            <td class="test-cell">
-              <form method="post" action="/settings/test-email" class="test-form">
-                <input type="hidden" name="gmail_sender_id" value="{{ snd.id }}">
-                <input type="email" name="to" placeholder="you@example.com" required aria-label="Send a test email to">
-                <button class="btn subtle" type="submit">Test</button>
-              </form>
-            </td>
+
           </tr>
         {% endfor %}
         </tbody>
       </table>
       {% else %}
       <div class="empty">No sender connected yet. Add your Gmail below to start sending.</div>
+      {% endif %}
+      {% if senders %}
+      <form method="post" action="/settings/test-email" class="test-form" style="margin-top:16px;border-top:1px solid var(--line);padding-top:16px">
+        <label style="font-weight:600;font-size:12px">Send a test email</label>
+        <select name="gmail_sender_id" aria-label="From sender" style="max-width:240px">
+          {% for snd in senders %}<option value="{{ snd.id }}">{{ snd.display_name or snd.email }}</option>{% endfor %}
+        </select>
+        <input type="email" name="to" placeholder="you@example.com" required aria-label="Send a test email to" style="max-width:240px">
+        <button class="btn subtle" type="submit">Test</button>
+      </form>
       {% endif %}
       <details class="tpl-edit" style="margin-top:14px">
         <summary>Add a sender</summary>
@@ -64,8 +68,12 @@
       </div>
       <div class="field full" style="margin-top:14px"><label>Send on these days</label>
         <input type="hidden" name="send_days" value="">
+        {% set days = cfg.get('send_days') %}
+        {% if days is none %}{% set days = [0,1,2,3,4] %}{% endif %}
+        {% if days == [] %}
+        <div class="banner warn" style="margin-bottom:12px"><b>Sending is off</b>No send days are selected. Queued emails stay queued until you pick at least one day and save.</div>
+        {% endif %}
         <div class="checks">
-          {% set days = cfg.get('send_days') or [0,1,2,3,4] %}
           {% for label, val in [("Mon",0),("Tue",1),("Wed",2),("Thu",3),("Fri",4),("Sat",5),("Sun",6)] %}
           <label><input type="checkbox" name="send_days" value="{{ val }}" {{ 'checked' if val in days else '' }}> {{ label }}</label>
           {% endfor %}
@@ -111,20 +119,21 @@
       {% else %}
       <div class="empty">No templates yet.</div>
       {% endif %}
-      <details class="tpl-edit" style="margin-top:14px">
-        <summary>New template</summary>
-        <form method="post" action="/templates/save" class="inline-form">
-          <input type="hidden" name="vertical" value="outreach">
-          <input type="hidden" name="active" value="on">
-          <div class="fields">
-            <div class="field"><label>Name</label><input type="text" name="name" required></div>
-            <div class="field"><label>Type</label><select name="type"><option value="plain">Plain</option><option value="html">HTML</option></select></div>
-            <div class="field full"><label>Subject</label><input type="text" name="subject" required></div>
-            <div class="field full"><label>Body</label><textarea name="body" required></textarea></div>
-          </div>
-          <button class="btn light" type="submit">Save template</button>
-        </form>
-      </details>
+    </div>
+    <div class="card section">
+      <h2>Create a template</h2>
+      <p>New templates join your library and the campaign builder picker.</p>
+      <form method="post" action="/templates/save" class="inline-form">
+        <input type="hidden" name="vertical" value="outreach">
+        <input type="hidden" name="active" value="on">
+        <div class="fields">
+          <div class="field"><label>Name</label><input type="text" name="name" required></div>
+          <div class="field"><label>Type</label><select name="type"><option value="plain">Plain</option><option value="html">HTML</option></select></div>
+          <div class="field full"><label>Subject</label><input type="text" name="subject" required></div>
+          <div class="field full"><label>Body</label><textarea name="body" required></textarea></div>
+        </div>
+        <button class="btn light" type="submit">Save template</button>
+      </form>
     </div>
     <div class="card section">
       <h2>Freight</h2>
