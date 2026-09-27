@@ -972,11 +972,9 @@ if __name__ == "__main__": unittest.main()
 class WorkerSchedulerTests(unittest.TestCase):
     def test_tick_records_heartbeat(self):
         from app.jobs import scheduler
-        rows = {"settings": {1: {"id": 1}}, "jobs": {}}
 
         class MemoryStore:
             def list(self, table, filters=None, order="", limit=100, **kwargs): return []
-            def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
 
         with patch("app.jobs.scheduler.store", MemoryStore()), \
              patch.object(scheduler, "send_due"), \
@@ -985,11 +983,11 @@ class WorkerSchedulerTests(unittest.TestCase):
              patch.object(scheduler, "outreach_owner_ids", return_value=[]), \
              patch.object(scheduler, "freight_owner_ids", return_value=[]):
             scheduler.tick()
-        cfg = rows["settings"][1]
-        self.assertTrue(cfg.get("worker_last_tick_started_at"))
-        self.assertTrue(cfg.get("worker_last_tick_finished_at"))
-        self.assertIsNone(cfg.get("worker_last_error"))
-        self.assertEqual(cfg.get("worker_interval_seconds"), max(scheduler.settings.SCHEDULER_INTERVAL_SECONDS, 10))
+        beat = scheduler.heartbeat()
+        self.assertTrue(beat.get("last_tick_started_at"))
+        self.assertTrue(beat.get("last_tick_finished_at"))
+        self.assertIsNone(beat.get("last_error"))
+        self.assertEqual(beat.get("interval_seconds"), max(scheduler.settings.SCHEDULER_INTERVAL_SECONDS, 10))
 
     def test_start_schedules_immediate_first_tick(self):
         from app.jobs import scheduler
@@ -1010,12 +1008,6 @@ class WorkerSchedulerTests(unittest.TestCase):
     def test_health_reports_scheduler_state(self):
         from app import main as app_main
 
-        class S:
-            def get(self, table, row_id):
-                return {"worker_last_tick_started_at": "t0", "worker_last_tick_finished_at": "t1", "worker_last_error": None}
-
-        with patch.object(app_main, "store", S()):
-            body = app_main.health()
-        self.assertEqual(body["scheduler"]["last_tick_started_at"], "t0")
-        self.assertEqual(body["scheduler"]["last_tick_finished_at"], "t1")
-        self.assertIn("interval_seconds", body["scheduler"])
+        body = app_main.health()
+        for key in ("enabled", "interval_seconds", "scheduler_running", "last_tick_started_at"):
+            self.assertIn(key, body["scheduler"])

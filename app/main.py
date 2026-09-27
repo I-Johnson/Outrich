@@ -2324,16 +2324,9 @@ def pingram_reply_delete(request: Request, reply_id: str):
 
 @app.get("/health")
 def health():
-    cfg = store.get("settings", 1) or {}
     return {
         "ok": True,
         "database": "supabase" if env.using_supabase else "sqlite",
         "dry_run": env.DRY_RUN,
-        "scheduler": {
-            "enabled": env.SCHEDULER_ENABLED,
-            "interval_seconds": max(env.SCHEDULER_INTERVAL_SECONDS, 10),
-            "last_tick_started_at": cfg.get("worker_last_tick_started_at"),
-            "last_tick_finished_at": cfg.get("worker_last_tick_finished_at"),
-            "last_error": cfg.get("worker_last_error"),
-        },
+        "scheduler": scheduler.heartbeat(),
     }

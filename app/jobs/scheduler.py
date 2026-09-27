@@ -52,18 +52,18 @@ def recover_stale_jobs(now: datetime | None = None) -> int:
     return len(stale)
 
 
-def _record_heartbeat(started_at: str, error: str | None = None) -> None:
-    """Persist worker liveness so /health can show the scheduler is really ticking."""
-    try:
-        store.update("settings", 1, {
-            "worker_last_tick_started_at": started_at,
-            "worker_last_tick_finished_at": now_iso(),
-            "worker_interval_seconds": max(settings.SCHEDULER_INTERVAL_SECONDS, 10),
-            "worker_last_error": error,
-            "updated_at": now_iso(),
-        })
-    except Exception:
-        logger.exception("worker heartbeat write failed")
+# In-process worker liveness. The scheduler lives in this process, so this is
+# the truthful source for "is the worker ticking right now"; /health exposes it.
+_heartbeat: dict = {}
+
+
+def heartbeat() -> dict:
+    return {
+        "enabled": settings.SCHEDULER_ENABLED,
+        "interval_seconds": max(settings.SCHEDULER_INTERVAL_SECONDS, 10),
+        "scheduler_running": bool(_scheduler and getattr(_scheduler, "running", False)),
+        **_heartbeat,
+    }
 
 
 def tick():
@@ -75,8 +75,11 @@ def tick():
     except Exception as exc:
         error = str(exc)[:500]
         logger.exception("worker tick failed")
-    finally:
-        _record_heartbeat(started_at, error)
+    _heartbeat.update({
+        "last_tick_started_at": started_at,
+        "last_tick_finished_at": now_iso(),
+        "last_error": error,
+    })
     logger.info("worker tick finished")
 
 
