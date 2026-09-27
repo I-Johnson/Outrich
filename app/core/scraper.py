@@ -159,14 +159,15 @@ def crawl_contact(website: str) -> tuple[str, str]:
     return email, phone
 
 
-def process_scrape_job(job_id: str) -> dict:
-    job = store.get("scrape_jobs", job_id)
+def process_scrape_job(job_id: str, storage=None) -> dict:
+    s = storage or store
+    job = s.get("scrape_jobs", job_id)
     if not job: raise ValueError("Scrape job not found")
-    store.update("scrape_jobs", job_id, {"status": "running", "started_at": now_iso(), "updated_at": now_iso()})
+    s.update("scrape_jobs", job_id, {"status": "running", "started_at": now_iso(), "updated_at": now_iso()})
     found = saved = discarded = calls = 0
     try:
         candidates, calls = serp_candidates(job["category"], job["city"], job["state"], int(job["result_limit"])); found = len(candidates)
-        existing = store.list("clients", order="", limit=10000); required = (store.get("settings", 1) or {}).get("scrape_required_fields", ["email", "phone"])
+        existing = s.list("clients", order="", limit=10000); required = (s.get("settings", 1) or {}).get("scrape_required_fields", ["email", "phone"])
         for candidate in candidates:
             cand_site = candidate.get("website")
             if not cand_site and settings.SERP_API_KEY:
@@ -197,10 +198,10 @@ def process_scrape_job(job_id: str) -> dict:
             if not reason and "email" in required and not valid_email(email, check_mx=True): reason = "no_email_or_invalid_mx"
             if not reason and "phone" in required and not phone: reason = "no_phone"
             if reason:
-                store.insert("scrape_discards", {"id": new_id(), "scrape_job_id": job_id, "business_name": row["business_name"], "reason": reason, "created_at": now_iso()}); discarded += 1; continue
-            stamp = now_iso(); row.update({"id": new_id(), "created_at": stamp, "updated_at": stamp}); store.insert("clients", row); existing.append(row); saved += 1
-        store.update("scrape_jobs", job_id, {"status": "done", "found_count": found, "saved_count": saved, "discarded_count": discarded, "serp_calls_used": calls, "completed_at": now_iso(), "updated_at": now_iso()})
+                s.insert("scrape_discards", {"id": new_id(), "scrape_job_id": job_id, "business_name": row["business_name"], "reason": reason, "created_at": now_iso()}); discarded += 1; continue
+            stamp = now_iso(); row.update({"id": new_id(), "created_at": stamp, "updated_at": stamp}); s.insert("clients", row); existing.append(row); saved += 1
+        s.update("scrape_jobs", job_id, {"status": "done", "found_count": found, "saved_count": saved, "discarded_count": discarded, "serp_calls_used": calls, "completed_at": now_iso(), "updated_at": now_iso()})
         return {"found": found, "saved": saved, "discarded": discarded}
     except Exception as exc:
-        store.update("scrape_jobs", job_id, {"status": "failed", "found_count": found, "saved_count": saved, "discarded_count": discarded, "serp_calls_used": calls, "error": str(exc)[:1000], "completed_at": now_iso(), "updated_at": now_iso()})
+        s.update("scrape_jobs", job_id, {"status": "failed", "found_count": found, "saved_count": saved, "discarded_count": discarded, "serp_calls_used": calls, "error": str(exc)[:1000], "completed_at": now_iso(), "updated_at": now_iso()})
         raise

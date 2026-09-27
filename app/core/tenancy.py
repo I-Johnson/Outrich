@@ -1,9 +1,11 @@
-"""Per-user data isolation for the freight workspace.
+"""Per-user data isolation for both workspaces.
 
-Every freight table, the Gmail sender list and freight templates carry an
-``owner_id``. Request handlers and background jobs wrap the shared storage in
-an ``OwnerStore`` so every read, write and lookup by id is limited to one
-owner. Outreach tables stay admin-only and unscoped.
+Every freight table, the Gmail sender list, freight templates and the outreach
+tables (clients, campaigns, email_log, settings, scrape/import artifacts,
+replies, suppression and the work queue) carry an ``owner_id``. Request
+handlers and background jobs wrap the shared storage in an ``OwnerStore`` so
+every read, write and lookup by id is limited to one owner. Rows written
+before isolation (``owner_id`` NULL) belong to the admin owner.
 """
 from __future__ import annotations
 
@@ -19,7 +21,13 @@ OWNED_TABLES = frozenset({
     "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_bookings", "freight_threads",
     "freight_messages", "freight_attachments", "freight_drafts", "freight_negotiation_events", "freight_alerts",
     "freight_mail_cursors", "freight_settings", "gmail_senders", "email_templates",
+    "clients", "campaigns", "email_log", "settings", "scrape_jobs", "scrape_discards", "scrape_presets",
+    "import_batches", "pingram_replies", "suppression", "jobs",
 })
+
+# Tables with exactly one row per owner; callers still ask for the legacy
+# singleton id, which maps to the owner's own row.
+SINGLETON_TABLES = frozenset({"freight_settings", "settings"})
 
 
 class OwnerStore:
@@ -36,24 +44,33 @@ class OwnerStore:
         return self.owner_id == ADMIN_OWNER_ID
 
     def _mine(self, row: dict | None) -> bool:
-        return bool(row) and str(row.get("owner_id") or "") == self.owner_id
+        # Pre-isolation rows (owner_id NULL) are the admin's legacy data.
+        return bool(row) and str(row.get("owner_id") or ADMIN_OWNER_ID) == self.owner_id
 
-    def _settings_row(self) -> dict | None:
-        rows = self.base.list("freight_settings", {"owner_id": self.owner_id}, order="", limit=1)
-        return rows[0] if rows else None
+    def _singleton_row(self, table: str) -> dict | None:
+        rows = self.base.list(table, order="", limit=1000)
+        mine = [row for row in rows if self._mine(row)]
+        # Prefer the row explicitly stamped with this owner over a legacy NULL row.
+        mine.sort(key=lambda row: str(row.get("owner_id") or "") != self.owner_id)
+        return mine[0] if mine else None
 
     def list(self, table: str, filters: dict | None = None, order: str = "id desc", limit: int = 1000, select: str = "*"):
         filters = dict(filters or {})
         if table in OWNED_TABLES:
+            if self.is_admin and "owner_id" not in filters:
+                # Admin scope includes legacy NULL-owner rows; filter in Python
+                # because SQL NULL never matches an equality check.
+                rows = self.base.list(table, filters, order=order, limit=limit, select=select)
+                return [row for row in rows if self._mine(row)]
             filters["owner_id"] = self.owner_id
         if select != "*":
             return self.base.list(table, filters, order=order, limit=limit, select=select)
         return self.base.list(table, filters, order=order, limit=limit)
 
     def get(self, table: str, row_id: Any):
-        if table == "freight_settings":
+        if table in SINGLETON_TABLES:
             # Callers still ask for the old singleton id; each owner has one row.
-            return self._settings_row()
+            return self._singleton_row(table)
         row = self.base.get(table, row_id)
         if table in OWNED_TABLES and not self._mine(row):
             return None
@@ -62,7 +79,7 @@ class OwnerStore:
     def insert(self, table: str, row: dict[str, Any]):
         if table in OWNED_TABLES:
             row = {**row, "owner_id": self.owner_id}
-            if table == "freight_settings":
+            if table in SINGLETON_TABLES:
                 row["id"] = new_id()
         return self.base.insert(table, row)
 
@@ -72,8 +89,8 @@ class OwnerStore:
         return self.base.insert_many(table, rows)
 
     def _require(self, table: str, row_id: Any):
-        if table == "freight_settings":
-            row = self._settings_row()
+        if table in SINGLETON_TABLES:
+            row = self._singleton_row(table)
         else:
             row = self.base.get(table, row_id)
         if not self._mine(row):
@@ -116,6 +133,13 @@ class OwnerStore:
 
     def delete(self, table: str, filters: dict[str, Any]):
         if table in OWNED_TABLES:
+            if self.is_admin and "owner_id" not in filters:
+                # Include legacy NULL-owner rows; delete by resolved id.
+                rows = [row for row in self.base.list(table, filters, order="", limit=10000) if self._mine(row)]
+                deleted = 0
+                for row in rows:
+                    deleted += self.base.delete(table, {"id": row["id"]})
+                return deleted
             filters = {**filters, "owner_id": self.owner_id}
         return self.base.delete(table, filters)
 
@@ -125,6 +149,15 @@ class OwnerStore:
 
 def owner_store(base, owner_id: str) -> OwnerStore:
     return base if isinstance(base, OwnerStore) and base.owner_id == owner_id else OwnerStore(getattr(base, "base", base), owner_id)
+
+
+def outreach_owner_ids(base) -> list[str]:
+    """Owners with outreach data the email/scrape workers must visit."""
+    owners: set[str] = {ADMIN_OWNER_ID}
+    for table in ("campaigns", "email_log", "settings", "jobs"):
+        for row in base.list(table, order="", limit=20000, select="owner_id"):
+            owners.add(str(row.get("owner_id") or ADMIN_OWNER_ID))
+    return sorted(owners)
 
 
 def freight_owner_ids(base) -> list[str]:
