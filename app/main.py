@@ -51,7 +51,7 @@ LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 def seed_templates():
     if store.list("email_templates", order="", limit=1): return
     for item in json.loads((ROOT / "seed" / "templates.json").read_text()):
-        stamp = now_iso(); store.insert("email_templates", {"id": new_id(), **item, "active": True, "created_at": stamp, "updated_at": stamp})
+        stamp = now_iso(); store.insert("email_templates", {"id": new_id(), **item, "active": True, "owner_id": ADMIN_OWNER_ID, "created_at": stamp, "updated_at": stamp})
 
 
 def current_owner(request: Request) -> str | None:
@@ -63,6 +63,13 @@ def current_owner(request: Request) -> str | None:
 
 
 def freight_store(request: Request) -> OwnerStore:
+    owner = current_owner(request)
+    if not owner:
+        raise HTTPException(401, "Sign in required")
+    return OwnerStore(store, owner)
+
+
+def outreach_store(request: Request) -> OwnerStore:
     owner = current_owner(request)
     if not owner:
         raise HTTPException(401, "Sign in required")
@@ -113,9 +120,19 @@ def ensure_admin_user():
 
 
 def seed_owner_defaults(owner_id: str):
-    """Give an owner their own freight template and settings row."""
+    """Give an owner their own freight template, freight settings and outreach starter data."""
     scoped = OwnerStore(store, owner_id)
     seed_freight_template(scoped); seed_freight_settings(scoped)
+    if not scoped.get("settings", 1):
+        stamp = now_iso(); scoped.insert("settings", {"created_at": stamp, "updated_at": stamp})
+    if not scoped.list("email_templates", {"vertical": "outreach"}, order="", limit=1):
+        try:
+            items = json.loads((Path(__file__).parent.parent / "seed" / "templates.json").read_text())
+        except Exception:
+            items = []
+        stamp = now_iso()
+        for item in items:
+            scoped.insert("email_templates", {"id": new_id(), **item, "active": True, "created_at": stamp, "updated_at": stamp})
 
 
 @app.on_event("startup")
@@ -172,7 +189,9 @@ app.add_middleware(SessionMiddleware, secret_key=env.SESSION_SECRET, max_age=SES
 def page(request: Request, name: str, **context):
     workspace = context.pop("workspace", "freight" if request.url.path.startswith("/freight") else "outreach")
     if not is_admin(request): workspace = "freight"
-    context.update({"request": request, "env": env, "app_settings": store.get("settings", 1) or {}, "workspace": workspace, "is_admin": is_admin(request)})
+    owner = current_owner(request)
+    scoped_settings = (OwnerStore(store, owner).get("settings", 1) if owner else store.get("settings", 1)) or {}
+    context.update({"request": request, "env": env, "app_settings": scoped_settings, "workspace": workspace, "is_admin": is_admin(request)})
     return templates.TemplateResponse(request=request, name=name, context=context)
 
 
@@ -323,11 +342,12 @@ def logout(request: Request): request.session.clear(); return RedirectResponse("
 def dashboard(request: Request):
     if not (request.session.get("uid") or request.session.get("admin")):
         return templates.TemplateResponse(request=request, name="landing.html", context={"request": request})
-    campaigns = store.list("campaigns", limit=100)
-    logs = store.list("email_log", order="", limit=20000)
-    recent = store.list("email_log", limit=10)
-    cfg = store.get("settings", 1) or {}
-    senders = list_gmail_senders(storage=store, cfg=cfg)
+    s = outreach_store(request)
+    campaigns = s.list("campaigns", limit=100)
+    logs = s.list("email_log", order="", limit=20000)
+    recent = s.list("email_log", limit=10)
+    cfg = s.get("settings", 1) or {}
+    senders = list_gmail_senders(storage=s, cfg=cfg)
     accounts = {str(row["id"]): row.get("display_name") or row.get("email") or "Sender" for row in senders}
 
     # Calculate per-sender metrics for all senders
@@ -1333,7 +1353,8 @@ def freight_check_mail(request: Request):
 
 @app.get("/leads", response_class=HTMLResponse)
 def leads(request: Request, category: str = "", state: str = "", city: str = "", status: str = "", source: str = "", search: str = ""):
-    all_clients = store.list("clients", limit=20000)
+    s = outreach_store(request)
+    all_clients = s.list("clients", limit=20000)
     total_leads_count = len(all_clients)
     
     status_counts = Counter(c.get("status") or "new" for c in all_clients)
@@ -1343,13 +1364,13 @@ def leads(request: Request, category: str = "", state: str = "", city: str = "",
     states = sorted({c.get("state") for c in all_clients if c.get("state")})[:50]
 
     filters = {k: v for k, v in {"category": category, "state": state, "city": city, "status": status, "source": source}.items() if v}
-    rows = store.list("clients", filters, limit=2000)
+    rows = s.list("clients", filters, limit=2000)
     if search:
         needle = search.lower()
         rows = [r for r in rows if needle in " ".join(str(r.get(k, "")) for k in ("business_name", "short_name", "owner_first_name", "email", "city", "phone", "category")).lower()]
     
     eligible_campaigns = [
-        campaign for campaign in store.list("campaigns", limit=100)
+        campaign for campaign in s.list("campaigns", limit=100)
         if campaign.get("state") in {"draft", "running", "paused"}
     ]
     return page(
@@ -1362,19 +1383,20 @@ def leads(request: Request, category: str = "", state: str = "", city: str = "",
         filtered_count=len(rows),
         categories=categories,
         states=states,
-        batches=store.list("import_batches", limit=20),
+        batches=s.list("import_batches", limit=20),
         eligible_campaigns=eligible_campaigns,
     )
 
 
 @app.get("/leads/{lead_id}", response_class=HTMLResponse)
 def lead_detail(request: Request, lead_id: str):
-    lead = store.get("clients", lead_id)
+    s = outreach_store(request)
+    lead = s.get("clients", lead_id)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    logs = store.list("email_log", {"client_id": lead_id}, order="created_at desc", limit=1000)
-    campaigns = {str(row["id"]): row for row in store.list("campaigns", limit=1000)}
-    templates_by_id = {str(row["id"]): row for row in store.list("email_templates", limit=1000)}
+    logs = s.list("email_log", {"client_id": lead_id}, order="created_at desc", limit=1000)
+    campaigns = {str(row["id"]): row for row in s.list("campaigns", limit=1000)}
+    templates_by_id = {str(row["id"]): row for row in s.list("email_templates", limit=1000)}
     for log in logs:
         log["campaign"] = campaigns.get(str(log.get("campaign_id"))) or {}
         log["template"] = templates_by_id.get(str(log.get("template_id"))) or {}
@@ -1383,6 +1405,7 @@ def lead_detail(request: Request, lead_id: str):
 
 @app.post("/leads/save")
 async def lead_save(request: Request):
+    s = outreach_store(request)
     form = await request.form(); row_id = str(form.get("id") or ""); website, domain = normalize_website(str(form.get("website") or ""))
     data = {"business_name": str(form.get("business_name") or "").strip(), "owner_first_name": str(form.get("owner_first_name") or "").strip(),
             "category": str(form.get("category") or "").strip(), "city": str(form.get("city") or "").strip(), "state": str(form.get("state") or "").strip().upper(),
@@ -1391,19 +1414,20 @@ async def lead_save(request: Request):
     data["short_name"] = str(form.get("short_name") or "").strip() or short_name(data["business_name"]); data["updated_at"] = now_iso()
     if not data["business_name"]: raise HTTPException(422, "Business name is required")
     if data["email"] and not valid_email(data["email"]): raise HTTPException(422, "Invalid email address")
-    others = [x for x in store.list("clients", order="", limit=10000) if x["id"] != row_id]; reason = duplicate_reason(data, others)
+    others = [x for x in s.list("clients", order="", limit=10000) if x["id"] != row_id]; reason = duplicate_reason(data, others)
     if reason: raise HTTPException(409, reason)
     if row_id:
-        if not store.get("clients", row_id): raise HTTPException(404, "Lead not found")
-        store.update("clients", row_id, data)
-    else: store.insert("clients", {"id": new_id(), **data, "source": "manual", "extra": {}, "status": "new", "created_at": now_iso()})
+        if not s.get("clients", row_id): raise HTTPException(404, "Lead not found")
+        s.update("clients", row_id, data)
+    else: s.insert("clients", {"id": new_id(), **data, "source": "manual", "extra": {}, "status": "new", "created_at": now_iso()})
     return RedirectResponse(f"/leads/{row_id}?notice=Lead+saved" if row_id else "/leads?notice=Lead+added", 303)
 
 
 @app.post("/leads/{lead_id}/status")
-def lead_status(lead_id: str, status: str = Form(...)):
+def lead_status(request: Request, lead_id: str, status: str = Form(...)):
+    s = outreach_store(request)
     try:
-        set_client_status(lead_id, status, storage=store)
+        set_client_status(lead_id, status, storage=s)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     refresh_campaign_states()
@@ -1412,6 +1436,7 @@ def lead_status(lead_id: str, status: str = Form(...)):
 
 @app.post("/leads/bulk")
 async def leads_bulk(request: Request):
+    s = outreach_store(request)
     form = await request.form(); ids = form.getlist("lead_ids"); action = str(form.get("action") or "")
     if not ids:
         return RedirectResponse("/leads?notice=Select+at+least+one+lead", 303)
@@ -1419,7 +1444,7 @@ async def leads_bulk(request: Request):
         deleted = protected = 0
         for lead_id in ids:
             try:
-                deleted += int(delete_unused_client(str(lead_id), storage=store))
+                deleted += int(delete_unused_client(str(lead_id), storage=s))
             except ValueError:
                 protected += 1
         return RedirectResponse(f"/leads?notice=Deleted+{deleted}+unused+leads.+Protected+{protected}+with+email+history", 303)
@@ -1427,13 +1452,13 @@ async def leads_bulk(request: Request):
         status = action.split(":", 1)[1]
         try:
             for lead_id in ids:
-                set_client_status(lead_id, status, storage=store)
+                set_client_status(lead_id, status, storage=s)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         refresh_campaign_states()
     elif action.startswith("campaign:"):
         campaign_id = action.split(":", 1)[1]
-        campaign = store.get("campaigns", campaign_id)
+        campaign = s.get("campaigns", campaign_id)
         if not campaign or campaign.get("state") not in {"draft", "running", "paused"}:
             return RedirectResponse("/leads?notice=Choose+an+active+or+draft+campaign", 303)
         try:
@@ -1445,9 +1470,10 @@ async def leads_bulk(request: Request):
 
 
 @app.post("/leads/{lead_id}/delete")
-def lead_delete(lead_id: str):
+def lead_delete(request: Request, lead_id: str):
+    s = outreach_store(request)
     try:
-        deleted = delete_unused_client(lead_id, storage=store)
+        deleted = delete_unused_client(lead_id, storage=s)
     except ValueError as exc:
         return RedirectResponse(f"/leads/{lead_id}?notice={quote(str(exc))}", 303)
     if not deleted:
@@ -1457,6 +1483,7 @@ def lead_delete(lead_id: str):
 
 @app.post("/imports/preview", response_class=HTMLResponse)
 async def import_preview(request: Request, file: UploadFile = File(...)):
+    s = outreach_store(request)
     try:
         content = await file.read()
         preview = build_preview(content, file.filename or "upload.csv")
@@ -1468,7 +1495,8 @@ async def import_preview(request: Request, file: UploadFile = File(...)):
 
 @app.get("/imports/{batch_id}/preview", response_class=HTMLResponse)
 def import_preview_view(request: Request, batch_id: str):
-    batch = store.get("import_batches", batch_id)
+    s = outreach_store(request)
+    batch = s.get("import_batches", batch_id)
     if not batch:
         raise HTTPException(404, "Batch not found")
     if batch.get("status") != "preview":
@@ -1488,18 +1516,20 @@ def import_preview_view(request: Request, batch_id: str):
 
 
 @app.post("/imports/{batch_id}/delete")
-def import_delete(batch_id: str):
-    batch = store.get("import_batches", batch_id)
+def import_delete(request: Request, batch_id: str):
+    s = outreach_store(request)
+    batch = s.get("import_batches", batch_id)
     if not batch:
         raise HTTPException(404, "Batch not found")
     if batch.get("status") == "done":
         raise HTTPException(400, "Completed imports cannot be deleted directly; use undo instead.")
-    store.delete("import_batches", {"id": batch_id})
+    s.delete("import_batches", {"id": batch_id})
     return RedirectResponse("/leads?notice=Import+preview+discarded", 303)
 
 
 @app.post("/imports/{batch_id}/confirm")
 async def import_confirm(request: Request, batch_id: str):
+    s = outreach_store(request)
     form = await request.form()
     action = str(form.get("action") or "import")
     try:
@@ -1514,6 +1544,7 @@ async def import_confirm(request: Request, batch_id: str):
 
 @app.post("/imports/{batch_id}/remap", response_class=HTMLResponse)
 async def import_remap(request: Request, batch_id: str):
+    s = outreach_store(request)
     form = await request.form()
     mapping = {key.removeprefix("map__"): str(value) for key, value in form.items() if key.startswith("map__") and value}
     try:
@@ -1525,7 +1556,8 @@ async def import_remap(request: Request, batch_id: str):
 
 
 @app.post("/imports/{batch_id}/undo")
-def import_undo(batch_id: str):
+def import_undo(request: Request, batch_id: str):
+    s = outreach_store(request)
     try:
         deleted = undo_import(batch_id)
     except ValueError as exc:
@@ -1534,19 +1566,21 @@ def import_undo(batch_id: str):
 
 
 @app.get("/imports/{batch_id}/rejected.csv")
-def rejected_csv(batch_id: str):
-    batch = store.get("import_batches", batch_id)
+def rejected_csv(request: Request, batch_id: str):
+    s = outreach_store(request)
+    batch = s.get("import_batches", batch_id)
     if not batch: raise HTTPException(404)
     return PlainTextResponse(batch.get("rejected_csv") or "", media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=rejected-{batch_id}.csv"})
 
 
 @app.get("/templates", response_class=HTMLResponse)
 def template_list(request: Request, edit: str = "", vertical: str = "outreach"):
+    s = outreach_store(request)
     if vertical == "freight":
         param = f"&edit_template={edit}" if edit else ""
         return RedirectResponse(f"/freight/settings?tab=templates{param}", 303)
-    row = store.get("email_templates", edit) if edit else None
-    templates = sorted(store.list("email_templates", {"vertical": vertical}), key=lambda x: (
+    row = s.get("email_templates", edit) if edit else None
+    templates = sorted(s.list("email_templates", {"vertical": vertical}), key=lambda x: (
         0 if (x.get("name") or "").startswith("HVAC") else (
             1 if (x.get("name") or "").startswith("Remodelers") else 2
         ),
@@ -1569,7 +1603,7 @@ async def template_save(request: Request):
         if vertical == "freight":
             return RedirectResponse(f"/freight/settings?tab=templates&edit_template={row_id or 'new'}&notice=Error: Unknown variables: {', '.join(unknown)}", 303)
         return RedirectResponse(f"/templates?vertical={vertical}&edit={row_id or 'new'}&notice=Error: Unknown variables: {', '.join(unknown)}", 303)
-    target = freight_store(request) if vertical == "freight" else store
+    target = freight_store(request) if vertical == "freight" else outreach_store(request)
     if row_id:
         existing = target.get("email_templates", row_id)
         if not existing or (existing.get("vertical") or "outreach") != vertical:
@@ -1583,6 +1617,7 @@ async def template_save(request: Request):
 
 @app.post("/templates/ai-generate")
 async def templates_ai_generate(request: Request):
+    s = outreach_store(request)
     try: body = await request.json()
     except Exception: form = await request.form(); body = dict(form)
     mode = str(body.get("mode") or "generate")
@@ -1591,7 +1626,7 @@ async def templates_ai_generate(request: Request):
     existing_body = str(body.get("existing_body") or "")
     existing_name = str(body.get("existing_name") or "")
     existing_angle_tag = str(body.get("existing_angle_tag") or "")
-    cfg = store.get("settings", 1) or {}
+    cfg = s.get("settings", 1) or {}
     try:
         result = generate_or_improve(
             mode=mode,
@@ -1611,79 +1646,86 @@ async def templates_ai_generate(request: Request):
 
 @app.api_route("/templates/{template_id}/preview", methods=["GET", "POST"], response_class=HTMLResponse)
 def template_preview(request: Request, template_id: str):
-    item = store.get("email_templates", template_id)
+    s = outreach_store(request)
+    item = s.get("email_templates", template_id)
     if item and (item.get("vertical") or "outreach") == "freight":
         item = freight_store(request).get("email_templates", template_id)
     if not item:
         raise HTTPException(404, "Template not found")
     vertical = item.get("vertical") or "outreach"
-    cfg = freight_config(freight_store(request)) if vertical == "freight" else (store.get("settings", 1) or {})
+    cfg = freight_config(freight_store(request)) if vertical == "freight" else (s.get("settings", 1) or {})
     sig = cfg.get("email_signature") or ("Freight Dispatch" if vertical == "freight" else "")
-    sample = ({"origin": "Phoenix, AZ", "destination": "Dallas, TX", "pickup_date": "tomorrow", "equipment": "53 ft dry van", "truck_location": "Phoenix, AZ", "mc_number": "123456", "dot_number": "987654", "broker_company": "Sample Broker", "loaded_miles": 1060, "deadhead_miles": 25, "posted_rate": "$2,650", "all_in_rpm": "2.44", "signature": sig} if vertical == "freight" else (store.list("clients", limit=1) or [{"short_name": "Acme Roofing", "category": "roofing", "city": "Austin", "state": "TX"}])[0])
+    sample = ({"origin": "Phoenix, AZ", "destination": "Dallas, TX", "pickup_date": "tomorrow", "equipment": "53 ft dry van", "truck_location": "Phoenix, AZ", "mc_number": "123456", "dot_number": "987654", "broker_company": "Sample Broker", "loaded_miles": 1060, "deadhead_miles": 25, "posted_rate": "$2,650", "all_in_rpm": "2.44", "signature": sig} if vertical == "freight" else (s.list("clients", limit=1) or [{"short_name": "Acme Roofing", "category": "roofing", "city": "Austin", "state": "TX"}])[0])
     subject, sm = render_template(item["subject"], sample, cfg); body, bm = render_template(item["body"], sample, cfg)
     return page(request, "template_preview.html", template=item, subject=subject, body=body, missing=sorted(set(sm + bm)), vertical=vertical, workspace=vertical)
 
 
 @app.get("/campaigns", response_class=HTMLResponse)
 def campaigns(request: Request, edit: str = "", batch_id: str = ""):
-    batch = store.get("import_batches", batch_id) if batch_id else None
-    batches = store.list("import_batches", {"status": "done"}, order="uploaded_at desc", limit=10)
-    cfg = store.get("settings", 1) or {}
-    gmail_accounts = list_gmail_senders(active_only=True, storage=store, cfg=cfg)
-    return page(request, "campaigns.html", campaigns=store.list("campaigns"), templates=store.list("email_templates", {"active": True, "vertical": "outreach"}), campaign=store.get("campaigns", edit) if edit else None, selected_batch=batch, batches=batches, batch_id=batch_id, gmail_accounts=gmail_accounts)
+    s = outreach_store(request)
+    batch = s.get("import_batches", batch_id) if batch_id else None
+    batches = s.list("import_batches", {"status": "done"}, order="uploaded_at desc", limit=10)
+    cfg = s.get("settings", 1) or {}
+    gmail_accounts = list_gmail_senders(active_only=True, storage=s, cfg=cfg)
+    return page(request, "campaigns.html", campaigns=s.list("campaigns"), templates=s.list("email_templates", {"active": True, "vertical": "outreach"}), campaign=s.get("campaigns", edit) if edit else None, selected_batch=batch, batches=batches, batch_id=batch_id, gmail_accounts=gmail_accounts)
 
 
 @app.post("/campaigns/save")
 async def campaign_save(request: Request):
-    form = await request.form(); cfg = store.get("settings", 1) or {}; stamp = now_iso()
+    s = outreach_store(request)
+    form = await request.form(); cfg = s.get("settings", 1) or {}; stamp = now_iso()
     target = {k: str(form.get(k) or "").strip() for k in ("category", "state", "city", "status", "source", "import_batch_id") if form.get(k)}
     provider = str(form.get("provider") or "gmail").strip().lower()
     
-    available_accounts = {str(row["id"]) for row in list_gmail_senders(active_only=True, storage=store, cfg=cfg) if row.get("provider", "gmail") == provider}
+    available_accounts = {str(row["id"]) for row in list_gmail_senders(active_only=True, storage=s, cfg=cfg) if row.get("provider", "gmail") == provider}
     gmail_accounts = [x for x in form.getlist("gmail_accounts") if x in available_accounts]
     if not gmail_accounts:
         return RedirectResponse("/settings?notice=Select+at+least+one+sender+identity", 303)
             
-    available_templates = {str(row["id"]) for row in store.list("email_templates", {"active": True, "vertical": "outreach"}, order="", limit=500)}
+    available_templates = {str(row["id"]) for row in s.list("email_templates", {"active": True, "vertical": "outreach"}, order="", limit=500)}
     template_ids = [value for value in form.getlist("template_ids") if value in available_templates]
     if not template_ids:
         return RedirectResponse("/campaigns?notice=Select+at+least+one+active+email+template", 303)
     data = {"name": str(form.get("name") or "Untitled campaign"), "target_filter": target, "template_ids": template_ids, "provider": provider, "gmail_accounts": gmail_accounts, "daily_cap": int(cfg.get("daily_cap") or 20), "send_window": {"timezone": cfg.get("timezone"), "send_days": cfg.get("send_days"), "send_start": cfg.get("send_start"), "send_end": cfg.get("send_end")}, "min_delay_minutes": int(cfg.get("min_delay_minutes") or 3), "max_delay_minutes": int(cfg.get("max_delay_minutes") or 15), "resend_block_days": int(cfg.get("resend_block_days") or 90), "state": "draft", "created_at": stamp, "updated_at": stamp}
-    campaign = store.insert("campaigns", {"id": new_id(), **data}); return RedirectResponse(f"/campaigns/{campaign['id']}", 303)
+    campaign = s.insert("campaigns", {"id": new_id(), **data}); return RedirectResponse(f"/campaigns/{campaign['id']}", 303)
 
 
 
 @app.get("/campaigns/{campaign_id}", response_class=HTMLResponse)
 def campaign_detail(request: Request, campaign_id: str):
-    campaign = store.get("campaigns", campaign_id)
+    s = outreach_store(request)
+    campaign = s.get("campaigns", campaign_id)
     if not campaign: raise HTTPException(404)
-    logs = store.list("email_log", {"campaign_id": campaign_id}, order="scheduled_for asc", limit=1000)
-    clients_map = {c["id"]: c for c in store.list("clients", limit=10000)}
-    templates_map = {t["id"]: t for t in store.list("email_templates", limit=100)}
+    logs = s.list("email_log", {"campaign_id": campaign_id}, order="scheduled_for asc", limit=1000)
+    clients_map = {c["id"]: c for c in s.list("clients", limit=10000)}
+    templates_map = {t["id"]: t for t in s.list("email_templates", limit=100)}
     for l in logs:
         l["client"] = clients_map.get(l.get("client_id")) or {}
         l["template"] = templates_map.get(l.get("template_id")) or {}
-    cfg = store.get("settings", 1) or {}
-    gmail_account_emails = {str(row["id"]): row.get("email") for row in list_gmail_senders(storage=store, cfg=cfg)}
+    cfg = s.get("settings", 1) or {}
+    gmail_account_emails = {str(row["id"]): row.get("email") for row in list_gmail_senders(storage=s, cfg=cfg)}
     performance = campaign_performance(logs, {str(key): value for key, value in templates_map.items()})
     return page(request, "campaign.html", campaign=campaign, logs=logs, gmail_account_emails=gmail_account_emails, performance=performance)
 
 
 @app.post("/campaigns/{campaign_id}/start")
-def campaign_start(campaign_id: str):
+def campaign_start(request: Request, campaign_id: str):
+    s = outreach_store(request)
     result = queue_campaign(campaign_id); return RedirectResponse(f"/campaigns/{campaign_id}?notice=Queued+{result['queued']}%2C+skipped+{result['skipped']}", 303)
 
 
 @app.post("/campaigns/{campaign_id}/state")
-def campaign_state(campaign_id: str, state: str = Form(...)):
+def campaign_state(request: Request, campaign_id: str, state: str = Form(...)):
+    s = outreach_store(request)
     if state not in {"running", "paused", "stopped"}: raise HTTPException(422)
     if state == "stopped":
         cancel_campaign_queue(campaign_id)
-    store.update("campaigns", campaign_id, {"state": state, "stopped_at": now_iso() if state == "stopped" else None, "updated_at": now_iso()}); return RedirectResponse(f"/campaigns/{campaign_id}", 303)
+    s.update("campaigns", campaign_id, {"state": state, "stopped_at": now_iso() if state == "stopped" else None, "updated_at": now_iso()}); return RedirectResponse(f"/campaigns/{campaign_id}", 303)
 
 
 @app.post("/campaigns/{campaign_id}/delete")
-def campaign_delete(campaign_id: str):
+def campaign_delete(request: Request, campaign_id: str):
+    s = outreach_store(request)
     try:
         delete_campaign(campaign_id)
     except ValueError as exc:
@@ -1693,8 +1735,9 @@ def campaign_delete(campaign_id: str):
 
 @app.post("/email-log/{log_id}/send-now")
 def email_send_now(request: Request, log_id: str):
-    res = send_due(1, only_id=log_id)
-    log = store.get("email_log", log_id) or {}
+    s = outreach_store(request)
+    res = send_due(1, only_id=log_id, storage=s)
+    log = s.get("email_log", log_id) or {}
     cid = log.get("campaign_id")
     base = f"/campaigns/{cid}" if cid else request.headers.get("referer") or "/"
     if res.get("sent", 0) > 0:
@@ -1713,47 +1756,52 @@ def location_search(q: str = ""):
 
 @app.get("/scraper", response_class=HTMLResponse)
 def scraper_page(request: Request):
-    return page(request, "scraper.html", jobs=store.list("scrape_jobs", limit=200), discards=store.list("scrape_discards", limit=100), presets=store.list("scrape_presets"), state_labels={s: label_for_state(s) for s in ("TX", "CA")})
+    s = outreach_store(request)
+    return page(request, "scraper.html", jobs=s.list("scrape_jobs", limit=200), discards=s.list("scrape_discards", limit=100), presets=s.list("scrape_presets"), state_labels={s: label_for_state(s) for s in ("TX", "CA")})
 
 
 @app.post("/scraper/jobs")
-def scraper_create(categories: str = Form(...), locations: str = Form(...), result_limit: int = Form(30)):
+def scraper_create(request: Request, categories: str = Form(...), locations: str = Form(...), result_limit: int = Form(30)):
+    s = outreach_store(request)
     cats = [x.strip() for x in categories.split(",") if x.strip()]; locs = [x.strip() for x in locations.split(";") if x.strip()]
     parent = new_id(); created = 0
     for category in cats:
         for location in locs:
             bits = [x.strip() for x in location.rsplit(",", 1)]; city, state = (bits[0], bits[1].upper()) if len(bits) == 2 else (bits[0], "")
-            stamp = now_iso(); jid = new_id(); store.insert("scrape_jobs", {"id": jid, "parent_id": parent, "category": category, "state": state, "city": city, "result_limit": min(max(result_limit, 1), 100), "status": "queued", "found_count": 0, "saved_count": 0, "discarded_count": 0, "serp_calls_used": 0, "created_at": stamp, "updated_at": stamp})
-            store.insert("jobs", {"id": new_id(), "kind": "scrape", "payload": {"scrape_job_id": jid}, "status": "queued", "attempts": 0, "run_after": stamp, "created_at": stamp, "updated_at": stamp}); created += 1
+            stamp = now_iso(); jid = new_id(); s.insert("scrape_jobs", {"id": jid, "parent_id": parent, "category": category, "state": state, "city": city, "result_limit": min(max(result_limit, 1), 100), "status": "queued", "found_count": 0, "saved_count": 0, "discarded_count": 0, "serp_calls_used": 0, "created_at": stamp, "updated_at": stamp})
+            s.insert("jobs", {"id": new_id(), "kind": "scrape", "payload": {"scrape_job_id": jid}, "status": "queued", "attempts": 0, "run_after": stamp, "created_at": stamp, "updated_at": stamp}); created += 1
     return RedirectResponse(f"/scraper?notice=Created+{created}+jobs", 303)
 
 
 @app.post("/scraper/presets")
-def preset_save(name: str = Form(...), categories: str = Form(...), locations: str = Form(...), result_limit: int = Form(30)):
-    stamp = now_iso(); store.insert("scrape_presets", {"id": new_id(), "name": name, "config": {"categories": categories, "locations": locations, "result_limit": result_limit}, "created_at": stamp, "updated_at": stamp}); return RedirectResponse("/scraper", 303)
+def preset_save(request: Request, name: str = Form(...), categories: str = Form(...), locations: str = Form(...), result_limit: int = Form(30)):
+    s = outreach_store(request)
+    stamp = now_iso(); s.insert("scrape_presets", {"id": new_id(), "name": name, "config": {"categories": categories, "locations": locations, "result_limit": result_limit}, "created_at": stamp, "updated_at": stamp}); return RedirectResponse("/scraper", 303)
 
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
-    cfg = store.get("settings", 1) or {}
-    return page(request, "settings.html", gmail_senders=list_gmail_senders(storage=store, cfg=cfg))
+    s = outreach_store(request)
+    cfg = s.get("settings", 1) or {}
+    return page(request, "settings.html", gmail_senders=list_gmail_senders(storage=s, cfg=cfg))
 
 
 @app.post("/settings")
 async def settings_save(request: Request):
-    form = await request.form(); previous = store.get("settings", 1) or {}; fields = ["sender_name", "sender_email", "reply_to", "sender_business", "sender_business_url", "product_name", "product_url", "booking_link", "callback_number", "client_noun", "email_signature", "business_context", "timezone", "send_start", "send_end"]
+    s = outreach_store(request)
+    form = await request.form(); previous = s.get("settings", 1) or {}; fields = ["sender_name", "sender_email", "reply_to", "sender_business", "sender_business_url", "product_name", "product_url", "booking_link", "callback_number", "client_noun", "email_signature", "business_context", "timezone", "send_start", "send_end"]
     data = {key: str(form.get(key) or "").strip() for key in fields}
     for key in ("client_count", "daily_cap", "min_delay_minutes", "max_delay_minutes", "resend_block_days", "pingram_daily_cap", "pingram_min_delay", "pingram_max_delay"):
         if form.get(key) is not None and str(form.get(key)).strip() != "":
             data[key] = int(form.get(key))
     data["send_days"] = [int(x) for x in form.getlist("send_days")]; data["csv_required_fields"] = form.getlist("csv_required_fields"); data["scrape_required_fields"] = form.getlist("scrape_required_fields"); data["updated_at"] = now_iso()
-    store.update("settings", 1, data)
+    s.update("settings", 1, data)
     schedule_fields = {"daily_cap", "timezone", "send_days", "send_start", "send_end", "min_delay_minutes", "max_delay_minutes", "pingram_daily_cap", "pingram_min_delay", "pingram_max_delay"}
     schedule_changed = any(previous.get(key) != data.get(key) for key in schedule_fields)
     if schedule_changed:
-        pending = store.list("jobs", {"kind": "reschedule_email_queue", "status": ("in", ["queued", "running"])}, order="", limit=1)
+        pending = s.list("jobs", {"kind": "reschedule_email_queue", "status": ("in", ["queued", "running"])}, order="", limit=1)
         if not pending:
-            stamp = now_iso(); store.insert("jobs", {"id": new_id(), "kind": "reschedule_email_queue", "payload": {}, "status": "queued", "attempts": 0, "run_after": stamp, "created_at": stamp, "updated_at": stamp})
+            stamp = now_iso(); s.insert("jobs", {"id": new_id(), "kind": "reschedule_email_queue", "payload": {}, "status": "queued", "attempts": 0, "run_after": stamp, "created_at": stamp, "updated_at": stamp})
     notice = "Saved.+Queued+emails+will+be+redistributed+to+the+global+sender+cap." if schedule_changed else "Saved"
     return RedirectResponse(f"/settings?notice={notice}", 303)
 
@@ -1854,10 +1902,16 @@ async def pingram_webhook(request: Request):
         )
         
         if client_email:
-            clients = [c for c in store.list("clients", order="", limit=10000) if str(c.get("email") or "").lower() == client_email]
-            client_id = clients[0]["id"] if clients else None
-            
-            store.insert("pingram_replies", {
+            candidates = [c for c in store.list("clients", order="", limit=20000) if str(c.get("email") or "").lower() == client_email]
+            # Attribute the reply to the owner who most recently mailed this address.
+            sent_logs = [x for x in store.list("email_log", order="", limit=20000)
+                         if x.get("status") == "sent" and str(x.get("client_id")) in {str(c["id"]) for c in candidates}]
+            sent_logs.sort(key=lambda x: str(x.get("sent_at") or ""), reverse=True)
+            client = next((c for c in candidates if sent_logs and str(c["id"]) == str(sent_logs[0].get("client_id"))), candidates[0] if candidates else None)
+            scoped = OwnerStore(store, str((client or {}).get("owner_id") or ADMIN_OWNER_ID))
+            client_id = client["id"] if client else None
+
+            scoped.insert("pingram_replies", {
                 "id": new_id(),
                 "client_id": client_id,
                 "from_email": client_email,
@@ -1866,23 +1920,25 @@ async def pingram_webhook(request: Request):
                 "received_at": now_iso()
             })
             if client_id:
-                set_client_status(client_id, "replied", storage=store)
+                set_client_status(client_id, "replied", storage=scoped)
             logging.info(f"Pingram reply recorded for email {client_email}, client_id: {client_id}")
             
         return JSONResponse({"ok": True})
 
     logs = [x for x in store.list("email_log", order="", limit=20000) if x.get("provider_message_id") == tracking]
     if logs and event in {"email_bounced", "bounced", "email_failed"}:
-        store.update("email_log", logs[0]["id"], {"status": "bounced"})
-        set_client_status(logs[0]["client_id"], "bounced", storage=store)
-        refresh_campaign_states({str(logs[0].get("campaign_id"))})
+        scoped = OwnerStore(store, str(logs[0].get("owner_id") or ADMIN_OWNER_ID))
+        scoped.update("email_log", logs[0]["id"], {"status": "bounced"})
+        set_client_status(logs[0]["client_id"], "bounced", storage=scoped)
+        refresh_campaign_states({str(logs[0].get("campaign_id"))}, storage=scoped)
     return JSONResponse({"ok": True})
 
 
 @app.get("/pingram-inbox")
 def pingram_inbox(request: Request):
-    replies_raw = store.list("pingram_replies", order="received_at desc", limit=1000)
-    clients = {c["id"]: c for c in store.list("clients", order="", limit=10000)}
+    s = outreach_store(request)
+    replies_raw = s.list("pingram_replies", order="received_at desc", limit=1000)
+    clients = {c["id"]: c for c in s.list("clients", order="", limit=10000)}
     replies = []
     for r in replies_raw:
         client = clients.get(r.get("client_id"))
@@ -1900,8 +1956,8 @@ def pingram_inbox(request: Request):
 
 
 @app.post("/pingram-inbox/{reply_id}/delete")
-def pingram_reply_delete(reply_id: str):
-    store.delete("pingram_replies", {"id": reply_id})
+def pingram_reply_delete(request: Request, reply_id: str):
+    outreach_store(request).delete("pingram_replies", {"id": reply_id})
     return RedirectResponse("/pingram-inbox?notice=Reply+dismissed", 303)
 
 

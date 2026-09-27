@@ -28,6 +28,10 @@ JSON_FIELDS = {
 }
 # Freight tables that carry owner_id + vertical (gmail_senders, freight_settings
 # and email_templates are handled separately).
+OUTREACH_OWNED_TABLES = (
+    "clients", "campaigns", "email_log", "scrape_jobs", "scrape_discards", "scrape_presets",
+    "import_batches", "pingram_replies", "suppression", "jobs",
+)
 OWNED_FREIGHT_TABLES = (
     "freight_truck_profiles", "freight_missions", "freight_loads", "freight_load_stops", "freight_brokers", "freight_bookings", "freight_threads",
     "freight_messages", "freight_attachments", "freight_drafts", "freight_negotiation_events", "freight_alerts",
@@ -88,7 +92,7 @@ class SQLiteStore:
     def _upgrade_before_schema(self, con):
         """Reshape single-tenant tables that schema.sql can no longer create in place."""
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        for table in ("gmail_senders", "freight_settings"):
+        for table in ("gmail_senders", "freight_settings", "settings"):
             if table in tables and "owner_id" not in {row[1] for row in con.execute(f"PRAGMA table_info({table})")}:
                 con.execute(f"DROP TABLE IF EXISTS _pre_owner_{table}")
                 con.execute(f"ALTER TABLE {table} RENAME TO _pre_owner_{table}")
@@ -96,13 +100,13 @@ class SQLiteStore:
 
     def _upgrade_after_schema(self, con):
         from app.core.tenancy import ADMIN_OWNER_ID
-        for table in ("gmail_senders", "freight_settings"):
+        for table in ("gmail_senders", "freight_settings", "settings"):
             legacy = f"_pre_owner_{table}"
             if con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (legacy,)).fetchone():
                 new_cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
                 cols = [row[1] for row in con.execute(f"PRAGMA table_info({legacy})") if row[1] in new_cols]
-                if table == "freight_settings":
-                    con.execute("DELETE FROM freight_settings")
+                if table in ("freight_settings", "settings"):
+                    con.execute(f"DELETE FROM {table}")
                 col_sql = ",".join(cols)
                 con.execute(f"INSERT OR IGNORE INTO {table} ({col_sql}, owner_id) SELECT {col_sql}, ? FROM {legacy}", (ADMIN_OWNER_ID,))
                 con.execute(f"DROP TABLE {legacy}")
@@ -116,8 +120,20 @@ class SQLiteStore:
         template_columns = {row[1] for row in con.execute("PRAGMA table_info(email_templates)")}
         if "owner_id" not in template_columns:
             con.execute("ALTER TABLE email_templates ADD COLUMN owner_id TEXT")
-            con.execute("UPDATE email_templates SET owner_id=? WHERE vertical='freight' AND owner_id IS NULL", (ADMIN_OWNER_ID,))
-        for table in (*OWNED_FREIGHT_TABLES, "gmail_senders", "email_templates", "freight_settings"):
+            con.execute("UPDATE email_templates SET owner_id=? WHERE owner_id IS NULL", (ADMIN_OWNER_ID,))
+        for table in OUTREACH_OWNED_TABLES:
+            columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+            if "owner_id" not in columns:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN owner_id TEXT")
+                con.execute(f"UPDATE {table} SET owner_id=? WHERE owner_id IS NULL", (ADMIN_OWNER_ID,))
+        # Uniqueness moves from global to per-owner for customer-scoped tables.
+        con.execute("DROP INDEX IF EXISTS clients_email_unique")
+        con.execute("DROP INDEX IF EXISTS clients_domain_unique")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS clients_email_unique ON clients(owner_id, lower(email)) WHERE email IS NOT NULL AND email <> ''")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS clients_domain_unique ON clients(owner_id, lower(domain)) WHERE domain IS NOT NULL AND domain <> ''")
+        con.execute("DROP INDEX IF EXISTS suppression_email_unique")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS suppression_email_unique ON suppression(owner_id, lower(email)) WHERE email IS NOT NULL AND email <> ''")
+        for table in (*OWNED_FREIGHT_TABLES, *OUTREACH_OWNED_TABLES, "gmail_senders", "email_templates", "freight_settings", "settings"):
             con.execute(f"CREATE INDEX IF NOT EXISTS {table}_owner_idx ON {table}(owner_id)")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS gmail_senders_owner_email_unique ON gmail_senders(owner_id, lower(email))")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS freight_messages_owner_provider_unique ON freight_messages(owner_id, provider_message_id) WHERE provider_message_id IS NOT NULL AND provider_message_id <> ''")
