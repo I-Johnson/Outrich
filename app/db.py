@@ -204,7 +204,7 @@ class SQLiteStore:
             else: clauses.append(f"{key} = ?"); args.append(value)
         sql = f"SELECT {select} FROM {table}" + (" WHERE " + " AND ".join(clauses) if clauses else "")
         if order:
-            allowed = {"created_at", "updated_at", "sent_at", "scheduled_for", "uploaded_at", "business_name", "name", "id", "seq"}
+            allowed = {"created_at", "updated_at", "sent_at", "scheduled_for", "uploaded_at", "business_name", "name", "id", "seq", "received_at"}
             parts = order.split(); col = parts[0] if parts[0] in allowed else "created_at"
             direction = "DESC" if len(parts) > 1 and parts[1].lower() == "desc" else "ASC"; sql += f" ORDER BY {col} {direction}"
         sql += " LIMIT ?"; args.append(limit)

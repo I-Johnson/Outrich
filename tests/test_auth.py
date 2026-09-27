@@ -92,28 +92,64 @@ class SignupLoginTests(unittest.TestCase):
         saved = self.client.post("/templates/save", data={"name": "Mine", "subject": "Load", "body": "Hi", "vertical": "freight", "active": "on"}, follow_redirects=False)
         self.assertEqual(saved.status_code, 303)
         settings = self.client.get("/freight/settings")
-        self.assertIn('href="/admin/login"', settings.text)
+        self.assertNotIn('href="/admin/login"', settings.text)
         self.assertIn("driver@example.com", settings.text)
 
-    def test_admin_unlock_requires_admin_login_page(self):
+    def test_env_admin_login_lands_on_outreach_overview(self):
         creds = {"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD}
         response = self.client.post("/login", data=creds, follow_redirects=False)
-        self.assertEqual(response.headers["location"], "/freight")
-        locked_home = self.client.get("/", follow_redirects=False)
-        self.assertEqual(locked_home.status_code, 303)
-        self.assertEqual(locked_home.headers["location"], "/freight")
-        settings = self.client.get("/freight/settings")
-        self.assertIn('href="/admin/login"', settings.text)
-        self.client.post("/logout")
-        self.signup()
-        self.assertEqual(self.client.get("/admin/login").status_code, 200)
-        wrong = self.client.post("/admin/login", data={"email": "driver@example.com", "password": "longenough1"}, follow_redirects=False)
-        self.assertIn("Invalid", wrong.headers["location"])
-        response = self.client.post("/admin/login", data=creds, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/")
-        page = self.client.get("/")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("workspace-switch", page.text)
+        for path in ("/", "/leads", "/campaigns", "/settings", "/templates", "/scraper", "/pingram-inbox"):
+            page = self.client.get(path, follow_redirects=False)
+            self.assertEqual(page.status_code, 200, path)
+        overview = self.client.get("/")
+        self.assertIn("workspace-switch", overview.text)
+        freight = self.client.get("/freight/settings")
+        self.assertNotIn('href="/admin/login"', freight.text)
+
+    def test_db_admin_role_login_gets_full_workspace(self):
+        from app.core.auth import hash_password
+        from app.db import new_id, now_iso
+        stamp = now_iso()
+        self.raw.insert("app_users", {"id": new_id(), "email": "ops@example.com", "password_hash": hash_password("longenough2"), "name": "Ops", "role": "admin", "created_at": stamp, "last_login_at": stamp})
+        response = self.client.post("/login", data={"email": "ops@example.com", "password": "longenough2"}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/")
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/campaigns").status_code, 200)
+
+    def test_admin_login_page_redirects_to_single_login(self):
+        response = self.client.get("/admin/login", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+        posted = self.client.post("/admin/login", data={"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD}, follow_redirects=False)
+        self.assertEqual(posted.status_code, 303)
+        self.assertEqual(posted.headers["location"], "/login")
+        # The retired endpoint must not create a session: visitor state persists.
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/leads", follow_redirects=False).status_code, 303)
+
+    def test_ordinary_user_is_not_elevated(self):
+        self.signup()
+        for path in ("/", "/leads", "/campaigns", "/pingram-inbox"):
+            response = self.client.get(path, follow_redirects=False)
+            self.assertEqual(response.status_code, 303, path)
+            self.assertEqual(response.headers["location"], "/freight", path)
+        self.assertEqual(self.client.post("/templates/save", data={"name": "x", "subject": "s", "body": "b", "vertical": "outreach"}, follow_redirects=False).status_code, 403)
+        freight = self.client.get("/freight")
+        self.assertNotIn("workspace-switch", freight.text)
+        self.assertNotIn('href="/admin/login"', self.client.get("/freight/settings").text)
+
+    def test_admin_sign_out_returns_to_visitor_state(self):
+        creds = {"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD}
+        self.client.post("/login", data=creds, follow_redirects=False)
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.client.post("/logout", follow_redirects=False)
+        response = self.client.get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Set the rules.", response.text)
+        self.assertEqual(self.client.get("/leads", follow_redirects=False).status_code, 303)
 
     def test_rate_limit_trips_after_eight_failures(self):
         for _ in range(8):
@@ -126,8 +162,11 @@ class SignupLoginTests(unittest.TestCase):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertTrue(response.headers["location"].startswith("/login"))
-        for path in ("/", "/login", "/signup", "/admin/login", "/health"):
+        for path in ("/", "/login", "/signup", "/health"):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 200, path)
+        admin_login = self.client.get("/admin/login", follow_redirects=False)
+        self.assertEqual(admin_login.status_code, 303)
+        self.assertEqual(admin_login.headers["location"], "/login")
 
     def test_landing_page_for_visitors_only(self):
         page = self.client.get("/")
@@ -143,8 +182,8 @@ class SignupLoginTests(unittest.TestCase):
         self.client.post("/logout")
         self.client.post("/login", data={"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD})
         admin = self.client.get("/", follow_redirects=False)
-        self.assertEqual(admin.status_code, 303)
-        self.assertEqual(admin.headers["location"], "/freight")
+        self.assertEqual(admin.status_code, 200)
+        self.assertIn("workspace-switch", admin.text)
 
 
 if __name__ == "__main__":
