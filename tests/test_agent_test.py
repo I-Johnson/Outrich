@@ -205,7 +205,7 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         other = create_local_test_session(self.storage, {"mission_id": self.mission_id})
         with patch.object(main, "store", self.storage.base):
             client = TestClient(main.app)
-            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD})
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
             reloaded = client.get("/freight/agent-test/state", params={"load_id": load_id})
             self.assertEqual(reloaded.status_code, 200)
             self.assertEqual(reloaded.json()["pending_drafts"][0]["id"], draft_id)
@@ -236,7 +236,7 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.storage.update("freight_loads", real["load"]["id"], {"dat_reference": "real-load"})
         with patch.object(main, "store", self.storage.base):
             client = TestClient(main.app)
-            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD})
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
             self.assertEqual(client.post("/freight/agent-test/reset", json={"load_id": real["load"]["id"]}).status_code, 404)
             other = TestClient(main.app)
             other.post("/signup", data={"email": "reset-test@example.com", "password": "test-password-123", "name": "Other"})
