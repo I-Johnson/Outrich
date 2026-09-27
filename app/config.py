@@ -50,6 +50,8 @@ class Settings:
     DRY_RUN = _bool("DRY_RUN", True)
     SCHEDULER_ENABLED = _bool("SCHEDULER_ENABLED", True)
     SCHEDULER_INTERVAL_SECONDS = int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "60"))
+    # Queued background jobs (scrape, queue reschedule) drained per worker tick.
+    WORKER_JOBS_PER_TICK = int(os.getenv("WORKER_JOBS_PER_TICK", "3"))
     PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     CRAWLER_USER_AGENT = os.getenv("CRAWLER_USER_AGENT", "OutreachResearchBot/1.0 (+admin-only lead research)")
     MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "")
