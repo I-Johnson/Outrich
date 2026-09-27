@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from zoneinfo import ZoneInfo
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import csv
 import hashlib
 import io
@@ -35,7 +35,7 @@ from app.core.importer import FIELDS, build_preview, confirm_import, remap_previ
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.core.lead_status import delete_unused_client, set_client_status
 from app.core.schedule import calendar_events
-from app.core.sender import cancel_campaign_queue, delete_campaign, queue_campaign, refresh_campaign_states, send_due
+from app.core.sender import AUDIENCE_SCAN_LIMIT, cancel_campaign_queue, delete_campaign, eligible_client_ids, queue_campaign, refresh_campaign_states, send_due
 from app.core.template_engine import render_template, unknown_variables
 from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore
 from app.db import count, init_db, new_id, now_iso, store
@@ -1768,26 +1768,19 @@ def campaign_discovery_status(request: Request):
 
 @app.get("/campaigns/audience-count")
 def campaign_audience_count(request: Request, category: str = "", state: str = "", city: str = "", status: str = "", import_batch_id: str = ""):
-    """Matching records versus leads the next queue run would actually email (mirrors queue_campaign)."""
+    """Matching records versus leads the next queue run would actually email (same scan and rules as queue_campaign)."""
     from app.core.sender import _matches
     s = outreach_store(request)
     target = {k: v.strip() for k, v in {"category": category, "state": state, "city": city, "status": status, "import_batch_id": import_batch_id}.items() if v.strip()}
-    clients = s.list("clients", order="", limit=20000)
+    clients = s.list("clients", order="created_at asc", limit=AUDIENCE_SCAN_LIMIT)
     matching = [c for c in clients if _matches(c, target)]
     suppressed = s.list("suppression", order="", limit=10000)
     blocked_emails = {str(x.get("email") or "").lower() for x in suppressed}
     blocked_domains = {str(x.get("domain") or "").lower() for x in suppressed}
     logs = s.list("email_log", order="", limit=20000)
     cfg = s.get("settings", 1) or {}
-    cutoff = datetime.now(timezone.utc) - timedelta(days=int(cfg.get("resend_block_days") or 90))
-    eligible = 0
-    for c in matching:
-        if c.get("status") in {"replied", "do_not_contact", "bounced"}: continue
-        if str(c.get("email") or "").lower() in blocked_emails or str(c.get("domain") or "").lower() in blocked_domains: continue
-        prior = [l for l in logs if l.get("client_id") == c["id"] and l.get("status") in {"queued", "sending", "sent", "replied"}]
-        if any(datetime.fromisoformat((l.get("sent_at") or l.get("created_at")).replace("Z", "+00:00")) >= cutoff for l in prior): continue
-        eligible += 1
-    return {"count": len(matching), "eligible": eligible}
+    eligible = eligible_client_ids(matching, blocked_emails, blocked_domains, logs, cfg.get("resend_block_days"))
+    return {"count": len(matching), "eligible": len(eligible)}
 
 
 @app.post("/campaigns/discovery")
@@ -1829,6 +1822,16 @@ async def campaign_save(request: Request):
     template_ids = [value for value in form.getlist("template_ids") if value in available_templates]
     if not template_ids:
         return RedirectResponse("/campaigns?notice=Select+at+least+one+active+email+template", 303)
+    from app.core.sender import _matches
+    matching = [c for c in s.list("clients", order="created_at asc", limit=AUDIENCE_SCAN_LIMIT) if _matches(c, target)]
+    suppressed = s.list("suppression", order="", limit=10000)
+    blocked_emails = {str(x.get("email") or "").lower() for x in suppressed}
+    blocked_domains = {str(x.get("domain") or "").lower() for x in suppressed}
+    logs = s.list("email_log", order="", limit=20000)
+    if not matching:
+        return RedirectResponse("/campaigns?notice=No+leads+match+that+audience+yet.+Adjust+the+filters,+run+discovery,+or+import+a+list+first.", 303)
+    if not eligible_client_ids(matching, blocked_emails, blocked_domains, logs, cfg.get("resend_block_days")):
+        return RedirectResponse("/campaigns?notice=No+leads+are+eligible+to+send+in+that+audience+right+now+-+already+contacted,+replied,+bounced,+or+suppressed.", 303)
     data = {"name": str(form.get("name") or "Untitled campaign"), "target_filter": target, "template_ids": template_ids, "provider": provider, "gmail_accounts": gmail_accounts, "daily_cap": int(cfg.get("daily_cap") or 20), "send_window": {"timezone": cfg.get("timezone"), "send_days": cfg.get("send_days"), "send_start": cfg.get("send_start"), "send_end": cfg.get("send_end")}, "min_delay_minutes": int(cfg.get("min_delay_minutes") or 3), "max_delay_minutes": int(cfg.get("max_delay_minutes") or 15), "resend_block_days": int(cfg.get("resend_block_days") or 90), "state": "draft", "created_at": stamp, "updated_at": stamp}
     campaign = s.insert("campaigns", {"id": new_id(), **data}); return RedirectResponse(f"/campaigns/{campaign['id']}", 303)
 

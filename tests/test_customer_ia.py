@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ["SCHEDULER_ENABLED"] = "false"
@@ -105,6 +106,56 @@ class CustomerIATests(unittest.TestCase):
         self.assertIn("no%20send%20days", started.headers["location"])
         self.assertEqual(self.owner.list("email_log"), [])
         self.assertEqual(self.owner.get("campaigns", campaign["id"])["state"], "draft")
+
+
+    def test_fail_closed_when_nobody_is_eligible(self):
+        from app.core.sender import queue_campaign
+        self.client.post("/settings/gmail-senders", data={
+            "email": "dee@gmail.com", "app_password": "abcd efgh ijkl mnop", "provider": "gmail"}, follow_redirects=False)
+        template = self.owner.list("email_templates")[0]
+        sender_id = str(self.owner.list("gmail_senders")[0]["id"])
+        # Saving with no leads at all is refused and creates nothing.
+        blocked = self.client.post("/campaigns/save", data={
+            "name": "Empty", "template_ids": [str(template["id"])],
+            "gmail_accounts": [sender_id], "provider": "gmail"}, follow_redirects=False)
+        self.assertEqual(blocked.status_code, 303)
+        self.assertIn("No+leads+match", blocked.headers["location"])
+        self.assertEqual(self.owner.list("campaigns"), [])
+        # A lead that was just contacted is matching but not eligible.
+        lead = self.owner.insert("clients", {"id": new_id(), "business_name": "Acme Roofing", "short_name": "Acme",
+                                             "email": "owner@acme.test", "status": "new", "source": "manual",
+                                             "created_at": STAMP, "updated_at": STAMP})
+        campaign = self.owner.insert("campaigns", {
+            "id": new_id(), "name": "Manual", "provider": "gmail", "gmail_accounts": [sender_id],
+            "template_ids": [template["id"]], "target_filter": {}, "resend_block_days": 90,
+            "state": "draft", "created_at": STAMP, "updated_at": STAMP})
+        self.owner.insert("email_log", {"id": new_id(), "client_id": lead["id"], "template_id": template["id"],
+                                        "campaign_id": campaign["id"], "provider": "gmail", "status": "sent",
+                                        "subject_sent": "Hi", "body_sent": "Hello",
+                                        "sent_at": STAMP, "created_at": STAMP})
+        still_blocked = self.client.post("/campaigns/save", data={
+            "name": "Empty", "template_ids": [str(template["id"])],
+            "gmail_accounts": [sender_id], "provider": "gmail"}, follow_redirects=False)
+        self.assertIn("No+leads+are+eligible", still_blocked.headers["location"])
+        self.assertEqual([c["name"] for c in self.owner.list("campaigns")], ["Manual"])
+        # The count endpoint agrees: 1 matching record, 0 eligible.
+        count = self.client.get("/campaigns/audience-count").json()
+        self.assertEqual(count["count"], 1)
+        self.assertEqual(count["eligible"], 0)
+        # queue_campaign itself raises the same fail-closed error.
+        with self.assertRaises(ValueError):
+            queue_campaign(campaign["id"], storage=self.owner)
+
+
+    def test_count_gate_latest_filter_wins_race(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        script = Path(__file__).with_name("frontend_race.js")
+        result = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_admin_keeps_the_full_tools(self):
         admin = self.admin_client()
