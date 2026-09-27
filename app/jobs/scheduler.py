@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.config import settings
+from app.core import billing
 from app.core.scraper import process_scrape_job
 from app.core.freight import poll_freight_replies, recover_uncertain_freight_sends
 from app.core.sender import reschedule_queued_emails, send_due
@@ -57,13 +58,20 @@ def tick():
     try: owners = outreach_owner_ids(store)
     except Exception: logger.exception("outreach owner lookup failed"); owners = []
     for owner in owners:
-        # Each owner's campaign queue runs in its own scope.
+        # Each owner's campaign queue runs in its own scope. A lapsed
+        # subscription pauses its queued sends (preserved, never dropped)
+        # until Stripe confirms the account active again.
+        if not billing.owner_has_access(store, owner):
+            continue
         try: send_due(limit=10, storage=OwnerStore(store, owner))
         except Exception: logger.exception("email worker tick failed for %s", owner)
     try: owners = freight_owner_ids(store)
     except Exception: logger.exception("freight owner lookup failed"); owners = []
     for owner in owners:
         # Each customer's drafts, threads and inboxes are processed in their own scope.
+        # Lapsed accounts pause freight work the same way.
+        if not billing.owner_has_access(store, owner):
+            continue
         scoped = OwnerStore(store, owner)
         try: recover_uncertain_freight_sends(scoped)
         except Exception: logger.exception("freight send recovery tick failed for %s", owner)

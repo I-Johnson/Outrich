@@ -53,6 +53,11 @@ class Settings:
     PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     CRAWLER_USER_AGENT = os.getenv("CRAWLER_USER_AGENT", "OutreachResearchBot/1.0 (+admin-only lead research)")
     MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "")
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+    # Where billing support mail goes; defaults to the operator's admin email.
+    SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", os.getenv("ADMIN_EMAIL", "admin@example.com")).strip()
 
     @property
     def using_supabase(self) -> bool:
@@ -60,3 +65,12 @@ class Settings:
 
 
 settings = Settings()
+
+# Billing needs a real support contact: the Plan page advertises one to paying
+# customers. When Stripe is enabled, require SUPPORT_EMAIL or ADMIN_EMAIL to
+# be set explicitly instead of falling back to the placeholder.
+if settings.STRIPE_SECRET_KEY and not os.getenv("SUPPORT_EMAIL") and not os.getenv("ADMIN_EMAIL"):
+    raise RuntimeError(
+        "Billing is enabled (STRIPE_SECRET_KEY is set) but no support contact is configured: "
+        "set SUPPORT_EMAIL or ADMIN_EMAIL."
+    )
