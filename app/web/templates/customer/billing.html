@@ -18,7 +18,7 @@
 <div class="banner"><b>Billing is not set up on this deployment yet.</b>Every account has full access while the Stripe keys are absent. Nothing to do here.</div>
 {% elif billing_pending and billing.has_access %}
 <div class="banner"><b>Subscription active. Welcome aboard.</b>Both workspaces are unlocked.</div>
-{% elif billing_pending %}
+{% elif billing.checkout_pending and not billing.has_access %}
 <div class="banner"><b>Payment submitted - confirming your subscription.</b>This usually takes a few seconds: <a href="/billing?billing=pending" style="color:inherit;text-decoration:underline">refresh this page</a>. If it's been more than a few minutes, <a href="mailto:{{ billing.support_email }}" style="color:inherit;text-decoration:underline">contact support</a>.</div>
 {% elif billing.status == "past_due" and billing.has_access %}
 <div class="banner warn"><b>Your last payment failed.</b>Access runs through {{ billing.access_until }} - update your card under Manage billing to keep it going.</div>
@@ -53,8 +53,8 @@
       {% endif %}
       <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
         {% if billing.configured and not billing.exempt and not billing.is_admin %}
-          {% if billing_pending and billing.status not in ["trialing", "active"] %}
-          <span class="btn light" style="pointer-events:none;opacity:.7">Payment confirmation in progress</span>
+          {% if billing.checkout_pending %}
+          <button class="btn light" type="button" disabled aria-disabled="true">Payment confirmation in progress</button>
           {% elif billing.status not in ["trialing", "active", "past_due"] %}
           <form method="post" action="/billing/checkout"><button class="btn" type="submit">Subscribe - ${{ billing.price }}/month</button></form>
           {% endif %}

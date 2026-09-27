@@ -420,9 +420,12 @@ def billing_checkout(request: Request):
             user,
             success_url=f"{env.PUBLIC_BASE_URL}/billing?billing=pending",
             cancel_url=f"{env.PUBLIC_BASE_URL}/billing?notice=Checkout+canceled+-+nothing+was+charged.",
+            storage=store,
         )
     except billing.BillingNotConfigured:
         return RedirectResponse("/billing?notice=Billing+is+not+set+up+on+this+deployment+yet.", 303)
+    except billing.CheckoutInProgress as exc:
+        return RedirectResponse(f"/billing?notice={quote(str(exc))}", 303)
     return RedirectResponse(url, 303)
 
 

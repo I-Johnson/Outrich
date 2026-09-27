@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS app_users (
   stripe_subscription_status TEXT,
   stripe_price_id TEXT,
   stripe_current_period_end TEXT,
+  stripe_checkout_session_id TEXT,
+  stripe_checkout_at TEXT,
   billing_exempt INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   last_login_at TEXT

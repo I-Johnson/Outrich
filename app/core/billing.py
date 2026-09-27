@@ -15,7 +15,7 @@ test suite runs in that mode.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import stripe
 
@@ -24,10 +24,17 @@ from app.core.tenancy import ADMIN_OWNER_ID
 
 PLAN_MONTHLY_USD = 25
 ACTIVE_STATUSES = {"trialing", "active"}
+# Stripe Checkout sessions expire after 24 hours; a recorded session older
+# than that can no longer confirm, so the Plan page offers Subscribe again.
+CHECKOUT_SESSION_MAX_AGE = timedelta(hours=24)
 
 
 class BillingNotConfigured(RuntimeError):
     """Raised when a Stripe call is attempted without the required env keys."""
+
+
+class CheckoutInProgress(RuntimeError):
+    """Raised when a second Checkout is requested while one is unverifiable."""
 
 
 def configured() -> bool:
@@ -111,6 +118,7 @@ def plan_state(user: dict | None, *, admin: bool = False) -> dict:
         "renews_at": end.strftime("%b %-d, %Y") if end and status in ACTIVE_STATUSES else "",
         "access_until": end.strftime("%b %-d, %Y") if end and status in {"canceled", "past_due"} and access else "",
         "support_email": env.SUPPORT_EMAIL,
+        "checkout_pending": checkout_pending(user),
     }
 
 
@@ -133,15 +141,60 @@ def owner_has_access(base, owner_id: str) -> bool:
         return True
     user = base.get("app_users", owner_id)
     if not user:
-        return True
+        # Pre-billing legacy rows are backfilled to ADMIN_OWNER_ID (handled
+        # above), so an owner with no app_users row is not a known legacy
+        # case: pause rather than send for an account we cannot identify.
+        return False
     return has_access(user, admin=user.get("role") == "admin")
 
 
-def create_checkout_session(user: dict, *, success_url: str, cancel_url: str) -> str:
-    """Create a Stripe Checkout Session for the $25/month plan; return its URL."""
+def _checkout_session_open(user: dict, *, now: datetime | None = None) -> bool:
+    """Whether the account has a recorded Checkout session that could still
+    confirm. Drives the pending state - never a bare query flag."""
+    session_id = str(user.get("stripe_checkout_session_id") or "")
+    if not session_id:
+        return False
+    try:
+        created = datetime.fromisoformat(str(user.get("stripe_checkout_at") or ""))
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return created > (now or datetime.now(timezone.utc)) - CHECKOUT_SESSION_MAX_AGE
+
+
+def checkout_pending(user: dict | None) -> bool:
+    """A payment was actually initiated and has not confirmed yet."""
+    if not user:
+        return False
+    if str(user.get("stripe_subscription_status") or "") in ACTIVE_STATUSES:
+        return False
+    return _checkout_session_open(user)
+
+
+def clear_checkout_session(storage, user: dict) -> None:
+    storage.update("app_users", user["id"], {"stripe_checkout_session_id": "", "stripe_checkout_at": ""})
+
+
+def create_checkout_session(user: dict, *, success_url: str, cancel_url: str, storage=None) -> str:
+    """Create a Stripe Checkout Session for the $25/month plan; return its URL.
+
+    One open session per account: when a fresh session is already recorded,
+    it is retrieved and reused instead of minting a second Checkout. Raises
+    CheckoutInProgress when the recorded session cannot be verified.
+    """
     if not configured():
         raise BillingNotConfigured("Stripe is not configured")
     stripe.api_key = env.STRIPE_SECRET_KEY
+    if _checkout_session_open(user):
+        try:
+            existing = stripe.checkout.Session.retrieve(str(user["stripe_checkout_session_id"]))
+        except Exception as exc:
+            raise CheckoutInProgress("A checkout is already in progress. Try again in a moment.") from exc
+        if str(existing.get("status") or "") == "open":
+            return existing.url
+        if storage is not None:
+            clear_checkout_session(storage, user)
     params = {
         "mode": "subscription",
         "line_items": [{"price": env.STRIPE_PRICE_ID, "quantity": 1}],
@@ -156,6 +209,11 @@ def create_checkout_session(user: dict, *, success_url: str, cancel_url: str) ->
     else:
         params["customer_email"] = user.get("email") or ""
     session = stripe.checkout.Session.create(**params)
+    if storage is not None:
+        storage.update("app_users", user["id"], {
+            "stripe_checkout_session_id": session.id,
+            "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+        })
     return session.url
 
 
@@ -190,6 +248,8 @@ def apply_subscription(storage, user: dict, subscription: dict, customer_id: str
     values = {
         "stripe_subscription_id": subscription.get("id") or "",
         "stripe_subscription_status": status,
+        "stripe_checkout_session_id": "",
+        "stripe_checkout_at": "",
         "stripe_current_period_end": datetime.fromtimestamp(period_end_ts, tz=timezone.utc).isoformat() if period_end_ts else "",
     }
     if customer_id:

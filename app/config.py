@@ -65,3 +65,12 @@ class Settings:
 
 
 settings = Settings()
+
+# Billing needs a real support contact: the Plan page advertises one to paying
+# customers. When Stripe is enabled, require SUPPORT_EMAIL or ADMIN_EMAIL to
+# be set explicitly instead of falling back to the placeholder.
+if settings.STRIPE_SECRET_KEY and not os.getenv("SUPPORT_EMAIL") and not os.getenv("ADMIN_EMAIL"):
+    raise RuntimeError(
+        "Billing is enabled (STRIPE_SECRET_KEY is set) but no support contact is configured: "
+        "set SUPPORT_EMAIL or ADMIN_EMAIL."
+    )

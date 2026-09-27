@@ -181,7 +181,7 @@ class BillingTests(unittest.TestCase):
     def test_checkout_redirects_to_stripe(self):
         _, user = self.signup()
         with patch("stripe.checkout.Session.create") as create:
-            create.return_value = type("Session", (), {"url": "https://checkout.stripe.com/test-session"})()
+            create.return_value = type("Session", (), {"id": "cs_test_1", "url": "https://checkout.stripe.com/test-session"})()
             response = self.client.post("/billing/checkout", follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "https://checkout.stripe.com/test-session")
@@ -190,12 +190,17 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(params["line_items"], [{"price": "price_test_25", "quantity": 1}])
         self.assertEqual(params["client_reference_id"], str(user["id"]))
         self.assertEqual(params["customer_email"], "new@example.com")
+        # The open session is recorded on the account row.
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_checkout_session_id"], "cs_test_1")
+        self.assertTrue(updated["stripe_checkout_at"])
+        self.assertTrue(billing.checkout_pending(updated))
 
     def test_checkout_reuses_existing_customer(self):
         _, user = self.signup()
         self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_123"})
         with patch("stripe.checkout.Session.create") as create:
-            create.return_value = type("Session", (), {"url": "https://checkout.stripe.com/test-session"})()
+            create.return_value = type("Session", (), {"id": "cs_test_1", "url": "https://checkout.stripe.com/test-session"})()
             self.client.post("/billing/checkout", follow_redirects=False)
         self.assertEqual(create.call_args.kwargs.get("customer"), "cus_123")
         self.assertNotIn("customer_email", create.call_args.kwargs)
@@ -223,6 +228,12 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(create.call_args.kwargs["customer"], "cus_123")
 
     # --- worker entitlement ---
+
+    def test_unknown_owner_is_paused_not_trusted(self):
+        _, user = self.signup()
+        self.assertFalse(billing.owner_has_access(self.raw, "owner-with-no-account"))
+        from app.core.tenancy import ADMIN_OWNER_ID
+        self.assertTrue(billing.owner_has_access(self.raw, ADMIN_OWNER_ID))
 
     def seed_queued_work(self, user):
         from app.core.tenancy import OwnerStore
@@ -301,6 +312,8 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(updated["stripe_subscription_status"], "active")
         self.assertEqual(updated["stripe_price_id"], "price_test_25")
         self.assertTrue(billing.has_access(updated))
+        self.assertEqual(updated["stripe_checkout_session_id"], "")
+        self.assertFalse(billing.checkout_pending(updated))
         # The previously locked user now passes the gate.
         self.assertEqual(self.client.get("/").status_code, 200)
 
@@ -357,15 +370,19 @@ class BillingTests(unittest.TestCase):
 
     def test_pending_checkout_banner_is_neutral_until_webhook_confirms(self):
         _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_test_1",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat()})
         page = self.client.get("/billing?billing=pending")
         self.assertIn("Payment submitted", page.text)
         self.assertIn("refresh this page", page.text)
         self.assertIn("mailto:", page.text)
         self.assertNotIn("Welcome aboard", page.text)
-        # No second Checkout while the first payment is confirming.
+        # No second Checkout while the first payment is confirming, on any
+        # view of the Plan page; the retry path returns when the session expires.
         self.assertNotIn("/billing/checkout", page.text)
-        # The plain Plan page keeps the retry path open.
-        self.assertIn("/billing/checkout", self.client.get("/billing").text)
+        plain = self.client.get("/billing")
+        self.assertNotIn("/billing/checkout", plain.text)
+        self.assertIn("Payment confirmation in progress", plain.text)
         self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
                                                   "stripe_subscription_status": "active", "stripe_current_period_end": self.future(30)})
         page = self.client.get("/billing?billing=pending")
@@ -374,9 +391,43 @@ class BillingTests(unittest.TestCase):
     def test_checkout_success_url_uses_pending_state(self):
         _, user = self.signup()
         with patch("stripe.checkout.Session.create") as create:
-            create.return_value = type("Session", (), {"url": "https://checkout.stripe.com/test-session"})()
+            create.return_value = type("Session", (), {"id": "cs_test_1", "url": "https://checkout.stripe.com/test-session"})()
             self.client.post("/billing/checkout", follow_redirects=False)
         self.assertTrue(create.call_args.kwargs["success_url"].endswith("/billing?billing=pending"))
+
+    def test_checkout_never_mints_a_second_open_session(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat()})
+        existing = type("Session", (dict,), {"url": "https://checkout.stripe.com/open-session"})(status="open")
+        with patch("stripe.checkout.Session.retrieve", return_value=existing) as retrieve, \
+             patch("stripe.checkout.Session.create") as create:
+            response = self.client.post("/billing/checkout", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "https://checkout.stripe.com/open-session")
+        retrieve.assert_called_once_with("cs_open")
+        create.assert_not_called()
+
+    def test_checkout_refuses_when_the_recorded_session_cannot_be_verified(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat()})
+        with patch("stripe.checkout.Session.retrieve", side_effect=Exception("stripe unreachable")), \
+             patch("stripe.checkout.Session.create") as create:
+            response = self.client.post("/billing/checkout", follow_redirects=False)
+        self.assertIn("/billing?notice=", response.headers["location"])
+        create.assert_not_called()
+
+    def test_expired_recorded_session_unlocks_subscribe(self):
+        _, user = self.signup()
+        stale = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_old", "stripe_checkout_at": stale})
+        page = self.client.get("/billing")
+        self.assertNotIn("Payment confirmation in progress", page.text)
+        self.assertIn("/billing/checkout", page.text)
+        # A bare query flag without a recorded session shows no pending state.
+        flagged = self.client.get("/billing?billing=pending")
+        self.assertNotIn("Payment submitted", flagged.text)
+        self.assertIn("/billing/checkout", flagged.text)
 
     def test_webhook_invoice_paid_refreshes_subscription(self):
         _, user = self.signup()
@@ -410,6 +461,25 @@ class BillingTests(unittest.TestCase):
         response = self.post_webhook(event)
         self.assertEqual(response.status_code, 200)
         self.assertIn("unknown user", response.json()["outcome"])
+
+
+class SupportContactStartupTests(unittest.TestCase):
+    def test_billing_requires_a_support_contact_at_startup(self):
+        import subprocess, sys
+        env = {**os.environ, "STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_PRICE_ID": "price_x",
+               "SUPPORT_EMAIL": "", "ADMIN_EMAIL": "", "SCHEDULER_ENABLED": "false",
+               "DATABASE_BACKEND": "sqlite", "DB_PATH": "/tmp/outrich-support-test.db"}
+        env.pop("SUPPORT_EMAIL", None); env.pop("ADMIN_EMAIL", None)
+        result = subprocess.run([sys.executable, "-c", "import app.config"],
+                                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SUPPORT_EMAIL", result.stderr)
+        env["SUPPORT_EMAIL"] = "support@example.com"
+        result = subprocess.run([sys.executable, "-c", "import app.config"],
+                                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

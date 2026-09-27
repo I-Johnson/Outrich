@@ -8,6 +8,8 @@ alter table app_users add column if not exists stripe_subscription_id text;
 alter table app_users add column if not exists stripe_subscription_status text;
 alter table app_users add column if not exists stripe_price_id text;
 alter table app_users add column if not exists stripe_current_period_end text;
+alter table app_users add column if not exists stripe_checkout_session_id text;
+alter table app_users add column if not exists stripe_checkout_at text;
 alter table app_users add column if not exists billing_exempt integer not null default 0;
 
 -- Grandfather every pre-launch account.
