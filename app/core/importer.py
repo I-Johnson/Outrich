@@ -267,11 +267,12 @@ def clean_row(source: dict[str, str], mapping: dict[str, str], overrides: dict[s
     return row
 
 
-def _categorize(headers: list[str], source_rows: list[dict], mapping: dict[str, str], cleanup: dict[int, dict[str, str]] | None = None):
-    existing = store.list("clients", order="", limit=20000, select="email,domain")
+def _categorize(headers: list[str], source_rows: list[dict], mapping: dict[str, str], cleanup: dict[int, dict[str, str]] | None = None, storage=None):
+    s = storage or store
+    existing = s.list("clients", order="", limit=20000, select="email,domain")
     seen_emails = {normalize_email(item.get("email")) for item in existing if item.get("email")}
     seen_domains = {(item.get("domain") or "").lower() for item in existing if item.get("domain")}
-    required = (store.get("settings", 1) or {}).get("csv_required_fields", ["email"])
+    required = (s.get("settings", 1) or {}).get("csv_required_fields", ["email"])
 
     ready, rejected = [], []
     for index, source in enumerate(source_rows):
@@ -300,33 +301,36 @@ def _categorize(headers: list[str], source_rows: list[dict], mapping: dict[str, 
     return ready, rejected
 
 
-def build_preview(raw: bytes, filename: str, mapping_override: dict | None = None) -> dict:
+def build_preview(raw: bytes, filename: str, mapping_override: dict | None = None, storage=None) -> dict:
     headers, source_rows = decode_csv(raw)
+    s = storage or store
     mapping = select_mapping(headers, source_rows, mapping_override)
     cleanup = gemini_cleanup_rows(source_rows, mapping)
-    ready, rejected = _categorize(headers, source_rows, mapping, cleanup)
+    ready, rejected = _categorize(headers, source_rows, mapping, cleanup, storage=s)
     batch = {"id": new_id(), "filename": filename, "uploaded_at": now_iso(), "total_rows": len(source_rows), "imported_rows": 0,
              "duplicate_rows": sum(1 for r in rejected if r["reason"].startswith("duplicate")), "rejected_rows": len(rejected),
              "column_mapping": mapping, "rejected_csv": json.dumps({"headers": headers, "source": source_rows, "ready": ready, "rejected": rejected}), "status": "preview"}
-    store.insert("import_batches", batch)
+    s.insert("import_batches", batch)
     return {**batch, "ready": ready[:20], "ready_count": len(ready), "rejected": rejected[:20], "headers": headers}
 
 
-def remap_preview(batch_id: str, mapping: dict[str, str]) -> dict:
-    batch = store.get("import_batches", batch_id)
+def remap_preview(batch_id: str, mapping: dict[str, str], storage=None) -> dict:
+    s = storage or store
+    batch = s.get("import_batches", batch_id)
     if not batch or batch.get("status") != "preview": raise ValueError("Import preview is no longer available")
     payload = json.loads(batch.get("rejected_csv") or "{}"); headers = payload.get("headers", []); source_rows = payload.get("source", [])
     mapping = {k: v for k, v in mapping.items() if k in headers and v in FIELDS}
     cleanup = gemini_cleanup_rows(source_rows, mapping)
-    ready, rejected = _categorize(headers, source_rows, mapping, cleanup)
+    ready, rejected = _categorize(headers, source_rows, mapping, cleanup, storage=s)
     values = {"duplicate_rows": sum(1 for r in rejected if r["reason"].startswith("duplicate")), "rejected_rows": len(rejected), "column_mapping": mapping,
               "rejected_csv": json.dumps({"headers": headers, "source": source_rows, "ready": ready, "rejected": rejected})}
-    store.update("import_batches", batch_id, values)
+    s.update("import_batches", batch_id, values)
     return {**batch, **values, "headers": headers, "ready": ready[:20], "ready_count": len(ready), "rejected": rejected[:20]}
 
 
-def confirm_import(batch_id: str) -> dict:
-    batch = store.get("import_batches", batch_id)
+def confirm_import(batch_id: str, storage=None) -> dict:
+    s = storage or store
+    batch = s.get("import_batches", batch_id)
     if not batch or batch["status"] != "preview": raise ValueError("Import preview is no longer available")
     payload = json.loads(batch.get("rejected_csv") or "{}"); added = 0
     rejected = list(payload.get("rejected", []))
@@ -342,14 +346,14 @@ def confirm_import(batch_id: str) -> dict:
         chunk = candidates[i:i + chunk_size]
         if hasattr(store, "insert_many"):
             try:
-                store.insert_many("clients", chunk)
+                s.insert_many("clients", chunk)
                 added += len(chunk)
                 continue
             except Exception:
                 pass
         for c in chunk:
             try:
-                store.insert("clients", c)
+                s.insert("clients", c)
                 added += 1
             except sqlite3.IntegrityError:
                 rejected.append({**c, "reason": "insert_conflict"})
@@ -363,24 +367,25 @@ def confirm_import(batch_id: str) -> dict:
     output = io.StringIO(); cols = sorted({k for r in rejected for k in r if k != "extra"})
     writer = csv.DictWriter(output, fieldnames=cols)
     if cols: writer.writeheader(); writer.writerows([{k: r.get(k, "") for k in cols} for r in rejected])
-    store.update("import_batches", batch_id, {"imported_rows": added, "rejected_rows": len(rejected), "rejected_csv": output.getvalue(), "status": "done"})
+    s.update("import_batches", batch_id, {"imported_rows": added, "rejected_rows": len(rejected), "rejected_csv": output.getvalue(), "status": "done"})
     return {"added": added, "rejected": len(rejected)}
 
 
-def undo_import(batch_id: str) -> int:
-    batch = store.get("import_batches", batch_id)
+def undo_import(batch_id: str, storage=None) -> int:
+    s = storage or store
+    batch = s.get("import_batches", batch_id)
     if not batch or batch.get("status") != "done":
         raise ValueError("Only a completed import can be undone")
-    leads = store.list("clients", {"import_batch_id": batch_id}, order="", limit=10000)
+    leads = s.list("clients", {"import_batch_id": batch_id}, order="", limit=10000)
     lead_ids = [str(lead["id"]) for lead in leads]
     for offset in range(0, len(lead_ids), 100):
-        if store.list(
+        if s.list(
             "email_log",
             {"client_id": ("in", lead_ids[offset:offset + 100])},
             order="",
             limit=1,
         ):
             raise ValueError("This import has campaign email history and cannot be undone safely")
-    deleted = store.delete("clients", {"import_batch_id": batch_id})
-    store.update("import_batches", batch_id, {"status": "undone"})
+    deleted = s.delete("clients", {"import_batch_id": batch_id})
+    s.update("import_batches", batch_id, {"status": "undone"})
     return deleted
