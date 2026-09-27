@@ -159,6 +159,9 @@
   const hint = document.getElementById('step-hint');
   let current = 1;
   let audienceCount = null;
+  let audienceEligible = null;
+  let countState = 'unknown';
+  let countSeq = 0;
   const tpls = () => [...document.querySelectorAll('input[name="template_ids"]:checked')];
   const snds = () => [...document.querySelectorAll('input[name="gmail_accounts"]:checked')];
   const say = (msg) => { hint.textContent = msg || ''; };
@@ -170,7 +173,8 @@
   };
   const allowed = (n) => {
     if (n <= current) return true;
-    if (n >= 3 && audienceCount === 0) { say('No leads match this audience yet. Adjust the filters, run discovery, or import a list first.'); return false; }
+    if (n >= 3 && countState !== 'ok') { say(countState === 'error' ? 'Could not check your audience just now - try again in a moment.' : 'Checking your audience - one moment.'); return false; }
+    if (n >= 3 && audienceEligible === 0) { say('No leads are eligible to send in this audience yet. Adjust the filters, run discovery, or import a list first.'); return false; }
     if (n >= 4 && !tpls().length) { say('Pick at least one template in step 3 before moving on.'); return false; }
     if (n >= 5 && !snds().length) { say('Choose a sender in step 4 before reviewing.'); return false; }
     if (n >= 5 && providerMix()) { say('Selected senders use different providers. Pick senders from a single provider.'); return false; }
@@ -204,7 +208,7 @@
     if (city.trim()) bits.push(city.trim());
     if (state.trim()) bits.push(state.trim().toUpperCase());
     if (status) bits.push('status: ' + status);
-    const countText = audienceCount === null ? '' : (' - ' + audienceCount + (audienceCount === 1 ? ' lead matches' : ' leads match'));
+    const countText = countState !== 'ok' ? '' : (' - ' + audienceEligible + (audienceEligible === 1 ? ' eligible to send' : ' eligible to send'));
     return (bits.length ? bits.join(' · ') : 'Every eligible lead') + countText;
   };
   const refresh = () => {
@@ -238,6 +242,7 @@
   let countTimer = null;
   const countBox = document.getElementById('audience-count');
   const fetchCount = () => {
+    const seq = ++countSeq;
     const params = new URLSearchParams();
     for (const key of ['category', 'state', 'city', 'status']) {
       const el = document.querySelector('[name="' + key + '"]');
@@ -246,14 +251,21 @@
     const batch = document.querySelector('input[name="import_batch_id"]');
     if (batch) params.set('import_batch_id', batch.value);
     fetch('/campaigns/audience-count?' + params.toString(), {headers: {'Accept': 'application/json'}})
-      .then(r => r.ok ? r.json() : null)
+      .then(r => { if (!r.ok) throw new Error('count failed'); return r.json(); })
       .then(data => {
-        if (!data) return;
+        if (seq !== countSeq) return; // a newer filter won the race
+        countState = 'ok';
         audienceCount = data.count;
-        if (countBox) countBox.textContent = audienceCount + (audienceCount === 1 ? ' lead matches' : ' leads match') + ' this audience. Discovery results and imports land here once saved.';
+        audienceEligible = data.eligible;
+        if (countBox) countBox.textContent = data.eligible + (data.eligible === 1 ? ' lead is' : ' leads are') + ' eligible to send in this audience (' + data.count + ' matching ' + (data.count === 1 ? 'record' : 'records') + '). Already-contacted and suppressed leads are excluded.';
         refresh();
       })
-      .catch(() => {});
+      .catch(() => {
+        if (seq !== countSeq) return;
+        countState = 'error';
+        audienceCount = null; audienceEligible = null;
+        if (countBox) countBox.textContent = 'Could not count this audience just now. Check your connection and try again.';
+      });
   };
   const scheduleCount = () => { clearTimeout(countTimer); countTimer = setTimeout(fetchCount, 350); };
   for (const key of ['category', 'state', 'city', 'status']) {
@@ -268,11 +280,15 @@
     const jobsBox = document.getElementById('discovery-jobs');
     const note = document.getElementById('discovery-note');
     const head = document.getElementById('discovery-head');
-    const timer = setInterval(() => {
+    let delay = 5000;
+    let failures = 0;
+    let stopped = false;
+    const tick = () => {
+      if (stopped) return;
       fetch('/campaigns/discovery-status', {headers: {'Accept': 'application/json'}})
-        .then(r => r.ok ? r.json() : null)
+        .then(r => { if (!r.ok) throw new Error('status failed'); return r.json(); })
         .then(data => {
-          if (!data) return;
+          failures = 0; delay = 5000;
           if (data.jobs.length && head) head.style.display = '';
           if (jobsBox) jobsBox.innerHTML = data.jobs.map(j => {
             const amber = (j.status === 'queued' || j.status === 'running') ? 'amber' : '';
@@ -280,13 +296,25 @@
             return '<div class="row"><div><b>' + j.category + ' - ' + j.city + ', ' + j.state + '</b><small>' + status + ' · ' + j.saved_count + ' saved of ' + j.found_count + ' found</small></div><span class="pill ' + amber + '">' + j.status + '</span></div>';
           }).join('');
           if (!data.active) {
-            clearInterval(timer);
+            stopped = true;
             if (note) note.textContent = 'Discovery finished. Your new leads are ready in the Audience step.';
             fetchCount();
+            return;
           }
+          setTimeout(tick, delay);
         })
-        .catch(() => {});
-    }, 5000);
+        .catch(() => {
+          failures += 1;
+          delay = Math.min(delay * 2, 60000);
+          if (failures >= 3) {
+            stopped = true;
+            if (note) note.textContent = 'Live updates paused after repeated errors. Reload the page to check discovery status.';
+            return;
+          }
+          setTimeout(tick, delay);
+        });
+    };
+    setTimeout(tick, delay);
   }
   syncProvider();
   refresh();

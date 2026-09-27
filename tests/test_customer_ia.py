@@ -83,6 +83,29 @@ class CustomerIATests(unittest.TestCase):
         self.assertEqual(status.status_code, 200)
         self.assertIn("active", status.json())
 
+
+    def test_empty_send_days_blocks_queueing(self):
+        from app.core.sender import _schedule_config
+        self.assertEqual(_schedule_config({})["send_days"], [0, 1, 2, 3, 4])
+        self.assertEqual(_schedule_config({"send_days": []})["send_days"], [])
+        self.client.post("/settings/gmail-senders", data={
+            "email": "dee@gmail.com", "app_password": "abcd efgh ijkl mnop", "provider": "gmail"}, follow_redirects=False)
+        sender = self.owner.list("gmail_senders")[0]
+        template = self.owner.list("email_templates")[0]
+        self.owner.insert("clients", {"id": new_id(), "business_name": "Acme Roofing", "short_name": "Acme",
+                                      "email": "owner@acme.test", "status": "new", "source": "manual",
+                                      "created_at": STAMP, "updated_at": STAMP})
+        self.client.post("/campaigns/save", data={
+            "name": "Roofing", "template_ids": [str(template["id"])],
+            "gmail_accounts": [str(sender["id"])], "provider": "gmail"}, follow_redirects=False)
+        campaign = self.owner.list("campaigns")[0]
+        self.owner.update("settings", 1, {"send_days": []})
+        started = self.client.post(f"/campaigns/{campaign['id']}/start", follow_redirects=False)
+        self.assertEqual(started.status_code, 303)
+        self.assertIn("no%20send%20days", started.headers["location"])
+        self.assertEqual(self.owner.list("email_log"), [])
+        self.assertEqual(self.owner.get("campaigns", campaign["id"])["state"], "draft")
+
     def test_admin_keeps_the_full_tools(self):
         admin = self.admin_client()
         overview = admin.get("/")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from zoneinfo import ZoneInfo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import csv
 import hashlib
 import io
@@ -1768,11 +1768,26 @@ def campaign_discovery_status(request: Request):
 
 @app.get("/campaigns/audience-count")
 def campaign_audience_count(request: Request, category: str = "", state: str = "", city: str = "", status: str = "", import_batch_id: str = ""):
+    """Matching records versus leads the next queue run would actually email (mirrors queue_campaign)."""
     from app.core.sender import _matches
     s = outreach_store(request)
     target = {k: v.strip() for k, v in {"category": category, "state": state, "city": city, "status": status, "import_batch_id": import_batch_id}.items() if v.strip()}
     clients = s.list("clients", order="", limit=20000)
-    return {"count": sum(1 for c in clients if _matches(c, target))}
+    matching = [c for c in clients if _matches(c, target)]
+    suppressed = s.list("suppression", order="", limit=10000)
+    blocked_emails = {str(x.get("email") or "").lower() for x in suppressed}
+    blocked_domains = {str(x.get("domain") or "").lower() for x in suppressed}
+    logs = s.list("email_log", order="", limit=20000)
+    cfg = s.get("settings", 1) or {}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(cfg.get("resend_block_days") or 90))
+    eligible = 0
+    for c in matching:
+        if c.get("status") in {"replied", "do_not_contact", "bounced"}: continue
+        if str(c.get("email") or "").lower() in blocked_emails or str(c.get("domain") or "").lower() in blocked_domains: continue
+        prior = [l for l in logs if l.get("client_id") == c["id"] and l.get("status") in {"queued", "sending", "sent", "replied"}]
+        if any(datetime.fromisoformat((l.get("sent_at") or l.get("created_at")).replace("Z", "+00:00")) >= cutoff for l in prior): continue
+        eligible += 1
+    return {"count": len(matching), "eligible": eligible}
 
 
 @app.post("/campaigns/discovery")
@@ -1876,7 +1891,11 @@ def campaign_detail(request: Request, campaign_id: str):
 @app.post("/campaigns/{campaign_id}/start")
 def campaign_start(request: Request, campaign_id: str):
     s = outreach_store(request)
-    result = queue_campaign(campaign_id, storage=s); return RedirectResponse(f"/campaigns/{campaign_id}?notice=Queued+{result['queued']}%2C+skipped+{result['skipped']}", 303)
+    try:
+        result = queue_campaign(campaign_id, storage=s)
+    except ValueError as exc:
+        return RedirectResponse(f"/campaigns/{campaign_id}?notice={quote(str(exc))}", 303)
+    return RedirectResponse(f"/campaigns/{campaign_id}?notice=Queued+{result['queued']}%2C+skipped+{result['skipped']}", 303)
 
 
 @app.post("/campaigns/{campaign_id}/state")

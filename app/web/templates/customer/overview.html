@@ -16,13 +16,11 @@
 </div>
 {% if metrics.campaigns %}
 <div class="card section">
-  <h2>Delivery funnel</h2>
-  <p>Current backlog versus lifetime delivery, across all campaigns.</p>
+  <h2>Delivery snapshot</h2>
+  <p>Your current backlog next to lifetime delivery, across all campaigns.</p>
   <div class="funnel">
     <div class="funnel-stage"><b>{{ funnel.queued }}</b><span>Queued right now</span></div>
-    <div class="funnel-arrow" aria-hidden="true">→</div>
     <div class="funnel-stage mid"><b>{{ funnel.delivered }}</b><span>Delivered, all time</span></div>
-    <div class="funnel-arrow" aria-hidden="true">→</div>
     <div class="funnel-stage end"><b>{{ funnel.replied }}</b><span>Replies, all time</span></div>
   </div>
 </div>
