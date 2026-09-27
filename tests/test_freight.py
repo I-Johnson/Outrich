@@ -245,6 +245,13 @@ class FreightConversationTests(unittest.TestCase):
             "subject": "Truck available", "root_message_id": "<first@example.com>", "last_message_id": "<first@example.com>",
             "state": "waiting", "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp,
         })
+        self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread_id, "direction": "out",
+            "provider_message_id": "<first@example.com>", "from_email": "carrier@example.com",
+            "to_email": "broker@example.com", "subject": "Truck available",
+            "body_text": "Truck available", "classification": {"kind": "first_touch"},
+            "status": "sent", "created_at": stamp,
+        })
         self.received = 0
         self.sent = 0
 
@@ -276,6 +283,15 @@ class FreightConversationTests(unittest.TestCase):
             "schedule_confirmed": "yes",
             **overrides,
         }
+
+    def test_poll_warns_when_threads_have_no_matching_sender(self):
+        # A thread whose sender account no active gmail sender matches (e.g. the
+        # sender row is owned by a different owner) must log loudly - silently
+        # skipping is how the prod cursor froze without any trace.
+        with self.assertLogs("app.core.freight", level="WARNING") as logs:
+            result = freight_module.poll_freight_replies(self.storage)
+        self.assertEqual(result["accounts"], 0)
+        self.assertTrue(any("no active gmail sender" in line for line in logs.output))
 
     def test_three_turn_rate_negotiation_and_counter_events(self):
         first = self.inbound("Pickup 09/23, delivery to Dallas, TX. 1,068 miles, weight 40,000 lbs. Rate- 4,000.00")
@@ -1871,24 +1887,45 @@ class FreightRateConPdfTests(unittest.TestCase):
         kept = self.storage.get('freight_bookings', booking['id'])
         self.assertTrue(kept['rate_con_reviewed'])
 
-    def test_unmatched_reply_is_parked_with_alert(self):
-        # A broker reply that matches no open thread must never be dropped
-        # silently: it is parked with a visible alert for the dispatcher.
+    def test_unmatched_email_is_ignored_without_creating_freight_data(self):
         header = _email.message_from_bytes(b"From: stranger@broker.com\r\nSubject: Re: Lane?\r\nMessage-ID: <u1@x>\r\n\r\n")
-        parsed = _email.message_from_bytes(b"From: stranger@broker.com\r\nTo: us@c.com\r\nSubject: Re: Lane?\r\n\r\nbody here")
-        thread = freight_module._record_unmatched_reply(header, parsed, "<u1@x>", "acct-1", self.storage)
-        self.assertEqual(thread["state"], "unmatched")
-        load = self.storage.get("freight_loads", thread["load_id"])
-        self.assertEqual(load["status"], "unmatched")
-        alerts = self.storage.list("freight_alerts", {"kind": "unmatched_reply"}, order="", limit=5)
-        self.assertEqual(len(alerts), 1)
-        messages = self.storage.list("freight_messages", {"thread_id": thread["id"]}, order="", limit=5)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["processing_state"], "processed")
-        # A follow-up on the same conversation parks on the same thread.
-        again = freight_module._record_unmatched_reply(header, parsed, "<u2@x>", "acct-1", self.storage)
-        self.assertEqual(again["id"], thread["id"])
-        self.assertEqual(len(self.storage.list("freight_alerts", {"kind": "unmatched_reply"}, order="", limit=5)), 1)
+        before_loads = len(self.storage.list("freight_loads", order="", limit=1000))
+        before_threads = len(self.storage.list("freight_threads", order="", limit=1000))
+        self.assertIsNone(freight_module._find_thread(header, "acct-1", self.storage))
+        self.assertEqual(len(self.storage.list("freight_loads", order="", limit=1000)), before_loads)
+        self.assertEqual(len(self.storage.list("freight_threads", order="", limit=1000)), before_threads)
+
+    def test_inbound_only_thread_is_hidden_from_freight_ui(self):
+        from app.main import _visible_freight_records
+        stamp = now_iso()
+        self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": self.thread["id"], "direction": "out",
+            "provider_message_id": "<initiated@example.com>", "from_email": "carrier@example.com",
+            "to_email": "a@b.com", "subject": "s", "body_text": "first touch",
+            "classification": {}, "status": "sent", "created_at": stamp,
+        })
+        junk_load = self.storage.insert("freight_loads", {
+            "id": new_id(), "broker_email": "newsletter@example.com", "origin_city": "",
+            "destination_city": "", "subject": "Weekly newsletter", "status": "unmatched",
+            "created_at": stamp, "updated_at": stamp,
+        })
+        junk_thread = self.storage.insert("freight_threads", {
+            "id": new_id(), "load_id": junk_load["id"], "sender_account": "1",
+            "recipient_email": "newsletter@example.com", "subject": "Weekly newsletter",
+            "state": "unmatched", "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp,
+        })
+        self.storage.insert("freight_messages", {
+            "id": new_id(), "thread_id": junk_thread["id"], "direction": "in",
+            "provider_message_id": "<newsletter@example.com>", "from_email": "newsletter@example.com",
+            "to_email": "carrier@example.com", "subject": "Weekly newsletter", "body_text": "noise",
+            "classification": {}, "status": "received", "created_at": stamp,
+        })
+        loads, threads = _visible_freight_records(
+            self.storage, self.storage.list("freight_loads", order="", limit=1000),
+        )
+        self.assertIn(str(self.load["id"]), {str(row["id"]) for row in loads})
+        self.assertNotIn(str(junk_load["id"]), {str(row["id"]) for row in loads})
+        self.assertNotIn(str(junk_thread["id"]), {str(row["id"]) for row in threads})
 
     def test_rate_con_pdf_route_scopes_attachment_to_booking_thread(self):
         from fastapi.testclient import TestClient
