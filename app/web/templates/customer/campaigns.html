@@ -152,6 +152,7 @@
     </div>
   </div>
 </div>
+<script src="/static/count-gate.js"></script>
 <script>
 (() => {
   const pages = document.querySelectorAll('.builder-page');
@@ -161,7 +162,6 @@
   let audienceCount = null;
   let audienceEligible = null;
   let countState = 'unknown';
-  let countSeq = 0;
   const tpls = () => [...document.querySelectorAll('input[name="template_ids"]:checked')];
   const snds = () => [...document.querySelectorAll('input[name="gmail_accounts"]:checked')];
   const say = (msg) => { hint.textContent = msg || ''; };
@@ -240,11 +240,10 @@
     else if (providerMix()) { e.preventDefault(); go(4); say('Selected senders use different providers. Pick senders from a single provider.'); }
   });
 
-  // Live audience count (debounced); zero matches halt forward progress
-  let countTimer = null;
+  // Live audience count through CountGate: a filter change invalidates any
+  // in-flight fetch immediately (latest filter wins), zero matches halt progress
   const countBox = document.getElementById('audience-count');
-  const fetchCount = () => {
-    const seq = ++countSeq;
+  const gate = CountGate.createCountGate(() => {
     const params = new URLSearchParams();
     for (const key of ['category', 'state', 'city', 'status']) {
       const el = document.querySelector('[name="' + key + '"]');
@@ -252,34 +251,26 @@
     }
     const batch = document.querySelector('input[name="import_batch_id"]');
     if (batch) params.set('import_batch_id', batch.value);
-    fetch('/campaigns/audience-count?' + params.toString(), {headers: {'Accept': 'application/json'}})
-      .then(r => { if (!r.ok) throw new Error('count failed'); return r.json(); })
-      .then(data => {
-        if (seq !== countSeq) return; // a newer filter won the race
-        countState = 'ok';
-        audienceCount = data.count;
-        audienceEligible = data.eligible;
-        if (countBox) countBox.textContent = data.eligible + (data.eligible === 1 ? ' lead is' : ' leads are') + ' eligible to send in this audience, before message checks (' + data.count + ' matching ' + (data.count === 1 ? 'record' : 'records') + '). Already-contacted and suppressed leads are excluded.';
-        refresh();
-      })
-      .catch(() => {
-        if (seq !== countSeq) return;
-        countState = 'error';
-        audienceCount = null; audienceEligible = null;
-        if (countBox) countBox.textContent = 'Could not count this audience just now. Check your connection and try again.';
-      });
-  };
-  const scheduleCount = () => {
-    countState = 'unknown';
-    audienceCount = null; audienceEligible = null;
-    if (countBox) countBox.textContent = 'Rechecking this audience...';
-    clearTimeout(countTimer); countTimer = setTimeout(fetchCount, 350);
-  };
+    return fetch('/campaigns/audience-count?' + params.toString(), {headers: {'Accept': 'application/json'}})
+      .then(r => { if (!r.ok) throw new Error('count failed'); return r.json(); });
+  }, 350);
+  gate.onChange((st) => {
+    countState = st.status;
+    audienceCount = st.count;
+    audienceEligible = st.eligible;
+    if (countBox) {
+      if (st.status === 'ok') countBox.textContent = st.eligible + (st.eligible === 1 ? ' lead is' : ' leads are') + ' eligible to send in this audience, before message checks (' + st.count + ' matching ' + (st.count === 1 ? 'record' : 'records') + '). Already-contacted and suppressed leads are excluded.';
+      else if (st.status === 'error') countBox.textContent = 'Could not count this audience just now. Check your connection and try again.';
+      else countBox.textContent = 'Rechecking this audience...';
+    }
+    refresh();
+  });
+  const scheduleCount = () => gate.schedule();
   for (const key of ['category', 'state', 'city', 'status']) {
     const el = document.querySelector('[name="' + key + '"]');
     if (el) { el.addEventListener('input', scheduleCount); el.addEventListener('change', scheduleCount); }
   }
-  fetchCount();
+  gate.refresh();
 
   // Scoped discovery status polling - DOM updates only, never a page reload
   const live = document.getElementById('discovery-live');
@@ -316,7 +307,7 @@
           if (!data.active) {
             stopped = true;
             if (note) note.textContent = 'Discovery finished. Your new leads are ready in the Audience step.';
-            fetchCount();
+            gate.refresh();
             return;
           }
           setTimeout(tick, delay);

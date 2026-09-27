@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ["SCHEDULER_ENABLED"] = "false"
@@ -144,6 +145,17 @@ class CustomerIATests(unittest.TestCase):
         # queue_campaign itself raises the same fail-closed error.
         with self.assertRaises(ValueError):
             queue_campaign(campaign["id"], storage=self.owner)
+
+
+    def test_count_gate_latest_filter_wins_race(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        script = Path(__file__).with_name("frontend_race.js")
+        result = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_admin_keeps_the_full_tools(self):
         admin = self.admin_client()
