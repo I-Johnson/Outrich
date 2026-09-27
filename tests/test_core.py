@@ -967,3 +967,55 @@ class DiscoveryTests(unittest.TestCase):
 
 
 if __name__ == "__main__": unittest.main()
+
+
+class WorkerSchedulerTests(unittest.TestCase):
+    def test_tick_records_heartbeat(self):
+        from app.jobs import scheduler
+        rows = {"settings": {1: {"id": 1}}, "jobs": {}}
+
+        class MemoryStore:
+            def list(self, table, filters=None, order="", limit=100, **kwargs): return []
+            def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
+
+        with patch("app.jobs.scheduler.store", MemoryStore()), \
+             patch.object(scheduler, "send_due"), \
+             patch.object(scheduler, "poll_freight_replies"), \
+             patch.object(scheduler, "recover_uncertain_freight_sends"), \
+             patch.object(scheduler, "outreach_owner_ids", return_value=[]), \
+             patch.object(scheduler, "freight_owner_ids", return_value=[]):
+            scheduler.tick()
+        cfg = rows["settings"][1]
+        self.assertTrue(cfg.get("worker_last_tick_started_at"))
+        self.assertTrue(cfg.get("worker_last_tick_finished_at"))
+        self.assertIsNone(cfg.get("worker_last_error"))
+        self.assertEqual(cfg.get("worker_interval_seconds"), max(scheduler.settings.SCHEDULER_INTERVAL_SECONDS, 10))
+
+    def test_start_schedules_immediate_first_tick(self):
+        from app.jobs import scheduler
+        scheduler._scheduler = None
+        fake = Mock()
+        fake_settings = Mock(SCHEDULER_ENABLED=True, SCHEDULER_INTERVAL_SECONDS=10)
+        try:
+            with patch.object(scheduler, "settings", fake_settings), \
+                 patch.object(scheduler, "BackgroundScheduler", return_value=fake):
+                scheduler.start()
+            _, kwargs = fake.add_job.call_args
+            self.assertEqual(kwargs.get("seconds"), 10)
+            self.assertIsNotNone(kwargs.get("next_run_time"))
+            fake.start.assert_called_once()
+        finally:
+            scheduler._scheduler = None
+
+    def test_health_reports_scheduler_state(self):
+        from app import main as app_main
+
+        class S:
+            def get(self, table, row_id):
+                return {"worker_last_tick_started_at": "t0", "worker_last_tick_finished_at": "t1", "worker_last_error": None}
+
+        with patch.object(app_main, "store", S()):
+            body = app_main.health()
+        self.assertEqual(body["scheduler"]["last_tick_started_at"], "t0")
+        self.assertEqual(body["scheduler"]["last_tick_finished_at"], "t1")
+        self.assertIn("interval_seconds", body["scheduler"])
