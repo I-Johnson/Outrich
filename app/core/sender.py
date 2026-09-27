@@ -20,57 +20,61 @@ from app.core.template_engine import render_template
 from app.db import new_id, now_iso, store
 
 
-def app_settings() -> dict:
-    return store.get("settings", 1) or {}
+def app_settings(storage=None) -> dict:
+    s = storage or store
+    return s.get("settings", 1) or {}
 
 
-def delete_campaign(campaign_id: str) -> None:
+def delete_campaign(campaign_id: str, storage=None) -> None:
     """Delete only an unused campaign; preserve every campaign with send history."""
-    campaign = store.get("campaigns", campaign_id)
+    s = storage or store
+    campaign = s.get("campaigns", campaign_id)
     if not campaign:
         raise ValueError("Campaign not found")
     if campaign.get("state") in {"running", "paused"}:
         raise ValueError("Stop the campaign before deleting it")
-    if store.list("email_log", {"campaign_id": campaign_id}, order="", limit=1):
+    if s.list("email_log", {"campaign_id": campaign_id}, order="", limit=1):
         raise ValueError("Campaigns with email history cannot be deleted")
-    store.delete("campaigns", {"id": campaign_id})
+    s.delete("campaigns", {"id": campaign_id})
 
 
-def cancel_campaign_queue(campaign_id: str) -> int:
-    pending = store.list(
+def cancel_campaign_queue(campaign_id: str, storage=None) -> int:
+    s = storage or store
+    pending = s.list(
         "email_log",
         {"campaign_id": campaign_id, "status": ("in", ["queued", "sending"])},
         order="",
         limit=20000,
     )
     for log in pending:
-        store.update(
+        s.update(
             "email_log",
             log["id"],
             {"status": "skipped", "next_attempt_at": None, "error": "Campaign stopped."},
         )
     affected_clients = {str(log.get("client_id")) for log in pending if log.get("client_id")}
-    remaining = store.list("email_log", {"status": ("in", ["queued", "sending"])}, order="", limit=20000)
+    remaining = s.list("email_log", {"status": ("in", ["queued", "sending"])}, order="", limit=20000)
     still_queued = {str(log.get("client_id")) for log in remaining if log.get("client_id")}
     for client_id in affected_clients - still_queued:
-        client = store.get("clients", client_id)
+        client = s.get("clients", client_id)
         if client and client.get("status") == "queued":
-            store.update("clients", client_id, {"status": "new", "updated_at": now_iso()})
+            s.update("clients", client_id, {"status": "new", "updated_at": now_iso()})
     return len(pending)
 
 
-def refresh_campaign_states(campaign_ids: set[str] | None = None) -> int:
-    campaigns = store.list("campaigns", order="", limit=10000)
+def refresh_campaign_states(campaign_ids: set[str] | None = None, storage=None) -> int:
+    s = storage or store
+    campaigns = s.list("campaigns", order="", limit=10000)
     if campaign_ids is not None:
         campaigns = [campaign for campaign in campaigns if str(campaign.get("id")) in campaign_ids]
     else:
         campaigns = [campaign for campaign in campaigns if campaign.get("state") == "running"]
-    logs = store.list("email_log", order="", limit=20000)
+    logs = s.list("email_log", order="", limit=20000)
     changed = 0
     for campaign in campaigns:
         campaign_logs = [log for log in logs if str(log.get("campaign_id")) == str(campaign["id"])]
         if campaign.get("state") == "running" and campaign_logs and not any(log.get("status") in {"queued", "sending"} for log in campaign_logs):
-            store.update("campaigns", campaign["id"], {"state": "done", "updated_at": now_iso()})
+            s.update("campaigns", campaign["id"], {"state": "done", "updated_at": now_iso()})
             changed += 1
     return changed
 
@@ -209,21 +213,22 @@ def _choose_pingram_conveyor_slot(
     return chosen, candidate, candidate
 
 
-def reschedule_queued_emails(now: datetime | None = None) -> dict:
+def reschedule_queued_emails(now: datetime | None = None, storage=None) -> dict:
     """Rebuild every queued timestamp against global limits.
 
     Gmail accounts use per-account business-window schedules.
     Pingram accounts share a unified domain conveyor belt (24/7, serialized 5-20 min gaps).
     """
+    s = storage or store
     now = now or datetime.now(timezone.utc)
-    raw_cfg = app_settings()
+    raw_cfg = app_settings(s)
     cfg = _schedule_config(raw_cfg)
     cap = max(1, int(raw_cfg.get("daily_cap") or 20))
     pingram_min = max(1, int(raw_cfg.get("pingram_min_delay") or 5))
     pingram_max = max(pingram_min, int(raw_cfg.get("pingram_max_delay") or 20))
     pingram_cap = max(1, int(raw_cfg.get("pingram_daily_cap") or 30))
 
-    logs = store.list("email_log", order="scheduled_for asc", limit=20000)
+    logs = s.list("email_log", order="scheduled_for asc", limit=20000)
     queued = [log for log in logs if log.get("status") == "queued"]
     queued_gmail = [log for log in queued if log.get("provider") != "pingram"]
     queued_pingram = [log for log in queued if log.get("provider") == "pingram"]
@@ -239,12 +244,12 @@ def reschedule_queued_emails(now: datetime | None = None) -> dict:
         _reserve_global_slot(account, slot, cfg, counts, cursors)
         by_account[account] += 1
         if log.get("scheduled_for") != slot.isoformat():
-            store.update("email_log", log["id"], {"scheduled_for": slot.isoformat(), "next_attempt_at": None})
+            s.update("email_log", log["id"], {"scheduled_for": slot.isoformat(), "next_attempt_at": None})
             updated += 1
 
     # 2. Reschedule Pingram queued emails (Unified Domain Conveyor Belt)
     if queued_pingram:
-        all_senders = list_gmail_senders(active_only=True, storage=store, cfg=raw_cfg)
+        all_senders = list_gmail_senders(active_only=True, storage=s, cfg=raw_cfg)
         pingram_senders = [s for s in all_senders if s.get("provider") == "pingram"]
         if not pingram_senders:
             pingram_senders = all_senders
@@ -266,8 +271,8 @@ def reschedule_queued_emails(now: datetime | None = None) -> dict:
                         pingram_cursor = m
 
         # Pre-cache clients and templates for fast re-rendering
-        client_cache = {str(c["id"]): c for c in store.list("clients", limit=20000)}
-        template_cache = {str(t["id"]): t for t in store.list("email_templates", limit=1000)}
+        client_cache = {str(c["id"]): c for c in s.list("clients", limit=20000)}
+        template_cache = {str(t["id"]): t for t in s.list("email_templates", limit=1000)}
 
         for log in sorted(queued_pingram, key=lambda item: (item.get("scheduled_for") or "", item.get("created_at") or "", item.get("id") or "")):
             chosen_acc, slot, pingram_cursor = _choose_pingram_conveyor_slot(
@@ -303,7 +308,7 @@ def reschedule_queued_emails(now: datetime | None = None) -> dict:
                     update_vals["subject_sent"] = new_subject
                 if new_body is not None:
                     update_vals["body_sent"] = new_body
-                store.update("email_log", log["id"], update_vals)
+                s.update("email_log", log["id"], update_vals)
                 updated += 1
 
     return {"queued": len(queued), "updated": updated, "by_account": dict(by_account)}
@@ -322,21 +327,22 @@ def _sent_today_by_account(logs: list[dict], cfg: dict, now: datetime) -> Counte
     return counts
 
 
-def recover_interrupted_sends(now: datetime | None = None) -> int:
+def recover_interrupted_sends(now: datetime | None = None, storage=None) -> int:
     """Release expired send leases without risking an automatic duplicate send.
 
     A process can stop after Gmail accepted a message but before the durable row
     was marked sent. That outcome is unknowable, so stale rows become `failed`
     for explicit review/retry rather than being delivered again automatically.
     """
+    s = storage or store
     now = now or datetime.now(timezone.utc)
-    expired = store.list(
+    expired = s.list(
         "email_log",
         {"status": "sending", "next_attempt_at": ("lte", now.isoformat())},
         order="created_at asc",
         limit=1000,
     )
-    legacy_unleased = store.list(
+    legacy_unleased = s.list(
         "email_log",
         {"status": "sending", "next_attempt_at": None},
         order="created_at asc",
@@ -345,7 +351,7 @@ def recover_interrupted_sends(now: datetime | None = None) -> int:
     stale_by_id = {str(log["id"]): log for log in [*expired, *legacy_unleased]}
     stale = list(stale_by_id.values())
     for log in stale:
-        store.update(
+        s.update(
             "email_log",
             log["id"],
             {
@@ -357,24 +363,25 @@ def recover_interrupted_sends(now: datetime | None = None) -> int:
     return len(stale)
 
 
-def queue_campaign(campaign_id: str, client_ids: set[str] | None = None) -> dict:
-    campaign = store.get("campaigns", campaign_id)
+def queue_campaign(campaign_id: str, client_ids: set[str] | None = None, storage=None) -> dict:
+    s = storage or store
+    campaign = s.get("campaigns", campaign_id)
     if not campaign: raise ValueError("Campaign not found")
-    templates = [store.get("email_templates", tid) for tid in campaign.get("template_ids", [])]
+    templates = [s.get("email_templates", tid) for tid in campaign.get("template_ids", [])]
     templates = [t for t in templates if t and t.get("active")]
     if not templates: raise ValueError("Select at least one active template")
-    cfg = app_settings()
-    all_clients = store.list("clients", order="created_at asc", limit=10000)
+    cfg = app_settings(s)
+    all_clients = s.list("clients", order="created_at asc", limit=10000)
     if client_ids is None:
         clients = [c for c in all_clients if _matches(c, campaign.get("target_filter") or {})]
     else:
         selected = {str(value) for value in client_ids}
         clients = [c for c in all_clients if str(c.get("id")) in selected]
-    suppressed = store.list("suppression", order="", limit=10000); logs = store.list("email_log", order="", limit=20000)
+    suppressed = s.list("suppression", order="", limit=10000); logs = s.list("email_log", order="", limit=20000)
     blocked_emails = {str(s.get("email") or "").lower() for s in suppressed}; blocked_domains = {str(s.get("domain") or "").lower() for s in suppressed}
     queued = skipped = 0
     schedule_cfg = _schedule_config(cfg)
-    available_senders = {str(row["id"]): row for row in list_gmail_senders(active_only=True, storage=store, cfg=cfg)}
+    available_senders = {str(row["id"]): row for row in list_gmail_senders(active_only=True, storage=s, cfg=cfg)}
     gmail_accounts = [str(x) for x in (campaign.get("gmail_accounts") or ["1"]) if str(x) in available_senders]
     if campaign.get("provider") == "gmail" and not gmail_accounts:
         raise ValueError("Select at least one active Gmail sender")
@@ -382,7 +389,7 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None) -> dict
     global_cap = max(1, int(cfg.get("daily_cap") or 20))
     is_pingram = campaign.get("provider") == "pingram"
     if is_pingram:
-        pingram_senders = [str(row["id"]) for row in list_gmail_senders(active_only=True, storage=store, cfg=cfg) if row.get("provider") == "pingram"]
+        pingram_senders = [str(row["id"]) for row in list_gmail_senders(active_only=True, storage=s, cfg=cfg) if row.get("provider") == "pingram"]
         if not pingram_senders:
             pingram_senders = list(available_senders.keys())
         selected = [str(x) for x in (campaign.get("gmail_accounts") or []) if str(x) in pingram_senders]
@@ -433,12 +440,12 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None) -> dict
         body, bmissing = render_template(template["body"], client, render_cfg, html_escape=template.get("type") == "html")
         missing = sorted(set(smissing + bmissing))
         if missing:
-            store.insert("email_log", {"id": new_id(), "client_id": client["id"], "template_id": template["id"], "campaign_id": campaign_id,
+            s.insert("email_log", {"id": new_id(), "client_id": client["id"], "template_id": template["id"], "campaign_id": campaign_id,
                 "provider": campaign["provider"], "subject_sent": subject, "body_sent": body, "status": "skipped", "error": "Missing variables: " + ", ".join(missing), "created_at": now_iso()})
             skipped += 1; continue
-        store.insert("email_log", {"id": new_id(), "client_id": client["id"], "template_id": template["id"], "campaign_id": campaign_id,
+        s.insert("email_log", {"id": new_id(), "client_id": client["id"], "template_id": template["id"], "campaign_id": campaign_id,
             "provider": campaign["provider"], "sender_account": account, "subject_sent": subject, "body_sent": body, "scheduled_for": cursor.isoformat(), "status": "queued", "attempt_count": 0, "created_at": now_iso()})
-        store.update("clients", client["id"], {"status": "queued", "updated_at": now_iso()}); queued += 1
+        s.update("clients", client["id"], {"status": "queued", "updated_at": now_iso()}); queued += 1
     previous_state = str(campaign.get("state") or "draft")
     if queued:
         next_state = "paused" if previous_state == "paused" else "running"
@@ -449,27 +456,28 @@ def queue_campaign(campaign_id: str, client_ids: set[str] | None = None) -> dict
         next_state = previous_state
     else:
         next_state = "done"
-    store.update("campaigns", campaign_id, {"state": next_state, "updated_at": now_iso()})
+    s.update("campaigns", campaign_id, {"state": next_state, "updated_at": now_iso()})
     return {"queued": queued, "skipped": skipped}
 
 
-def send_due(limit: int = 25, only_id: str | None = None) -> dict:
+def send_due(limit: int = 25, only_id: str | None = None, storage=None) -> dict:
+    s = storage or store
     stamp = now_iso(); now = datetime.now(timezone.utc)
     recover_interrupted_sends(now)
     if only_id:
-        target = store.get("email_log", only_id)
+        target = s.get("email_log", only_id)
         logs = [target] if target and target.get("status") in {"queued", "failed"} else []
     else:
-        logs = store.list("email_log", {"status": "queued"}, order="scheduled_for asc", limit=1000)
+        logs = s.list("email_log", {"status": "queued"}, order="scheduled_for asc", limit=1000)
         logs = [x for x in logs if (not x.get("scheduled_for") or x["scheduled_for"] <= stamp) and (not x.get("next_attempt_at") or x["next_attempt_at"] <= stamp)][:limit]
-    cfg = app_settings(); schedule_cfg = _schedule_config(cfg); sent = failed = deferred = 0
-    all_logs = store.list("email_log", order="", limit=20000)
+    cfg = app_settings(s); schedule_cfg = _schedule_config(cfg); sent = failed = deferred = 0
+    all_logs = s.list("email_log", order="", limit=20000)
     sent_today = _sent_today_by_account(all_logs, schedule_cfg, now)
     global_cap = max(1, int(cfg.get("daily_cap") or 20))
     if logs and not only_id:
         all_gmail = all(l.get("provider") != "pingram" for l in logs)
         if all_gmail and not in_send_window(now, schedule_cfg):
-            reschedule_queued_emails(now)
+            reschedule_queued_emails(now, storage=s)
             return {"sent": 0, "failed": 0, "deferred": len(logs), "dry_run": env.DRY_RUN}
     needs_reschedule = False
     touched_campaigns: set[str] = set()
@@ -482,12 +490,12 @@ def send_due(limit: int = 25, only_id: str | None = None) -> dict:
                 last_pingram_sent_time = st
 
     for log in logs:
-        campaign = store.get("campaigns", log["campaign_id"]); client = store.get("clients", log["client_id"]); template = store.get("email_templates", log["template_id"])
+        campaign = s.get("campaigns", log["campaign_id"]); client = s.get("clients", log["client_id"]); template = s.get("email_templates", log["template_id"])
         if not campaign or (campaign.get("state") != "running" and not (only_id and campaign.get("state") == "done")):
             continue
         touched_campaigns.add(str(log["campaign_id"]))
         if not client or client.get("status") in {"replied", "demo_booked", "do_not_contact", "bounced"}:
-            store.update("email_log", log["id"], {"status": "skipped", "next_attempt_at": None, "error": "Lead is no longer eligible for outreach."})
+            s.update("email_log", log["id"], {"status": "skipped", "next_attempt_at": None, "error": "Lead is no longer eligible for outreach."})
             continue
         sender_account = str(log.get("sender_account") or "1")
         is_pingram = log.get("provider") == "pingram"
@@ -503,7 +511,7 @@ def send_due(limit: int = 25, only_id: str | None = None) -> dict:
                 deferred += 1
                 continue
             
-        store.update(
+        s.update(
             "email_log",
             log["id"],
             {
@@ -512,7 +520,7 @@ def send_due(limit: int = 25, only_id: str | None = None) -> dict:
                 "next_attempt_at": (now + timedelta(minutes=SEND_LEASE_MINUTES)).isoformat(),
             },
         )
-        sender_row = get_gmail_sender(sender_account, storage=store, cfg=cfg)
+        sender_row = get_gmail_sender(sender_account, storage=s, cfg=cfg)
         identity = sender_context(cfg, sender_row)
         provider = get_provider(log["provider"], cfg, sender_account, gmail_sender=sender_row)
         logger.info(f"Attempting delivery of log {log['id']} to {client.get('email')} via {log['provider']} account {sender_account}")
@@ -530,8 +538,8 @@ def send_due(limit: int = 25, only_id: str | None = None) -> dict:
             result = SendResult(False, error=f"{type(exc).__name__}: {exc}")
         if result.ok:
             logger.info(f"Successfully sent email {log['id']} to {client.get('email')}, msg_id={result.provider_id}")
-            store.update("email_log", log["id"], {"status": "sent", "sent_at": stamp, "provider_message_id": result.provider_id, "next_attempt_at": None, "error": None})
-            store.update("clients", client["id"], {"status": "contacted", "last_contacted_at": stamp, "updated_at": stamp}); sent += 1; sent_today[sender_account] += 1
+            s.update("email_log", log["id"], {"status": "sent", "sent_at": stamp, "provider_message_id": result.provider_id, "next_attempt_at": None, "error": None})
+            s.update("clients", client["id"], {"status": "contacted", "last_contacted_at": stamp, "updated_at": stamp}); sent += 1; sent_today[sender_account] += 1
             if is_pingram:
                 last_pingram_sent_time = datetime.now(timezone.utc)
         else:
@@ -543,12 +551,12 @@ def send_due(limit: int = 25, only_id: str | None = None) -> dict:
                 "error": (result.error or "Unknown delivery failure")[:1000],
                 "next_attempt_at": None if terminal else (datetime.now(timezone.utc) + timedelta(minutes=2 ** attempts * 5)).isoformat(),
             }
-            store.update("email_log", log["id"], values)
+            s.update("email_log", log["id"], values)
             if hard:
-                set_client_status(client["id"], "bounced", storage=store)
+                set_client_status(client["id"], "bounced", storage=s)
             failed += 1
     if needs_reschedule:
-        reschedule_queued_emails(now)
+        reschedule_queued_emails(now, storage=s)
     if touched_campaigns:
-        refresh_campaign_states(touched_campaigns)
+        refresh_campaign_states(touched_campaigns, storage=s)
     return {"sent": sent, "failed": failed, "deferred": deferred, "dry_run": env.DRY_RUN}

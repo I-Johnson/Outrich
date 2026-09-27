@@ -16,16 +16,14 @@ CREATE TABLE IF NOT EXISTS clients (
   website TEXT, domain TEXT, email TEXT, phone TEXT, source TEXT NOT NULL DEFAULT 'manual',
   source_detail TEXT, import_batch_id TEXT, scrape_job_id TEXT, outreach_angle TEXT, notes TEXT,
   extra TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'new', last_contacted_at TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS clients_email_unique ON clients(lower(email)) WHERE email IS NOT NULL AND email <> '';
-CREATE UNIQUE INDEX IF NOT EXISTS clients_domain_unique ON clients(lower(domain)) WHERE domain IS NOT NULL AND domain <> '';
 CREATE INDEX IF NOT EXISTS clients_filter_idx ON clients(status, category, state, city);
 
 CREATE TABLE IF NOT EXISTS email_templates (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'plain', angle_tag TEXT, active INTEGER NOT NULL DEFAULT 1,
-  vertical TEXT NOT NULL DEFAULT 'outreach',
+  vertical TEXT NOT NULL DEFAULT 'outreach', owner_id TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -33,7 +31,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   provider TEXT NOT NULL DEFAULT 'gmail', gmail_accounts TEXT NOT NULL DEFAULT '["1"]', daily_cap INTEGER NOT NULL DEFAULT 20,
   send_window TEXT NOT NULL DEFAULT '{}', min_delay_minutes INTEGER NOT NULL DEFAULT 3,
   max_delay_minutes INTEGER NOT NULL DEFAULT 15, resend_block_days INTEGER NOT NULL DEFAULT 90,
-  state TEXT NOT NULL DEFAULT 'draft', stopped_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  state TEXT NOT NULL DEFAULT 'draft', stopped_at TEXT, owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS email_log (
   id TEXT PRIMARY KEY, client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
@@ -41,7 +39,7 @@ CREATE TABLE IF NOT EXISTS email_log (
   campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL, provider TEXT NOT NULL, sender_account TEXT NOT NULL DEFAULT '1',
   subject_sent TEXT NOT NULL, body_sent TEXT, scheduled_for TEXT, sent_at TEXT,
   status TEXT NOT NULL DEFAULT 'queued', attempt_count INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at TEXT, error TEXT, provider_message_id TEXT, created_at TEXT NOT NULL
+  next_attempt_at TEXT, error TEXT, provider_message_id TEXT, owner_id TEXT, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS email_log_due_idx ON email_log(status, scheduled_for, next_attempt_at);
 CREATE TABLE IF NOT EXISTS scrape_jobs (
@@ -49,23 +47,23 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
   city TEXT NOT NULL, result_limit INTEGER NOT NULL DEFAULT 30, status TEXT NOT NULL DEFAULT 'queued',
   found_count INTEGER NOT NULL DEFAULT 0, saved_count INTEGER NOT NULL DEFAULT 0,
   discarded_count INTEGER NOT NULL DEFAULT 0, serp_calls_used INTEGER NOT NULL DEFAULT 0,
-  error TEXT, created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, updated_at TEXT NOT NULL
+  error TEXT, owner_id TEXT, created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scrape_discards (
   id TEXT PRIMARY KEY, scrape_job_id TEXT REFERENCES scrape_jobs(id) ON DELETE CASCADE,
-  business_name TEXT, reason TEXT NOT NULL, created_at TEXT NOT NULL
+  business_name TEXT, reason TEXT NOT NULL, owner_id TEXT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scrape_presets (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}', owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS import_batches (
   id TEXT PRIMARY KEY, filename TEXT NOT NULL, uploaded_at TEXT NOT NULL, total_rows INTEGER NOT NULL DEFAULT 0,
   imported_rows INTEGER NOT NULL DEFAULT 0, duplicate_rows INTEGER NOT NULL DEFAULT 0,
   rejected_rows INTEGER NOT NULL DEFAULT 0, column_mapping TEXT NOT NULL DEFAULT '{}',
-  rejected_csv TEXT, status TEXT NOT NULL DEFAULT 'preview'
+  rejected_csv TEXT, status TEXT NOT NULL DEFAULT 'preview', owner_id TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (
-  id INTEGER PRIMARY KEY CHECK (id = 1), sender_name TEXT DEFAULT '', sender_email TEXT DEFAULT '', reply_to TEXT DEFAULT '',
+  id TEXT PRIMARY KEY, owner_id TEXT, sender_name TEXT DEFAULT '', sender_email TEXT DEFAULT '', reply_to TEXT DEFAULT '',
   sender_business TEXT DEFAULT '', sender_business_url TEXT DEFAULT '', product_name TEXT DEFAULT '', product_url TEXT DEFAULT '',
   booking_link TEXT DEFAULT '', callback_number TEXT DEFAULT '', client_count INTEGER NOT NULL DEFAULT 20,
   client_noun TEXT DEFAULT 'clients', email_signature TEXT DEFAULT '', business_context TEXT DEFAULT '', timezone TEXT NOT NULL DEFAULT 'America/New_York',
@@ -86,15 +84,14 @@ CREATE TABLE IF NOT EXISTS gmail_senders (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS suppression (
-  id TEXT PRIMARY KEY, email TEXT, domain TEXT, reason TEXT, created_at TEXT NOT NULL
+  id TEXT PRIMARY KEY, email TEXT, domain TEXT, reason TEXT, owner_id TEXT, created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS suppression_email_unique ON suppression(lower(email)) WHERE email IS NOT NULL AND email <> '';
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
   attempts INTEGER NOT NULL DEFAULT 0, run_after TEXT NOT NULL, locked_at TEXT, error TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
-INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES(1, datetime('now'), datetime('now'));
+INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES('1', datetime('now'), datetime('now'));
 
 CREATE TABLE IF NOT EXISTS pingram_replies (
   id TEXT PRIMARY KEY,
@@ -102,7 +99,7 @@ CREATE TABLE IF NOT EXISTS pingram_replies (
   from_email TEXT NOT NULL,
   subject TEXT,
   body_text TEXT,
-  received_at TEXT NOT NULL
+  owner_id TEXT, received_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS freight_truck_profiles (

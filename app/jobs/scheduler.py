@@ -8,7 +8,7 @@ from app.config import settings
 from app.core.scraper import process_scrape_job
 from app.core.freight import poll_freight_replies, recover_uncertain_freight_sends
 from app.core.sender import reschedule_queued_emails, send_due
-from app.core.tenancy import OwnerStore, freight_owner_ids
+from app.core.tenancy import ADMIN_OWNER_ID, OwnerStore, freight_owner_ids, outreach_owner_ids
 from app.db import now_iso, store
 
 logger = logging.getLogger(__name__)
@@ -54,8 +54,12 @@ def recover_stale_jobs(now: datetime | None = None) -> int:
 def tick():
     try: recover_stale_jobs()
     except Exception: logger.exception("stale job recovery failed")
-    try: send_due(limit=10)
-    except Exception: logger.exception("email worker tick failed")
+    try: owners = outreach_owner_ids(store)
+    except Exception: logger.exception("outreach owner lookup failed"); owners = []
+    for owner in owners:
+        # Each owner's campaign queue runs in its own scope.
+        try: send_due(limit=10, storage=OwnerStore(store, owner))
+        except Exception: logger.exception("email worker tick failed for %s", owner)
     try: owners = freight_owner_ids(store)
     except Exception: logger.exception("freight owner lookup failed"); owners = []
     for owner in owners:
@@ -69,8 +73,9 @@ def tick():
         jobs = store.list("jobs", {"status": "queued", "run_after": ("lte", now_iso())}, order="created_at asc", limit=1)
         if not jobs: return
         work = jobs[0]; store.update("jobs", work["id"], {"status": "running", "locked_at": now_iso(), "updated_at": now_iso()})
-        if work["kind"] == "scrape": process_scrape_job(work["payload"]["scrape_job_id"])
-        elif work["kind"] == "reschedule_email_queue": reschedule_queued_emails()
+        scoped = OwnerStore(store, str(work.get("owner_id") or ADMIN_OWNER_ID))
+        if work["kind"] == "scrape": process_scrape_job(work["payload"]["scrape_job_id"], storage=scoped)
+        elif work["kind"] == "reschedule_email_queue": reschedule_queued_emails(storage=scoped)
         else: raise ValueError(f"Unknown job kind: {work['kind']}")
         store.update("jobs", work["id"], {"status": "done", "updated_at": now_iso()})
     except Exception as exc:
