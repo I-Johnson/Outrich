@@ -19,6 +19,7 @@
     <a href="/" class="{{'active' if request.url.path == '/' else ''}}">Overview</a>
     <a href="/campaigns" class="{{'active' if request.url.path.startswith('/campaigns') else ''}}">Campaigns</a>
     <a href="/settings" class="{{'active' if request.url.path.startswith('/settings') else ''}}">Settings</a>
+    <a href="/billing" class="{{'active' if request.url.path.startswith('/billing') else ''}}">Plan</a>
   </nav>
   <div class="aside-foot">
     {% if env.DRY_RUN %}<span class="dot dry"></span>Dry run - no live email{% else %}<span class="dot live"></span>Live sending{% endif %}
@@ -27,6 +28,8 @@
 </aside>
 <main>
 {% if request.query_params.get('notice') %}<div class="notice">{{ request.query_params.get('notice') }}</div>{% endif %}
+{% set billing_grace_until = billing_grace_banner(request) %}
+{% if billing_grace_until %}<div class="notice" style="background:#805409">Your last payment failed. Access runs through {{ billing_grace_until }} - <a href="/billing" style="color:#fff;text-decoration:underline">update your card</a>.</div>{% endif %}
 {% block main %}{% endblock %}
 </main>
 </div>

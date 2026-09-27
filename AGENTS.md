@@ -32,7 +32,15 @@ Read README.md for the product-level picture; trust the code over any doc.
    truth - do not fork the rules). If a check can't run, block the action and
    say so; never proceed on a stale or assumed pass.
 5. **No new external dependencies** without a clear need - the requirements
-   list is deliberately small. No Redis, no ORM, no frontend framework.
+   list is deliberately small. No Redis, no ORM, no frontend framework. (The
+   `stripe` SDK is in for billing; it is the canonical client, mirroring
+   ContractorBackend on the same Stripe account.)
+6. **Billing fails closed on money, open on missing keys.** Webhook signature
+   verification is mandatory before any account write; checkout/portal
+   redirect back with a notice when Stripe isn't configured. But with
+   `STRIPE_*` absent the app runs with billing off on purpose (dev + tests) -
+   never gate access on keys that were never set. Grandfathered
+   (`billing_exempt`) accounts and the env admin always have access.
 
 ## Conventions
 
@@ -72,5 +80,6 @@ Read README.md for the product-level picture; trust the code over any doc.
 | Owner isolation | `app/core/tenancy.py` |
 | Customer UI | `app/web/templates/customer/` (`app/web/templates/AGENTS.md`) |
 | Freight agent | `app/core/freight.py`, `app/core/freight_agent.py` |
+| Billing (Stripe) | `app/core/billing.py`, `/billing`, `POST /webhooks/stripe` |
 | Background worker | `app/jobs/scheduler.py` |
 | Tests | `tests/` (`tests/AGENTS.md`) |

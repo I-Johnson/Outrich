@@ -117,8 +117,28 @@ change how the app behaves:
   account access is impossible by construction, not by filter discipline in
   each route.
 - Non-admins are limited to the customer surface (`customer_allowed` in
-  `app/main.py`): Overview, Campaigns, Settings, imports, and Freight. Admin
-  tools redirect to `/freight`.
+  `app/main.py`): Overview, Campaigns, Settings, Plan, imports, and Freight.
+  Admin tools redirect to `/freight`.
+
+### Billing
+
+One plan: $25/month, both workspaces included (`app/core/billing.py`).
+
+- Stripe Checkout subscribes, the Stripe Customer Portal manages the card and
+  cancellation, and signed webhooks (`POST /webhooks/stripe`) keep account
+  state in sync: `checkout.session.completed`,
+  `customer.subscription.updated`/`deleted`, `invoice.paid`,
+  `invoice.payment_failed`.
+- With `STRIPE_*` unset the deployment runs with billing off - everyone has
+  access and the suite runs green. Set `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, and `STRIPE_PRICE_ID` to turn billing on.
+- Grandfathering: migration `202609270002_stripe_billing.sql` sets
+  `billing_exempt = 1` on every account that exists when it runs, so
+  pre-launch accounts keep free access forever. Accounts created after need
+  an active subscription (`trialing`/`active`, or `canceled` until the paid
+  period ends).
+- The middleware gate holds non-exempt accounts without access on `/billing`;
+  their data stays untouched. The env admin is always exempt.
 
 ### Outreach: campaign flow
 
