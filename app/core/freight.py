@@ -2487,23 +2487,26 @@ def _find_thread(message: Message, sender_account: str, storage=None) -> dict | 
     storage = storage or store
     message_from = parseaddr(message.get("From", ""))[1].lower()
     references = set(" ".join([message.get("In-Reply-To", ""), message.get("References", "")]).split())
-    subject = _normalize_subject(message.get("Subject", ""))
+    if not message_from or not references:
+        return None
     # Message-ID references do not authenticate the sender. An unrelated party
     # can quote or guess one; never route their reply into a broker's thread.
     candidates = [thread for thread in storage.list("freight_threads", {"sender_account": sender_account}, order="updated_at desc", limit=10000)
                   if thread.get("state") != "closed" and message_from == str(thread.get("recipient_email") or "").lower()]
+    candidate_ids = {str(thread["id"]) for thread in candidates}
+    sent_ids_by_thread: dict[str, set[str]] = {thread_id: set() for thread_id in candidate_ids}
+    for sent in storage.list("freight_messages", {"direction": "out"}, order="", limit=10000):
+        thread_id = str(sent.get("thread_id") or "")
+        provider_id = str(sent.get("provider_message_id") or "")
+        if thread_id in sent_ids_by_thread and provider_id:
+            sent_ids_by_thread[thread_id].add(provider_id)
     matched_references = []
     for thread in candidates:
-        root = str(thread.get("root_message_id") or "")
-        last = str(thread.get("last_message_id") or "")
-        if (root and root in references) or (last and last in references):
+        if sent_ids_by_thread[str(thread["id"])].intersection(references):
             matched_references.append(thread)
     if len(matched_references) == 1:
         return matched_references[0]
-    if matched_references:
-        return None
-    fallback = [thread for thread in candidates if message_from == str(thread.get("recipient_email") or "").lower() and subject == _normalize_subject(thread.get("subject", ""))]
-    return fallback[0] if len(fallback) == 1 else None
+    return None
 
 
 def _process_inbound(thread: dict, message: dict, parsed, storage) -> dict:
@@ -2596,43 +2599,6 @@ def reconcile_unprocessed_inbound(storage=None) -> int:
                                   storage)
 
 
-def _record_unmatched_reply(header_msg, parsed, provider_id: str, account_id: str, storage) -> dict:
-    """Park a broker reply that matches no open thread and alert the dispatcher.
-
-    The reply gets a real (unmatched) load, thread and message so nothing is
-    silently dropped: it shows up for a human to triage or link. Replies to the
-    same parked conversation attach to the existing unmatched thread.
-    """
-    storage = storage or store
-    from_email = parseaddr(header_msg.get("From", ""))[1].lower()
-    subject = str(header_msg.get("Subject", "") or "").strip()
-    stamp = now_iso()
-    thread = next((row for row in storage.list(
-        "freight_threads", {"sender_account": account_id, "state": "unmatched"}, order="updated_at desc", limit=100)
-        if str(row.get("recipient_email") or "").lower() == from_email
-        and _normalize_subject(row.get("subject", "")) == _normalize_subject(subject)), None)
-    if not thread:
-        load = storage.insert("freight_loads", {
-            "id": new_id(), "mission_id": None, "truck_profile_id": None,
-            "broker_email": from_email, "broker_company": "",
-            "origin_city": "", "origin_state": "", "destination_city": "", "destination_state": "",
-            "subject": subject, "status": "unmatched", "created_at": stamp, "updated_at": stamp})
-        thread = storage.insert("freight_threads", {
-            "id": new_id(), "load_id": load["id"], "sender_account": account_id,
-            "recipient_email": from_email, "subject": subject, "state": "unmatched",
-            "last_activity_at": stamp, "created_at": stamp, "updated_at": stamp})
-    storage.insert("freight_messages", {
-        "id": new_id(), "thread_id": thread["id"], "direction": "in", "provider_message_id": provider_id,
-        "from_email": from_email, "to_email": ", ".join(addr for _, addr in getaddresses(parsed.get_all("To", []))),
-        "subject": subject, "body_text": _message_text(parsed), "classification": {},
-        "status": "received", "processing_state": "processed", "created_at": stamp})
-    storage.update("freight_threads", thread["id"], {"last_activity_at": stamp, "updated_at": stamp})
-    _create_alert(thread["id"], "unmatched_reply",
-                  f"A reply from {from_email} ({subject or 'no subject'}) did not match any open freight thread. "
-                  "It was parked as unmatched - review it and start a thread manually if it is a real load.", storage)
-    return thread
-
-
 def poll_freight_replies(storage=None) -> dict[str, int]:
     storage = storage or store
     active_threads = storage.list("freight_threads", order="updated_at desc", limit=1)
@@ -2660,25 +2626,27 @@ def poll_freight_replies(storage=None) -> dict[str, int]:
                 recipients = {str(t.get("recipient_email")).strip().lower() for t in threads_for_account if t.get("recipient_email")}
                 candidate_uids = set()
 
-                for recipient in recipients:
-                    status, data = mailbox.uid("search", None, f'FROM "{recipient}"')
-                    if status == "OK" and data and data[0]:
-                        for val in data[0].split():
-                            if val:
-                                candidate_uids.add(int(val))
-
                 if last_uid:
                     status, data = mailbox.uid("search", None, f"UID {last_uid + 1}:*")
                     if status == "OK" and data and data[0]:
                         for val in data[0].split():
                             if val:
                                 candidate_uids.add(int(val))
-                elif not candidate_uids:
+                else:
+                    # Inspect current broker senders once to catch a reply that
+                    # raced the first poll. Strict outbound ancestry matching
+                    # below ignores every unrelated historical message.
+                    for recipient in recipients:
+                        status, data = mailbox.uid("search", None, f'FROM "{recipient}"')
+                        if status == "OK" and data and data[0]:
+                            for val in data[0].split():
+                                if val:
+                                    candidate_uids.add(int(val))
                     status, data = mailbox.uid("search", None, "ALL")
                     if status == "OK" and data and data[0]:
                         all_uids = [int(v) for v in data[0].split() if v]
-                        for val in all_uids[-50:]:
-                            candidate_uids.add(val)
+                        if all_uids:
+                            last_uid = max(all_uids)
 
                 uids = sorted(candidate_uids)
                 max_uid = last_uid
@@ -2696,17 +2664,7 @@ def poll_freight_replies(storage=None) -> dict[str, int]:
                         continue
                     thread = _find_thread(header_msg, account_id, storage)
                     if not thread:
-                        status, raw_parts = mailbox.uid("fetch", str(uid), "(RFC822)")
-                        raw = next((part[1] for part in raw_parts if isinstance(part, tuple) and isinstance(part[1], bytes)), None) if status == "OK" and raw_parts else None
-                        if raw:
-                            _record_unmatched_reply(header_msg, email.message_from_bytes(raw), provider_id, account_id, storage)
-                            totals["messages"] += 1
-                            max_uid = max(max_uid, uid)
                         continue
-                    broker_parent = header_msg.get("In-Reply-To") or (header_msg.get("References", "").split()[0] if header_msg.get("References") else None)
-                    if broker_parent and broker_parent != thread.get("root_message_id"):
-                        storage.update("freight_threads", thread["id"], {"root_message_id": broker_parent})
-                        thread["root_message_id"] = broker_parent
 
                     status, raw_parts = mailbox.uid("fetch", str(uid), "(RFC822)")
                     if status != "OK" or not raw_parts:
