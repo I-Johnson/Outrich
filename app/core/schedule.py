@@ -44,6 +44,7 @@ def next_send_time(after: datetime, config: dict, *, jitter: bool = True) -> dat
     local = (after + timedelta(minutes=delay)).astimezone(zone)
     start = time.fromisoformat(config.get("send_start") or "09:00"); end = time.fromisoformat(config.get("send_end") or "17:00")
     days = parse_days(config.get("send_days"))
+    if not days: raise ValueError("Sending is off: no send days are configured. Pick at least one day in Settings.")
     for _ in range(14):
         if local.weekday() in days and start <= local.time().replace(tzinfo=None) < end: return local.astimezone(timezone.utc)
         if local.weekday() in days and local.time().replace(tzinfo=None) < start:

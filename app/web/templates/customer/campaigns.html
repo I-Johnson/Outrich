@@ -1,0 +1,323 @@
+{% extends "customer/base.html" %}
+{% block title %}Campaigns - Outrich{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <div class="eyebrow">Outreach / Campaigns</div>
+    <h1>One place to build outreach.</h1>
+    <p>Find your audience, write your message, choose your sender, then review.</p>
+  </div>
+</div>
+<div class="grid two">
+  <div class="card">
+    <div class="eyebrow">Create campaign</div>
+    <div class="steps" id="steps" role="group" aria-label="Campaign steps">
+      <button type="button" class="step selected" data-goto="1" aria-current="step">1 Find</button>
+      <button type="button" class="step" data-goto="2">2 Audience</button>
+      <button type="button" class="step" data-goto="3">3 Message</button>
+      <button type="button" class="step" data-goto="4">4 Sender</button>
+      <button type="button" class="step" data-goto="5">5 Review</button>
+    </div>
+    <p class="step-hint" id="step-hint" role="status" aria-live="polite"></p>
+
+    <div class="builder-page active" data-page="1">
+      <h2>Find your audience</h2>
+      <p>Run a discovery search, or bring your own list. Found leads are saved to your account and can be queued into this campaign from the Audience step.</p>
+      <form action="/campaigns/discovery" method="post" class="inline-form">
+        <div class="fields">
+          <div class="field"><label for="f-cat">Businesses to find</label><input type="text" id="f-cat" name="categories" placeholder="Roofing contractors" required></div>
+          <div class="field"><label for="f-loc">Where (City, ST)</label><input type="text" id="f-loc" name="locations" placeholder="Austin, TX" required></div>
+          <div class="field"><label for="f-lim">Results per city</label><input type="number" id="f-lim" name="result_limit" value="30" min="1" max="100"></div>
+        </div>
+        <button class="btn light" type="submit">Start discovery</button>
+      </form>
+      <form action="/imports/preview" method="post" enctype="multipart/form-data" class="inline-form" style="margin-top:18px;border-top:1px solid var(--line);padding-top:18px">
+        <div class="field"><label for="f-csv">Or bring your own list (CSV)</label><input type="file" id="f-csv" name="file" accept=".csv" required></div>
+        <button class="btn subtle" type="submit">Preview import</button>
+      </form>
+      <div id="discovery-live" data-active="{{ '1' if active_job else '0' }}">
+        <h3 style="margin-top:22px" id="discovery-head" {{ 'style="display:none"' if not scrape_jobs else '' }}>Recent discovery</h3>
+        <div id="discovery-jobs">
+          {% for j in scrape_jobs %}<div class="row"><div><b>{{ j.category }} - {{ j.city }}, {{ j.state }}</b><small>{{ j.status|capitalize }} · {{ j.saved_count }} saved of {{ j.found_count }} found</small></div><span class="pill {{ 'amber' if j.status in ('queued','running') else '' }}">{{ j.status }}</span></div>{% endfor %}
+        </div>
+        <div class="note" id="discovery-note">{% if active_job %}Discovery is running. This list updates itself - your builder picks stay put.{% else %}Discovery runs in the background. Nothing sends automatically after discovery.{% endif %}</div>
+      </div>
+      <div class="builder-nav"><span></span><button class="btn" type="button" data-next="2">Continue to audience</button></div>
+    </div>
+
+    <form action="/campaigns/save" method="post" id="builder-form">
+    {% if import_batch %}<input type="hidden" name="import_batch_id" value="{{ import_batch.id }}">{% endif %}
+    <div class="builder-page" data-page="2">
+      <h2>Choose the audience</h2>
+      <p>Filter which of your leads this campaign reaches. Leave everything blank to reach every eligible lead.</p>
+      {% if import_batch %}
+      <div class="note">Using your imported list <b>{{ import_batch.filename }}</b> - {{ import_batch.leads }} {{ "lead" if import_batch.leads == 1 else "leads" }}. Extra filters below narrow it further. <a href="/campaigns" style="color:inherit;text-decoration:underline">Clear the list</a></div>
+      {% endif %}
+      <div class="fields">
+        <div class="field"><label for="a-cat">Category</label><input type="text" id="a-cat" name="category" placeholder="roofing"></div>
+        <div class="field"><label for="a-state">State</label><input type="text" id="a-state" name="state" placeholder="TX" maxlength="2"></div>
+        <div class="field"><label for="a-city">City</label><input type="text" id="a-city" name="city" placeholder="Austin"></div>
+        <div class="field"><label for="a-status">Only leads with status</label><select id="a-status" name="status"><option value="">Any eligible</option><option value="new">New</option></select></div>
+      </div>
+      <p class="fine" id="audience-count" data-total="{{ lead_count }}">{% if import_batch %}{{ import_batch.leads }} leads in the imported list.{% else %}{{ lead_count }} leads in your account.{% endif %} Discovery results and imports land here once saved.</p>
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="1">Back</button><button class="btn" type="button" data-next="3">Continue to message</button></div>
+    </div>
+
+    <div class="builder-page" data-page="3">
+      <h2>Pick the message</h2>
+      <p>Choose one or more of your templates. New leads rotate through the selected templates.</p>
+      {% if templates %}
+      <div class="stack">
+        {% for t in templates %}
+        <label class="pick"><input type="checkbox" name="template_ids" value="{{ t.id }}" data-name="{{ t.name }}" data-subject="{{ t.subject }}" data-body="{{ (t.body or '')[:180] }}"><span><b>{{ t.name }}</b><small>{{ t.subject }}</small></span></label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">No templates yet. Create one below or in Settings.</div>
+      {% endif %}
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="2">Back</button><button class="btn" type="button" data-next="4">Continue to sender</button></div>
+    </div>
+    </form>
+
+    <details class="tpl-edit builder-page" data-page="3" id="tpl-new">
+      <summary>New template</summary>
+      <form action="/templates/save" method="post" class="inline-form">
+        <input type="hidden" name="vertical" value="outreach">
+        <input type="hidden" name="active" value="on">
+        <div class="fields">
+          <div class="field"><label>Name</label><input type="text" name="name" required></div>
+          <div class="field"><label>Type</label><select name="type"><option value="plain">Plain</option><option value="html">HTML</option></select></div>
+          <div class="field full"><label>Subject</label><input type="text" name="subject" required></div>
+          <div class="field full"><label>Body</label><textarea name="body" required></textarea></div>
+        </div>
+        <button class="btn light" type="submit">Save template</button>
+        <p class="fine">Saving takes you back to Campaigns; your new template appears in this picker.</p>
+      </form>
+    </details>
+
+    <div class="builder-page" data-page="4">
+      <h2>Choose the sender</h2>
+      <p>Emails go out from this identity on your schedule and caps from Settings.</p>
+      {% if senders %}
+      <div class="stack">
+        {% for snd in senders %}
+        <label class="pick"><input type="checkbox" form="builder-form" name="gmail_accounts" value="{{ snd.id }}" data-name="{{ snd.display_name or snd.email }}" data-email="{{ snd.email }}" data-provider="{{ snd.provider or 'gmail' }}"><span><b>{{ snd.display_name or snd.email }}</b><small>{{ snd.email }} · {{ (snd.provider or 'gmail')|capitalize }}</small></span></label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">No sender connected yet. Add one in Settings under Sending identity.</div>
+      {% endif %}
+      <input type="hidden" form="builder-form" name="provider" value="{{ default_provider }}">
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="3">Back</button><button class="btn" type="button" data-next="5">Review</button></div>
+    </div>
+
+    <div class="builder-page" data-page="5">
+      <h2>Review and create</h2>
+      <div class="field full" style="margin-bottom:14px"><label for="campaign-name">Campaign name</label><input type="text" form="builder-form" name="name" id="campaign-name" placeholder="Roofing companies in Austin" required></div>
+      <dl class="review" id="review-detail">
+        <div><dt>Audience</dt><dd id="rv-audience">Every eligible lead</dd></div>
+        <div><dt>Templates</dt><dd id="rv-templates">None selected yet</dd></div>
+        <div><dt>Sender</dt><dd id="rv-senders">None selected yet</dd></div>
+        <div><dt>Schedule</dt><dd>{{ cfg.get('send_start') or '09:00' }}-{{ cfg.get('send_end') or '17:00' }} {{ cfg.get('timezone') or 'America/New_York' }}, up to {{ cfg.get('daily_cap') or 20 }} emails per sender per day</dd></div>
+      </dl>
+      <div class="mini" id="rv-sample" style="display:none;margin-top:14px"><b id="rv-sample-subject"></b><small id="rv-sample-body"></small><small style="margin-top:6px">Variables like {{ '{{first_name}}' }} are filled per lead when the email sends.</small></div>
+      <div class="note">{% if env.DRY_RUN %}Dry run is on: the campaign queues and tracks everything, but no live email leaves your account until dry run is turned off.{% else %}Live sending is on: once you press Start on the campaign page, real emails go out from your sender on the schedule above.{% endif %} Nothing sends when you create - you press Start on the campaign page.</div>
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="4">Back</button><button class="btn" type="submit" form="builder-form">Create campaign</button></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card summary-card">
+      <h2>This campaign</h2>
+      <dl class="review">
+        <div><dt>Name</dt><dd id="sm-name">Not named yet</dd></div>
+        <div><dt>Audience</dt><dd id="sm-audience">Every eligible lead</dd></div>
+        <div><dt>Templates</dt><dd id="sm-templates">None selected yet</dd></div>
+        <div><dt>Sender</dt><dd id="sm-senders">None selected yet</dd></div>
+      </dl>
+    </div>
+    <div class="card section">
+      <h2>Your campaigns</h2>
+      {% if campaigns %}
+        {% for c in campaigns %}
+        <a class="row" href="/campaigns/{{ c.id }}">
+          <div><b>{{ c.name }}</b><small>{{ c.state|capitalize }} · {{ c.delivered }} sent · {{ c.replies }} {{ "reply" if c.replies == 1 else "replies" }}</small></div>
+          <span class="pill {{ 'amber' if c.state in ('draft','paused','stopped') else '' }}">{{ "Open" if c.state == 'running' else ("Continue" if c.state == 'draft' else "Review") }}</span>
+        </a>
+        {% endfor %}
+      {% else %}
+      <div class="empty">No campaigns yet. Build your first one on the left.</div>
+      {% endif %}
+      <p class="fine">Step 3 picks from your template library (also in Settings as used templates); step 4 picks from your connected senders. Queued recipients and emails are visible on the campaign page before you start.</p>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  const pages = document.querySelectorAll('.builder-page');
+  const steps = document.querySelectorAll('#steps .step');
+  const hint = document.getElementById('step-hint');
+  let current = 1;
+  let audienceCount = null;
+  let audienceEligible = null;
+  let countState = 'unknown';
+  let countSeq = 0;
+  const tpls = () => [...document.querySelectorAll('input[name="template_ids"]:checked')];
+  const snds = () => [...document.querySelectorAll('input[name="gmail_accounts"]:checked')];
+  const say = (msg) => { hint.textContent = msg || ''; };
+  const providerMix = () => new Set(snds().map(x => x.dataset.provider || 'gmail')).size > 1;
+  const syncProvider = () => {
+    const chosen = snds();
+    const hidden = document.querySelector('input[name="provider"]');
+    if (hidden && chosen.length && !providerMix()) hidden.value = chosen[0].dataset.provider || 'gmail';
+  };
+  const allowed = (n) => {
+    if (n <= current) return true;
+    if (n >= 3 && countState !== 'ok') { say(countState === 'error' ? 'Could not check your audience just now - try again in a moment.' : 'Checking your audience - one moment.'); return false; }
+    if (n >= 3 && audienceEligible === 0) { say('No leads are eligible to send in this audience yet. Adjust the filters, run discovery, or import a list first.'); return false; }
+    if (n >= 4 && !tpls().length) { say('Pick at least one template in step 3 before moving on.'); return false; }
+    if (n >= 5 && !snds().length) { say('Choose a sender in step 4 before reviewing.'); return false; }
+    if (n >= 5 && providerMix()) { say('Selected senders use different providers. Pick senders from a single provider.'); return false; }
+    return true;
+  };
+  const go = (n) => {
+    n = Number(n);
+    if (!allowed(n)) return;
+    say('');
+    current = n;
+    pages.forEach(p => p.classList.toggle('active', p.dataset.page == n));
+    steps.forEach(s => {
+      const on = s.dataset.goto == n;
+      s.classList.toggle('selected', on);
+      s.classList.toggle('done', Number(s.dataset.goto) < n);
+      if (on) s.setAttribute('aria-current', 'step'); else s.removeAttribute('aria-current');
+    });
+    refresh();
+  };
+  document.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => go(b.dataset.next)));
+  steps.forEach(s => s.addEventListener('click', () => go(s.dataset.goto)));
+  const names = (list, key) => list.map(x => x.dataset[key]).join(', ');
+  const audience = () => {
+    const bits = [];
+    {% if import_batch %}bits.push('Imported list: {{ import_batch.filename }} ({{ import_batch.leads }} leads)');{% endif %}
+    const cat = (document.querySelector('input[name="category"]') || {}).value || '';
+    const state = (document.querySelector('input[name="state"]') || {}).value || '';
+    const city = (document.querySelector('input[name="city"]') || {}).value || '';
+    const status = (document.querySelector('select[name="status"]') || {}).value || '';
+    if (cat.trim()) bits.push('category: ' + cat.trim());
+    if (city.trim()) bits.push(city.trim());
+    if (state.trim()) bits.push(state.trim().toUpperCase());
+    if (status) bits.push('status: ' + status);
+    const countText = countState !== 'ok' ? '' : (' - ' + audienceEligible + (audienceEligible === 1 ? ' eligible to send' : ' eligible to send'));
+    return (bits.length ? bits.join(' · ') : 'Every eligible lead') + countText;
+  };
+  const refresh = () => {
+    const nameEl = document.getElementById('campaign-name');
+    const name = (nameEl && nameEl.value.trim()) || 'Not named yet';
+    const aud = audience();
+    const tplNames = names(tpls(), 'name') || 'None selected yet';
+    const sndNames = snds().map(x => x.dataset.name + ' (' + x.dataset.email + ')').join(', ') || 'None selected yet';
+    for (const [id, val] of [['sm-name', name], ['rv-audience', aud], ['sm-audience', aud],
+                             ['rv-templates', tplNames], ['sm-templates', tplNames],
+                             ['rv-senders', sndNames], ['sm-senders', sndNames]]) {
+      const el = document.getElementById(id); if (el) el.textContent = val;
+    }
+    const first = tpls()[0];
+    const sample = document.getElementById('rv-sample');
+    if (first) {
+      sample.style.display = '';
+      document.getElementById('rv-sample-subject').textContent = 'Template excerpt - ' + (first.dataset.subject || first.dataset.name);
+      document.getElementById('rv-sample-body').textContent = first.dataset.body || '';
+    } else if (sample) { sample.style.display = 'none'; }
+  };
+  document.addEventListener('input', (e) => { if (e.target.closest('.card')) refresh(); });
+  document.addEventListener('change', (e) => { if (e.target.closest('.card')) { syncProvider(); refresh(); } });
+  document.getElementById('builder-form').addEventListener('submit', (e) => {
+    if (!tpls().length) { e.preventDefault(); go(3); say('Pick at least one template before creating.'); }
+    else if (!snds().length) { e.preventDefault(); go(4); say('Choose a sender before creating.'); }
+    else if (providerMix()) { e.preventDefault(); go(4); say('Selected senders use different providers. Pick senders from a single provider.'); }
+  });
+
+  // Live audience count (debounced); zero matches halt forward progress
+  let countTimer = null;
+  const countBox = document.getElementById('audience-count');
+  const fetchCount = () => {
+    const seq = ++countSeq;
+    const params = new URLSearchParams();
+    for (const key of ['category', 'state', 'city', 'status']) {
+      const el = document.querySelector('[name="' + key + '"]');
+      if (el && el.value.trim()) params.set(key, el.value.trim());
+    }
+    const batch = document.querySelector('input[name="import_batch_id"]');
+    if (batch) params.set('import_batch_id', batch.value);
+    fetch('/campaigns/audience-count?' + params.toString(), {headers: {'Accept': 'application/json'}})
+      .then(r => { if (!r.ok) throw new Error('count failed'); return r.json(); })
+      .then(data => {
+        if (seq !== countSeq) return; // a newer filter won the race
+        countState = 'ok';
+        audienceCount = data.count;
+        audienceEligible = data.eligible;
+        if (countBox) countBox.textContent = data.eligible + (data.eligible === 1 ? ' lead is' : ' leads are') + ' eligible to send in this audience (' + data.count + ' matching ' + (data.count === 1 ? 'record' : 'records') + '). Already-contacted and suppressed leads are excluded.';
+        refresh();
+      })
+      .catch(() => {
+        if (seq !== countSeq) return;
+        countState = 'error';
+        audienceCount = null; audienceEligible = null;
+        if (countBox) countBox.textContent = 'Could not count this audience just now. Check your connection and try again.';
+      });
+  };
+  const scheduleCount = () => { clearTimeout(countTimer); countTimer = setTimeout(fetchCount, 350); };
+  for (const key of ['category', 'state', 'city', 'status']) {
+    const el = document.querySelector('[name="' + key + '"]');
+    if (el) { el.addEventListener('input', scheduleCount); el.addEventListener('change', scheduleCount); }
+  }
+  fetchCount();
+
+  // Scoped discovery status polling - DOM updates only, never a page reload
+  const live = document.getElementById('discovery-live');
+  if (live && live.dataset.active === '1') {
+    const jobsBox = document.getElementById('discovery-jobs');
+    const note = document.getElementById('discovery-note');
+    const head = document.getElementById('discovery-head');
+    let delay = 5000;
+    let failures = 0;
+    let stopped = false;
+    const tick = () => {
+      if (stopped) return;
+      fetch('/campaigns/discovery-status', {headers: {'Accept': 'application/json'}})
+        .then(r => { if (!r.ok) throw new Error('status failed'); return r.json(); })
+        .then(data => {
+          failures = 0; delay = 5000;
+          if (data.jobs.length && head) head.style.display = '';
+          if (jobsBox) jobsBox.innerHTML = data.jobs.map(j => {
+            const amber = (j.status === 'queued' || j.status === 'running') ? 'amber' : '';
+            const status = j.status.charAt(0).toUpperCase() + j.status.slice(1);
+            return '<div class="row"><div><b>' + j.category + ' - ' + j.city + ', ' + j.state + '</b><small>' + status + ' · ' + j.saved_count + ' saved of ' + j.found_count + ' found</small></div><span class="pill ' + amber + '">' + j.status + '</span></div>';
+          }).join('');
+          if (!data.active) {
+            stopped = true;
+            if (note) note.textContent = 'Discovery finished. Your new leads are ready in the Audience step.';
+            fetchCount();
+            return;
+          }
+          setTimeout(tick, delay);
+        })
+        .catch(() => {
+          failures += 1;
+          delay = Math.min(delay * 2, 60000);
+          if (failures >= 3) {
+            stopped = true;
+            if (note) note.textContent = 'Live updates paused after repeated errors. Reload the page to check discovery status.';
+            return;
+          }
+          setTimeout(tick, delay);
+        });
+    };
+    setTimeout(tick, delay);
+  }
+  syncProvider();
+  refresh();
+})();
+</script>
+{% endblock %}
