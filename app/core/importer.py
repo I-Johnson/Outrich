@@ -267,11 +267,12 @@ def clean_row(source: dict[str, str], mapping: dict[str, str], overrides: dict[s
     return row
 
 
-def _categorize(headers: list[str], source_rows: list[dict], mapping: dict[str, str], cleanup: dict[int, dict[str, str]] | None = None):
-    existing = store.list("clients", order="", limit=20000, select="email,domain")
+def _categorize(headers: list[str], source_rows: list[dict], mapping: dict[str, str], cleanup: dict[int, dict[str, str]] | None = None, storage=None):
+    s = storage or store
+    existing = s.list("clients", order="", limit=20000, select="email,domain")
     seen_emails = {normalize_email(item.get("email")) for item in existing if item.get("email")}
     seen_domains = {(item.get("domain") or "").lower() for item in existing if item.get("domain")}
-    required = (store.get("settings", 1) or {}).get("csv_required_fields", ["email"])
+    required = (s.get("settings", 1) or {}).get("csv_required_fields", ["email"])
 
     ready, rejected = [], []
     for index, source in enumerate(source_rows):
@@ -305,7 +306,7 @@ def build_preview(raw: bytes, filename: str, mapping_override: dict | None = Non
     s = storage or store
     mapping = select_mapping(headers, source_rows, mapping_override)
     cleanup = gemini_cleanup_rows(source_rows, mapping)
-    ready, rejected = _categorize(headers, source_rows, mapping, cleanup)
+    ready, rejected = _categorize(headers, source_rows, mapping, cleanup, storage=s)
     batch = {"id": new_id(), "filename": filename, "uploaded_at": now_iso(), "total_rows": len(source_rows), "imported_rows": 0,
              "duplicate_rows": sum(1 for r in rejected if r["reason"].startswith("duplicate")), "rejected_rows": len(rejected),
              "column_mapping": mapping, "rejected_csv": json.dumps({"headers": headers, "source": source_rows, "ready": ready, "rejected": rejected}), "status": "preview"}
@@ -320,7 +321,7 @@ def remap_preview(batch_id: str, mapping: dict[str, str], storage=None) -> dict:
     payload = json.loads(batch.get("rejected_csv") or "{}"); headers = payload.get("headers", []); source_rows = payload.get("source", [])
     mapping = {k: v for k, v in mapping.items() if k in headers and v in FIELDS}
     cleanup = gemini_cleanup_rows(source_rows, mapping)
-    ready, rejected = _categorize(headers, source_rows, mapping, cleanup)
+    ready, rejected = _categorize(headers, source_rows, mapping, cleanup, storage=s)
     values = {"duplicate_rows": sum(1 for r in rejected if r["reason"].startswith("duplicate")), "rejected_rows": len(rejected), "column_mapping": mapping,
               "rejected_csv": json.dumps({"headers": headers, "source": source_rows, "ready": ready, "rejected": rejected})}
     s.update("import_batches", batch_id, values)

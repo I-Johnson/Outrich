@@ -22,11 +22,11 @@
             <td><b>{{ snd.display_name or snd.email }}</b><small>{{ snd.email }}</small></td>
             <td>{{ (snd.provider or 'gmail')|capitalize }}</td>
             <td><span class="pill {{ '' if snd.active else 'gray' }}">{{ "Active" if snd.active else "Off" }}</span></td>
-            <td>
-              <form method="post" action="/settings/test-email" style="display:flex;gap:6px">
+            <td class="test-cell">
+              <form method="post" action="/settings/test-email" class="test-form">
                 <input type="hidden" name="gmail_sender_id" value="{{ snd.id }}">
-                <input type="email" name="to" placeholder="you@example.com" required style="min-height:36px;padding:7px 10px;width:170px">
-                <button class="btn subtle" type="submit" style="padding:7px 12px">Test</button>
+                <input type="email" name="to" placeholder="you@example.com" required aria-label="Send a test email to">
+                <button class="btn subtle" type="submit">Test</button>
               </form>
             </td>
           </tr>
@@ -63,6 +63,7 @@
         <div class="field"><label>Max delay between sends (minutes)</label><input type="number" name="max_delay_minutes" value="{{ cfg.get('max_delay_minutes') or 15 }}" min="1"></div>
       </div>
       <div class="field full" style="margin-top:14px"><label>Send on these days</label>
+        <input type="hidden" name="send_days" value="">
         <div class="checks">
           {% set days = cfg.get('send_days') or [0,1,2,3,4] %}
           {% for label, val in [("Mon",0),("Tue",1),("Wed",2),("Thu",3),("Fri",4),("Sat",5),("Sun",6)] %}

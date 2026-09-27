@@ -52,6 +52,22 @@ class CustomerIATests(unittest.TestCase):
         for page in (campaigns.text, settings.text):
             self.assertNotIn("Pingram Inbox", page)
 
+
+    def test_customer_csv_import_stays_in_their_account(self):
+        csv = "business_name,email,city,state\nPeak Roofing,peak@example.com,Austin,TX\n"
+        preview = self.client.post("/imports/preview", files={"file": ("roofers.csv", csv, "text/csv")}, follow_redirects=False)
+        self.assertEqual(preview.status_code, 200)
+        batch = self.owner.list("import_batches")[0]
+        confirmed = self.client.post(f"/imports/{batch['id']}/confirm", data={"action": "campaign"}, follow_redirects=False)
+        self.assertEqual(confirmed.status_code, 303)
+        self.assertIn("/campaigns?batch_id=", confirmed.headers["location"])
+        leads = self.owner.list("clients", {"import_batch_id": batch["id"]})
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(str(leads[0].get("owner_id")), self.owner_id)
+        builder = self.client.get(f"/campaigns?batch_id={batch['id']}")
+        self.assertIn("roofers.csv", builder.text)
+        self.assertIn(f'name="import_batch_id" value="{batch["id"]}"', builder.text)
+
     def test_admin_keeps_the_full_tools(self):
         admin = self.admin_client()
         overview = admin.get("/")
@@ -95,7 +111,7 @@ class CustomerIATests(unittest.TestCase):
         campaign = self.owner.list("campaigns")[0]
         self.assertEqual(campaign["name"], "Roofing in Austin")
         detail = self.client.get(f"/campaigns/{campaign['id']}")
-        self.assertIn("See who was reached.", detail.text)
+        self.assertIn("Ready when you are.", detail.text)
         self.assertIn("Start sending", detail.text)
         started = self.client.post(f"/campaigns/{campaign['id']}/start", follow_redirects=False)
         self.assertEqual(started.status_code, 303)

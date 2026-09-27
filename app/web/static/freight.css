@@ -10,7 +10,7 @@
   --fx-ink: #15201c; --fx-ink-h: #15201c; --fx-muted: #48544e; --fx-subtle: #77827b;
   --fx-dark: #1d4a3e;
   --fx-amber: #b87a0c; --fx-amber-bg: #f8efdc; --fx-amber-bd: #ecd9ae;
-  --fx-blue: #1d4a3e; --fx-blue-bg: #e3ece6; --fx-blue-bd: #c2d2c7;
+  --fx-blue: #1e5aa8; --fx-blue-bg: #e4edf8; --fx-blue-bd: #c0d4ec;
   --fx-green: #2d8a58; --fx-green-bg: #e6f3ea; --fx-green-bd: #bcdfc8;
   --fx-red: #b91c1c; --fx-red-bg: #fef1f1; --fx-red-bd: #f8c9c9;
   --fx-gray-bg: #dce1db;
@@ -69,7 +69,7 @@ html.fx-collapsed .fx-collapse svg { transform: rotate(180deg); }
 .ws-freight .fx-btn, .ws-freight button.fx-btn { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--fx-line); background: #fff; color: var(--fx-ink-h); font: 600 13px/1 'Instrument Sans', 'Plus Jakarta Sans', sans-serif; white-space: nowrap; box-shadow: none; cursor: pointer; text-decoration: none; }
 .ws-freight .fx-btn:hover { background: #f6f7f9; color: var(--fx-ink-h); transform: none; box-shadow: none; }
 .ws-freight .fx-btn.primary { background: var(--fx-dark); border-color: var(--fx-dark); color: #fff; }
-.ws-freight .fx-btn.primary:hover { background: #1c1f26; color: #fff; }
+.ws-freight .fx-btn.primary:hover { background: #15382f; color: #fff; }
 .ws-freight .fx-btn.ghost { border-color: transparent; background: transparent; color: var(--fx-muted); }
 .ws-freight .fx-btn.ghost:hover { background: #f1f3f6; color: var(--fx-ink-h); }
 .ws-freight .fx-btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }

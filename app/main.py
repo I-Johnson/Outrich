@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from zoneinfo import ZoneInfo
 from datetime import datetime, timezone
 import csv
 import hashlib
@@ -376,8 +377,22 @@ def dashboard(request: Request):
                    "campaigns": len(campaigns),
                    "delivered": sum(1 for x in logs if x.get("sent_at")),
                    "replies": sum(1 for x in logs if x.get("status") == "replied")}
+        funnel = {"queued": sum(1 for x in logs if x.get("status") in ("queued", "sending")),
+                  "delivered": sum(1 for x in logs if x.get("status") in ("sent", "replied")),
+                  "replied": metrics["replies"]}
+        attention = []
+        for c in rows:
+            if c["state"] == "draft":
+                attention.append({"label": f"Finish setting up {c['name']}", "href": f"/campaigns/{c['id']}", "kind": "draft"})
+        for c in rows:
+            if c["state"] == "paused":
+                attention.append({"label": f"{c['name']} is paused - resume when ready", "href": f"/campaigns/{c['id']}", "kind": "paused"})
+        for c in rows:
+            if c["replies"]:
+                attention.append({"label": f"Review {c['replies']} {'reply' if c['replies'] == 1 else 'replies'} in {c['name']}", "href": f"/campaigns/{c['id']}", "kind": "replies"})
         return templates.TemplateResponse(request=request, name="customer/overview.html",
-                                          context={"request": request, "env": env, "metrics": metrics, "campaigns": rows})
+                                          context={"request": request, "env": env, "metrics": metrics, "campaigns": rows,
+                                                   "funnel": funnel, "attention": attention[:4]})
     campaigns = s.list("campaigns", limit=100)
     logs = s.list("email_log", order="", limit=20000)
     recent = s.list("email_log", limit=10)
@@ -1521,11 +1536,13 @@ async def import_preview(request: Request, file: UploadFile = File(...)):
     s = outreach_store(request)
     try:
         content = await file.read()
-        preview = build_preview(content, file.filename or "upload.csv")
-        return page(request, "import_preview.html", batch=preview, fields=FIELDS)
+        preview = build_preview(content, file.filename or "upload.csv", storage=s)
+        name = "import_preview.html" if is_admin(request) else "customer/import_preview.html"
+        return page(request, name, batch=preview, fields=FIELDS)
     except Exception as exc:
         logging.getLogger(__name__).exception("CSV preview failed: %s", exc)
-        return RedirectResponse(f"/leads?notice=Import+failed:+{quote(str(exc)[:120])}", 303)
+        back = "/leads" if is_admin(request) else "/campaigns"
+        return RedirectResponse(f"{back}?notice=Import+failed:+{quote(str(exc)[:120])}", 303)
 
 
 @app.get("/imports/{batch_id}/preview", response_class=HTMLResponse)
@@ -1535,7 +1552,8 @@ def import_preview_view(request: Request, batch_id: str):
     if not batch:
         raise HTTPException(404, "Batch not found")
     if batch.get("status") != "preview":
-        return RedirectResponse(f"/leads?notice=Batch+is+already+{batch.get('status')}", 303)
+        back = "/leads" if is_admin(request) else "/campaigns"
+        return RedirectResponse(f"{back}?notice=Batch+is+already+{batch.get('status')}", 303)
     payload = json.loads(batch.get("rejected_csv") or "{}")
     ready = payload.get("ready", [])
     rejected = payload.get("rejected", [])
@@ -1547,7 +1565,8 @@ def import_preview_view(request: Request, batch_id: str):
         "rejected": rejected[:20],
         "headers": headers,
     }
-    return page(request, "import_preview.html", batch=batch_data, fields=FIELDS)
+    name = "import_preview.html" if is_admin(request) else "customer/import_preview.html"
+    return page(request, name, batch=batch_data, fields=FIELDS)
 
 
 @app.post("/imports/{batch_id}/delete")
@@ -1559,7 +1578,8 @@ def import_delete(request: Request, batch_id: str):
     if batch.get("status") == "done":
         raise HTTPException(400, "Completed imports cannot be deleted directly; use undo instead.")
     s.delete("import_batches", {"id": batch_id})
-    return RedirectResponse("/leads?notice=Import+preview+discarded", 303)
+    back = "/leads" if is_admin(request) else "/campaigns"
+    return RedirectResponse(f"{back}?notice=Import+preview+discarded", 303)
 
 
 @app.post("/imports/{batch_id}/confirm")
@@ -1568,12 +1588,13 @@ async def import_confirm(request: Request, batch_id: str):
     form = await request.form()
     action = str(form.get("action") or "import")
     try:
-        result = confirm_import(batch_id)
+        result = confirm_import(batch_id, storage=s)
     except Exception as exc:
         logging.getLogger(__name__).exception("Confirm import failed: %s", exc)
-        return RedirectResponse(f"/leads?notice=Import+confirmation+failed:+{quote(str(exc)[:120])}", 303)
-    if action == "campaign":
-        return RedirectResponse(f"/campaigns?batch_id={batch_id}&notice=Imported+{result['added']}+leads.+Create+your+campaign+now!", 303)
+        back = "/leads" if is_admin(request) else "/campaigns"
+        return RedirectResponse(f"{back}?notice=Import+confirmation+failed:+{quote(str(exc)[:120])}", 303)
+    if action == "campaign" or not is_admin(request):
+        return RedirectResponse(f"/campaigns?batch_id={batch_id}&notice=Imported+{result['added']}+leads.+They+are+preselected+in+the+builder+below.", 303)
     return RedirectResponse(f"/leads?notice=Imported+{result['added']}+leads", 303)
 
 
@@ -1583,21 +1604,25 @@ async def import_remap(request: Request, batch_id: str):
     form = await request.form()
     mapping = {key.removeprefix("map__"): str(value) for key, value in form.items() if key.startswith("map__") and value}
     try:
-        preview = remap_preview(batch_id, mapping)
-        return page(request, "import_preview.html", batch=preview, fields=FIELDS)
+        preview = remap_preview(batch_id, mapping, storage=s)
+        name = "import_preview.html" if is_admin(request) else "customer/import_preview.html"
+        return page(request, name, batch=preview, fields=FIELDS)
     except Exception as exc:
         logging.getLogger(__name__).exception("Remap preview failed: %s", exc)
-        return RedirectResponse(f"/leads?notice=Remap+failed:+{quote(str(exc)[:120])}", 303)
+        back = "/leads" if is_admin(request) else "/campaigns"
+        return RedirectResponse(f"{back}?notice=Remap+failed:+{quote(str(exc)[:120])}", 303)
 
 
 @app.post("/imports/{batch_id}/undo")
 def import_undo(request: Request, batch_id: str):
     s = outreach_store(request)
     try:
-        deleted = undo_import(batch_id)
+        deleted = undo_import(batch_id, storage=s)
     except ValueError as exc:
-        return RedirectResponse(f"/leads?notice={quote(str(exc))}", 303)
-    return RedirectResponse(f"/leads?notice=Import+undone.+Deleted+{deleted}+unused+leads", 303)
+        back = "/leads" if is_admin(request) else "/campaigns"
+        return RedirectResponse(f"{back}?notice={quote(str(exc))}", 303)
+    back = "/leads" if is_admin(request) else "/campaigns"
+    return RedirectResponse(f"{back}?notice=Import+undone.+Deleted+{deleted}+unused+leads", 303)
 
 
 @app.get("/imports/{batch_id}/rejected.csv")
@@ -1710,13 +1735,23 @@ def campaigns(request: Request, edit: str = "", batch_id: str = ""):
             rows.append({"id": c["id"], "name": c["name"], "state": c["state"],
                          "delivered": sum(1 for x in clogs if x.get("sent_at")),
                          "replies": sum(1 for x in clogs if x.get("status") == "replied")})
+        scrape_jobs = s.list("scrape_jobs", order="created_at desc", limit=5)
+        import_batch = None
+        if batch_id:
+            batch = s.get("import_batches", batch_id)
+            if batch:
+                import_batch = {"id": batch["id"], "filename": batch.get("filename") or "Imported list",
+                                "leads": len(s.list("clients", {"import_batch_id": batch["id"]}, order="", limit=20000, select="id"))}
         return templates.TemplateResponse(request=request, name="customer/campaigns.html",
                                           context={"request": request, "env": env, "campaigns": rows,
                                                    "templates": s.list("email_templates", {"active": True, "vertical": "outreach"}, order="name asc", limit=200),
                                                    "senders": list_gmail_senders(active_only=True, storage=s, cfg=cfg0),
                                                    "default_provider": cfg0.get("email_provider") or "gmail",
                                                    "lead_count": len(s.list("clients", order="", limit=20000, select="id")),
-                                                   "scrape_jobs": s.list("scrape_jobs", order="created_at desc", limit=5)})
+                                                   "scrape_jobs": scrape_jobs,
+                                                   "import_batch": import_batch,
+                                                   "active_job": any(j.get("status") in ("queued", "running") for j in scrape_jobs),
+                                                   "cfg": cfg0})
     batch = s.get("import_batches", batch_id) if batch_id else None
     batches = s.list("import_batches", {"status": "done"}, order="uploaded_at desc", limit=10)
     cfg = s.get("settings", 1) or {}
@@ -1783,16 +1818,42 @@ def campaign_detail(request: Request, campaign_id: str):
     gmail_account_emails = {str(row["id"]): row.get("email") for row in list_gmail_senders(storage=s, cfg=cfg)}
     performance = campaign_performance(logs, {str(key): value for key, value in templates_map.items()})
     if not is_admin(request):
-        bucket_map = {"queued": ("queued", "Queued"), "sending": ("queued", "Queued"),
+        bucket_map = {"queued": ("queued", "Queued"), "sending": ("queued", "Sending"),
                       "sent": ("delivered", "Delivered"), "replied": ("replied", "Reply recorded"),
-                      "bounced": ("failed", "Bounced"), "failed": ("failed", "Failed"), "skipped": ("failed", "Skipped")}
+                      "bounced": ("bounced", "Bounced"), "failed": ("failed", "Failed"), "skipped": ("skipped", "Skipped")}
+        try:
+            tz = ZoneInfo(str(cfg.get("timezone") or "UTC"))
+        except Exception:
+            tz = ZoneInfo("UTC")
+        def fmt_when(value):
+            if not value:
+                return ""
+            try:
+                moment = datetime.fromisoformat(str(value))
+                if moment.tzinfo is None:
+                    moment = moment.replace(tzinfo=timezone.utc)
+                return moment.astimezone(tz).strftime("%b %-d, %-I:%M %p %Z")
+            except (ValueError, TypeError):
+                return str(value)[:16].replace("T", " ")
         for l in logs:
             l["bucket"], l["label"] = bucket_map.get(str(l.get("status")), ("queued", "Queued"))
+            l["when"] = fmt_when(l.get("sent_at") or l.get("scheduled_for"))
         counts = {"queued": sum(1 for l in logs if l["bucket"] == "queued"),
                   "delivered": sum(1 for l in logs if l["bucket"] == "delivered"),
-                  "replied": sum(1 for l in logs if l["bucket"] == "replied")}
+                  "replied": sum(1 for l in logs if l["bucket"] == "replied"),
+                  "bounced": sum(1 for l in logs if l["bucket"] == "bounced"),
+                  "failed": sum(1 for l in logs if l["bucket"] == "failed"),
+                  "skipped": sum(1 for l in logs if l["bucket"] == "skipped")}
+        counts["problems"] = counts["bounced"] + counts["failed"] + counts["skipped"]
+        hero = {"draft": ("Ready when you are.", "Review the leads and message below, then start when it looks right."),
+                "running": ("Outreach in motion.", "Messages go out on your sender's schedule and caps. Replies land here."),
+                "paused": ("Paused for now.", "Nothing new goes out while paused. Resume whenever you are ready."),
+                "stopped": ("Stopped.", "Start it again to queue the remaining eligible leads."),
+                "done": ("Every message is handled.", "All queued messages were delivered or resolved. Replies are below.")}
+        title, subtitle = hero.get(campaign.get("state"), hero["running"])
         return templates.TemplateResponse(request=request, name="customer/campaign.html",
-                                          context={"request": request, "env": env, "campaign": campaign, "logs": logs, "counts": counts})
+                                          context={"request": request, "env": env, "campaign": campaign, "logs": logs,
+                                                   "counts": counts, "hero_title": title, "hero_subtitle": subtitle})
     return page(request, "campaign.html", campaign=campaign, logs=logs, gmail_account_emails=gmail_account_emails, performance=performance)
 
 
@@ -1890,19 +1951,28 @@ def settings_page(request: Request):
 async def settings_save(request: Request):
     s = outreach_store(request)
     form = await request.form(); previous = s.get("settings", 1) or {}; fields = ["sender_name", "sender_email", "reply_to", "sender_business", "sender_business_url", "product_name", "product_url", "booking_link", "callback_number", "client_noun", "email_signature", "business_context", "timezone", "send_start", "send_end"]
-    data = {key: str(form.get(key) or "").strip() for key in fields}
+    data = {key: str(form.get(key) or "").strip() for key in fields if key in form}
     for key in ("client_count", "daily_cap", "min_delay_minutes", "max_delay_minutes", "resend_block_days", "pingram_daily_cap", "pingram_min_delay", "pingram_max_delay"):
         if form.get(key) is not None and str(form.get(key)).strip() != "":
             data[key] = int(form.get(key))
-    data["send_days"] = [int(x) for x in form.getlist("send_days")]; data["csv_required_fields"] = form.getlist("csv_required_fields"); data["scrape_required_fields"] = form.getlist("scrape_required_fields"); data["updated_at"] = now_iso()
+    if "send_days" in form:
+        data["send_days"] = sorted({int(x) for x in form.getlist("send_days") if str(x).strip()})
+    if "csv_required_fields" in form:
+        data["csv_required_fields"] = form.getlist("csv_required_fields")
+    if "scrape_required_fields" in form:
+        data["scrape_required_fields"] = form.getlist("scrape_required_fields")
+    data["updated_at"] = now_iso()
     s.update("settings", 1, data)
     schedule_fields = {"daily_cap", "timezone", "send_days", "send_start", "send_end", "min_delay_minutes", "max_delay_minutes", "pingram_daily_cap", "pingram_min_delay", "pingram_max_delay"}
-    schedule_changed = any(previous.get(key) != data.get(key) for key in schedule_fields)
+    merged = {**previous, **data}
+    schedule_changed = any(previous.get(key) != merged.get(key) for key in schedule_fields if key in data)
     if schedule_changed:
         pending = s.list("jobs", {"kind": "reschedule_email_queue", "status": ("in", ["queued", "running"])}, order="", limit=1)
         if not pending:
             stamp = now_iso(); s.insert("jobs", {"id": new_id(), "kind": "reschedule_email_queue", "payload": {}, "status": "queued", "attempts": 0, "run_after": stamp, "created_at": stamp, "updated_at": stamp})
-    notice = "Saved.+Queued+emails+will+be+redistributed+to+the+global+sender+cap." if schedule_changed else "Saved"
+    notice = "Schedule+and+details+saved.+Queued+emails+move+to+the+new+schedule." if schedule_changed else "Schedule+and+details+saved."
+    if not is_admin(request) and not schedule_changed:
+        notice = "Settings+saved."
     return RedirectResponse(f"/settings?notice={notice}", 303)
 
 

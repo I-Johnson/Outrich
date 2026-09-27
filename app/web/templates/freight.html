@@ -207,7 +207,7 @@
     {% else %}
     <div class="fx-thread-empty">
       <div class="fx-empty fx-dialog-narrow">
-        <strong>{{ 'Pick a load to see the conversation' if loads else 'No loads yet' }}</strong>
+        <strong>{{ 'Pick a load to see the conversation' if loads else 'Your first load starts with one inquiry' }}</strong>
         {{ 'Broker replies and drafts to approve show up here.' if loads else 'Email a broker about a posted load. Their replies and the agent\'s drafts show up here.' }}
         {% if not loads and setup_ok %}<div><button type="button" class="fx-btn primary" onclick="document.getElementById('fx-inquiry').showModal()"><svg class="i sm"><use href="#i-plus"/></svg>New inquiry</button></div>{% endif %}
       </div>

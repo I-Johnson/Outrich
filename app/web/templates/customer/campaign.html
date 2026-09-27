@@ -4,8 +4,8 @@
 <div class="head">
   <div>
     <div class="eyebrow">Campaigns / {{ campaign.name }}</div>
-    <h1>See who was reached.</h1>
-    <p>One campaign, its delivery state, and the leads behind each message.</p>
+    <h1>{{ hero_title }}</h1>
+    <p>{{ hero_subtitle }}</p>
   </div>
   <a class="btn light" href="/campaigns">All campaigns</a>
 </div>
@@ -25,19 +25,22 @@
   <form method="post" action="/campaigns/{{ campaign.id }}/delete" data-confirm="Delete this campaign?"><button class="btn danger" type="submit">Delete</button></form>
   {% endif %}
 </div>
-<div class="grid">
-  <div class="card"><div class="label">Queued</div><div class="metric">{{ counts.queued }}</div></div>
-  <div class="card"><div class="label">Delivered</div><div class="metric">{{ counts.delivered }}</div></div>
-  <div class="card"><div class="label">Replies recorded</div><div class="metric">{{ counts.replied }}</div></div>
+<div class="grid four">
+  <div class="card"><div class="label">Queued</div><div class="metric">{{ counts.queued }}</div><small>Not reached yet</small></div>
+  <div class="card"><div class="label">Delivered</div><div class="metric">{{ counts.delivered }}</div><small>In their inbox</small></div>
+  <div class="card"><div class="label">Replies recorded</div><div class="metric">{{ counts.replied }}</div><small>People who wrote back</small></div>
+  <div class="card"><div class="label">Failed</div><div class="metric">{{ counts.problems }}</div><small>{{ counts.bounced }} bounced · {{ counts.failed }} failed · {{ counts.skipped }} skipped</small></div>
 </div>
 <div class="card section">
   <h2>Leads in this campaign</h2>
-  <div class="tabs" id="tabs">
-    <span class="on" data-filter="all">All</span>
-    <span data-filter="queued">Queued</span>
-    <span data-filter="delivered">Delivered</span>
-    <span data-filter="replied">Replied</span>
-    <span data-filter="failed">Failed</span>
+  <div class="tabs" id="tabs" role="tablist">
+    <button type="button" class="on" data-filter="all" aria-pressed="true">All</button>
+    <button type="button" data-filter="queued" aria-pressed="false">Queued</button>
+    <button type="button" data-filter="delivered" aria-pressed="false">Delivered</button>
+    <button type="button" data-filter="replied" aria-pressed="false">Replied</button>
+    <button type="button" data-filter="bounced" aria-pressed="false">Bounced</button>
+    <button type="button" data-filter="failed" aria-pressed="false">Failed</button>
+    <button type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
   </div>
   {% if logs %}
   <table id="log-table">
@@ -47,12 +50,13 @@
       <tr data-status="{{ l.bucket }}">
         <td><b>{{ l.client.get('business_name') or l.client.get('email') or 'Unknown lead' }}</b><small>{{ [l.client.get('city'), l.client.get('state')] | select | join(', ') }}</small></td>
         <td>{{ l.template.get('name') or 'Template' }}<small>{{ l.subject_sent }}</small></td>
-        <td>{{ (l.sent_at or l.scheduled_for or '')[:16].replace('T', ' ') }}</td>
-        <td><span class="pill {{ 'amber' if l.bucket == 'queued' else ('red' if l.bucket == 'failed' else '') }}">{{ l.label }}</span></td>
+        <td>{{ l.when }}</td>
+        <td><span class="pill {{ 'amber' if l.bucket == 'queued' else ('red' if l.bucket in ('failed','bounced') else ('gray' if l.bucket == 'skipped' else '')) }}">{{ l.label }}</span></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  <div class="empty tab-empty" id="tab-empty" style="display:none"></div>
   {% else %}
   <div class="empty">No messages queued yet. Press Start to queue the initial message for each eligible lead.</div>
   {% endif %}
@@ -60,12 +64,28 @@
 </div>
 <script>
 (() => {
-  const tabs = document.querySelectorAll('#tabs span');
+  const tabs = document.querySelectorAll('#tabs button');
   const rows = document.querySelectorAll('#log-table tbody tr');
+  const table = document.getElementById('log-table');
+  const emptyBox = document.getElementById('tab-empty');
+  const zeroText = {
+    queued: 'Nothing is waiting in the queue.',
+    delivered: 'Nothing delivered yet. Messages move here once they land.',
+    replied: 'No replies yet. Replies show up here as they arrive.',
+    bounced: 'No bounces. Every address accepted the message.',
+    failed: 'No failures. Nothing needs a retry.',
+    skipped: 'No skipped leads. Everyone eligible was queued.'
+  };
   tabs.forEach(t => t.addEventListener('click', () => {
-    tabs.forEach(x => x.classList.toggle('on', x === t));
+    tabs.forEach(x => { const on = x === t; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false'); });
     const f = t.dataset.filter;
-    rows.forEach(r => { r.style.display = (f === 'all' || r.dataset.status === f) ? '' : 'none'; });
+    let visible = 0;
+    rows.forEach(r => { const show = (f === 'all' || r.dataset.status === f); r.style.display = show ? '' : 'none'; if (show) visible++; });
+    if (table) table.style.display = visible ? '' : 'none';
+    if (emptyBox) {
+      emptyBox.style.display = visible ? 'none' : '';
+      emptyBox.textContent = zeroText[f] || 'Nothing in this view yet.';
+    }
   }));
 })();
 </script>

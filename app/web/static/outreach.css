@@ -86,3 +86,37 @@ details.tpl-edit summary{cursor:pointer;font-weight:600;font-size:13.5px;color:v
 @media(max-width:900px){.shell{display:block}aside{padding:15px}.nav{flex-direction:row;overflow:auto}.brand{padding:0 0 10px}.aside-foot{display:none}main{padding:25px 18px}.grid,.grid.two,.fields{grid-template-columns:1fr}.head{align-items:flex-start;flex-direction:column}}
 input[type=file]{font:500 13px 'Instrument Sans';color:var(--ink2)}
 input[type=file]::file-selector-button{border:1px solid var(--line);background:var(--paper);color:var(--pine);border-radius:8px;padding:8px 12px;font:600 13px 'Instrument Sans';cursor:pointer;margin-right:10px}
+
+/* ---------- Critic pass: builder, funnel, review, accessibility ---------- */
+.grid.four{grid-template-columns:repeat(4,1fr)}
+.grid.two{align-items:start}
+.summary-card{position:sticky;top:20px}
+.step-hint{min-height:20px;margin:-8px 0 10px;font-size:12.5px;color:var(--amber);font-weight:600}
+.step{font:inherit;font-size:12px}
+.review{display:grid;gap:12px;margin:0}
+.review div{display:grid;grid-template-columns:110px 1fr;gap:12px;align-items:baseline}
+.review dt{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700}
+.review dd{margin:0;font-size:13.5px;color:var(--ink);font-weight:500}
+.funnel{display:flex;align-items:stretch;gap:10px;margin-top:16px}
+.funnel-stage{background:#e6eee8;border:1px solid #c4d5ca;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:2px;min-width:90px;transition:flex .2s}
+.funnel-stage.mid{background:#dfeae1}
+.funnel-stage.end{background:var(--pine);color:#fff;border-color:var(--pine)}
+.funnel-stage b{font:600 26px 'Bricolage Grotesque'}
+.funnel-stage span{font-size:12px;font-weight:600;color:inherit;opacity:.8}
+.funnel-arrow{align-self:center;color:var(--muted);font-weight:700}
+.dot.dry{background:var(--amber)}
+.dot.live{background:var(--leaf)}
+.tabs button{background:none;border:0;padding:0 3px 11px;cursor:pointer;color:var(--ink2);font:500 14px 'Instrument Sans'}
+.tabs button.on{border-bottom:2px solid var(--pine);font-weight:700;color:var(--pine)}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--pine);outline-offset:2px;border-radius:4px}
+.test-cell{white-space:nowrap}
+.test-form{display:flex;gap:8px;align-items:center}
+.test-form input[type=email]{min-height:38px;padding:8px 12px;width:200px}
+@media(max-width:900px){
+  .grid.four{grid-template-columns:1fr 1fr}
+  .funnel{flex-direction:column}
+  .funnel-arrow{transform:rotate(90deg)}
+  .aside-foot{display:flex;gap:16px;align-items:center;border-top:0;padding:8px 0 0;margin-top:12px;flex-wrap:wrap}
+  .aside-foot form{margin:0}
+  .review div{grid-template-columns:1fr;gap:2px}
+}

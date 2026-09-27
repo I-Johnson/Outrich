@@ -14,6 +14,20 @@
   <div class="card"><div class="label">Emails delivered</div><div class="metric">{{ metrics.delivered }}</div><small>Across your campaigns</small></div>
   <div class="card"><div class="label">Replies recorded</div><div class="metric">{{ metrics.replies }}</div><small>Open a campaign to review</small></div>
 </div>
+{% if metrics.campaigns %}
+<div class="card section">
+  <h2>Delivery funnel</h2>
+  <p>How leads move from queued to delivered to replied, across all campaigns.</p>
+  <div class="funnel">
+    {% set total = funnel.queued + funnel.delivered + funnel.replied %}
+    <div class="funnel-stage" style="flex:{{ funnel.queued if funnel.queued else 0.35 }}"><b>{{ funnel.queued }}</b><span>Queued</span></div>
+    <div class="funnel-arrow" aria-hidden="true">→</div>
+    <div class="funnel-stage mid" style="flex:{{ funnel.delivered if funnel.delivered else 0.35 }}"><b>{{ funnel.delivered }}</b><span>Delivered</span></div>
+    <div class="funnel-arrow" aria-hidden="true">→</div>
+    <div class="funnel-stage end" style="flex:{{ funnel.replied if funnel.replied else 0.35 }}"><b>{{ funnel.replied }}</b><span>Replied</span></div>
+  </div>
+</div>
+{% endif %}
 <div class="grid two section">
   <div class="card">
     <h2>Your campaigns</h2>
@@ -25,14 +39,30 @@
       </a>
       {% endfor %}
     {% else %}
-      <div class="empty">No campaigns yet. Your first campaign walks you through finding an audience, writing the message, and choosing a sender.</div>
+      <div class="empty">No campaigns yet. Your first campaign walks you through finding an audience, writing the message, and choosing a sender.<div style="margin-top:14px"><a class="btn" href="/campaigns">Create your first campaign</a></div></div>
     {% endif %}
   </div>
   <div class="card">
-    <h2>What happens next</h2>
-    <p>The campaign brings discovery, audience, message, and sender setup together. You choose when to start sending.</p>
-    <div class="note">Each campaign sends one initial message per eligible lead, on your sender's schedule. Replies land on the campaign page.</div>
-    <a class="btn light" href="/campaigns">See campaigns</a>
+    <h2>{% if attention %}Needs your attention{% else %}What happens next{% endif %}</h2>
+    {% if attention %}
+      {% for a in attention %}
+      <a class="row" href="{{ a.href }}">
+        <div><b>{{ a.label }}</b></div>
+        <span class="pill {{ 'amber' if a.kind in ('draft','paused') else '' }}">{{ "Fix" if a.kind in ('draft','paused') else "Review" }}</span>
+      </a>
+      {% endfor %}
+      <p class="fine">Everything else is running on schedule. New replies land here as they arrive.</p>
+    {% else %}
+      {% if campaigns %}
+      <p>Nothing needs you right now. Your campaigns run on your sender's schedule, and replies show up here and on each campaign page.</p>
+      <div class="note">Each campaign sends one initial message per eligible lead, on your sender's schedule. Replies land on the campaign page.</div>
+      <a class="btn light" href="/campaigns">See campaigns</a>
+      {% else %}
+      <p>The campaign brings discovery, audience, message, and sender setup together. You choose when to start sending.</p>
+      <div class="note">Each campaign sends one initial message per eligible lead, on your sender's schedule. Replies land on the campaign page.</div>
+      <a class="btn light" href="/campaigns">See campaigns</a>
+      {% endif %}
+    {% endif %}
   </div>
 </div>
 {% endblock %}

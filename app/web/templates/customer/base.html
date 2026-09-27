@@ -7,7 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/outreach.css?v=20260926-a">
+<link rel="stylesheet" href="/static/outreach.css?v=20260926-b">
+{% block head %}{% endblock %}
 </head>
 <body>
 <div class="shell">
@@ -20,7 +21,7 @@
     <a href="/settings" class="{{'active' if request.url.path.startswith('/settings') else ''}}">Settings</a>
   </nav>
   <div class="aside-foot">
-    {% if env.DRY_RUN %}<span class="dot"></span>Dry run - no live email{% else %}<span class="dot"></span>Live sending{% endif %}
+    {% if env.DRY_RUN %}<span class="dot dry"></span>Dry run - no live email{% else %}<span class="dot live"></span>Live sending{% endif %}
     <form action="/logout" method="post"><button type="submit">Sign out</button></form>
   </div>
 </aside>
