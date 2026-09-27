@@ -405,6 +405,23 @@ def logout(request: Request): request.session.clear(); return RedirectResponse("
 def billing_page(request: Request):
     uid = request.session.get("uid")
     user = store.get("app_users", str(uid)) if uid else None
+    if billing.configured() and user and user.get("stripe_checkout_session_id"):
+        state = billing.reconcile_checkout_session(store, user)
+        user = store.get("app_users", str(uid))
+        if request.query_params.get("checkout") == "canceled":
+            # The user abandoned Checkout: close the session and offer a
+            # clean retry. A completed session means payment went through.
+            if state == "open":
+                try:
+                    billing.stripe.api_key = env.STRIPE_SECRET_KEY
+                    billing.stripe.checkout.Session.expire(str(user.get("stripe_checkout_session_id") or ""))
+                except Exception:
+                    pass
+                billing.clear_checkout_session(store, user)
+                return RedirectResponse("/billing?notice=Checkout+canceled+-+nothing+was+charged.", 303)
+            if state == "complete":
+                return RedirectResponse("/billing?billing=pending", 303)
+            return RedirectResponse("/billing?notice=Checkout+canceled+-+nothing+was+charged.", 303)
     return page(request, "customer/billing.html", billing=billing.plan_state(user, admin=is_admin(request)),
                 billing_pending=request.query_params.get("billing") == "pending")
 
@@ -419,7 +436,7 @@ def billing_checkout(request: Request):
         url = billing.create_checkout_session(
             user,
             success_url=f"{env.PUBLIC_BASE_URL}/billing?billing=pending",
-            cancel_url=f"{env.PUBLIC_BASE_URL}/billing?notice=Checkout+canceled+-+nothing+was+charged.",
+            cancel_url=f"{env.PUBLIC_BASE_URL}/billing?checkout=canceled",
             storage=store,
         )
     except billing.BillingNotConfigured:

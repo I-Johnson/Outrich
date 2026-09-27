@@ -55,6 +55,8 @@
         {% if billing.configured and not billing.exempt and not billing.is_admin %}
           {% if billing.checkout_pending %}
           <button class="btn light" type="button" disabled aria-disabled="true">Payment confirmation in progress</button>
+          {% elif billing.checkout_open %}
+          <form method="post" action="/billing/checkout"><button class="btn" type="submit">Continue checkout - ${{ billing.price }}/month</button></form>
           {% elif billing.status not in ["trialing", "active", "past_due"] %}
           <form method="post" action="/billing/checkout"><button class="btn" type="submit">Subscribe - ${{ billing.price }}/month</button></form>
           {% endif %}

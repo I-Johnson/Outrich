@@ -191,10 +191,13 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(params["client_reference_id"], str(user["id"]))
         self.assertEqual(params["customer_email"], "new@example.com")
         # The open session is recorded on the account row.
+        self.assertEqual(params["idempotency_key"], f"checkout-{user['id']}")
         updated = self.raw.get("app_users", user["id"])
         self.assertEqual(updated["stripe_checkout_session_id"], "cs_test_1")
         self.assertTrue(updated["stripe_checkout_at"])
-        self.assertTrue(billing.checkout_pending(updated))
+        self.assertEqual(updated["stripe_checkout_state"], "open")
+        self.assertTrue(billing.checkout_open(updated))
+        self.assertFalse(billing.checkout_pending(updated))
 
     def test_checkout_reuses_existing_customer(self):
         _, user = self.signup()
@@ -368,11 +371,73 @@ class BillingTests(unittest.TestCase):
         self.assertIn("paid period has ended", plan.text)
         self.assertIn("Manage billing", plan.text)
 
+    def test_open_session_is_continue_checkout_not_payment_submitted(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "open"}):
+            page = self.client.get("/billing")
+        self.assertIn("Continue checkout", page.text)
+        self.assertNotIn("Payment submitted", page.text)
+        self.assertNotIn("Payment confirmation in progress", page.text)
+
+    def test_reconcile_marks_completed_session_pending(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_done",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "complete"}):
+            page = self.client.get("/billing")
+        self.assertIn("Payment submitted", page.text)
+        self.assertIn("Payment confirmation in progress", page.text)
+        self.assertEqual(self.raw.get("app_users", user["id"])["stripe_checkout_state"], "complete")
+
+    def test_reconcile_clears_expired_session_and_restores_subscribe(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_dead",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "expired"}):
+            page = self.client.get("/billing")
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_checkout_session_id"], "")
+        self.assertIn("/billing/checkout", page.text)
+        self.assertNotIn("Payment submitted", page.text)
+
+    def test_canceled_checkout_clears_the_session_and_offers_retry(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "open"}), \
+             patch("stripe.checkout.Session.expire") as expire:
+            response = self.client.get("/billing?checkout=canceled", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("Checkout+canceled", response.headers["location"])
+        expire.assert_called_once_with("cs_open")
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_checkout_session_id"], "")
+        page = self.client.get("/billing")
+        self.assertIn("/billing/checkout", page.text)
+        self.assertNotIn("Payment submitted", page.text)
+
+    def test_canceled_url_with_a_completed_session_shows_pending(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_done",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "complete"}):
+            response = self.client.get("/billing?checkout=canceled", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "/billing?billing=pending")
+
     def test_pending_checkout_banner_is_neutral_until_webhook_confirms(self):
         _, user = self.signup()
         self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_test_1",
-                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat()})
-        page = self.client.get("/billing?billing=pending")
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "complete"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "complete"}):
+            page = self.client.get("/billing?billing=pending")
         self.assertIn("Payment submitted", page.text)
         self.assertIn("refresh this page", page.text)
         self.assertIn("mailto:", page.text)
@@ -384,7 +449,8 @@ class BillingTests(unittest.TestCase):
         self.assertNotIn("/billing/checkout", plain.text)
         self.assertIn("Payment confirmation in progress", plain.text)
         self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
-                                                  "stripe_subscription_status": "active", "stripe_current_period_end": self.future(30)})
+                                                  "stripe_subscription_status": "active", "stripe_current_period_end": self.future(30),
+                                                  "stripe_checkout_session_id": "", "stripe_checkout_at": "", "stripe_checkout_state": ""})
         page = self.client.get("/billing?billing=pending")
         self.assertIn("Subscription active. Welcome aboard.", page.text)
 
@@ -398,7 +464,8 @@ class BillingTests(unittest.TestCase):
     def test_checkout_never_mints_a_second_open_session(self):
         _, user = self.signup()
         self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
-                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat()})
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
         existing = type("Session", (dict,), {"url": "https://checkout.stripe.com/open-session"})(status="open")
         with patch("stripe.checkout.Session.retrieve", return_value=existing) as retrieve, \
              patch("stripe.checkout.Session.create") as create:
@@ -410,7 +477,8 @@ class BillingTests(unittest.TestCase):
     def test_checkout_refuses_when_the_recorded_session_cannot_be_verified(self):
         _, user = self.signup()
         self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
-                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat()})
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
         with patch("stripe.checkout.Session.retrieve", side_effect=Exception("stripe unreachable")), \
              patch("stripe.checkout.Session.create") as create:
             response = self.client.post("/billing/checkout", follow_redirects=False)

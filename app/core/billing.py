@@ -119,6 +119,7 @@ def plan_state(user: dict | None, *, admin: bool = False) -> dict:
         "access_until": end.strftime("%b %-d, %Y") if end and status in {"canceled", "past_due"} and access else "",
         "support_email": env.SUPPORT_EMAIL,
         "checkout_pending": checkout_pending(user),
+        "checkout_open": checkout_open(user),
     }
 
 
@@ -130,7 +131,9 @@ def owner_has_access(base, owner_id: str) -> bool:
     never dropped.
 
     - Billing off (Stripe keys absent) lets every owner run.
-    - The admin owner and unknown (pre-billing/legacy) owners always run.
+    - The admin owner always runs; pre-billing legacy data is backfilled to
+      it, so that is the known legacy case.
+    - An owner with no app_users row is unidentifiable, so it pauses.
     - Otherwise the owner's app_users row decides; admin and exempt accounts
       are covered by has_access.
     """
@@ -164,12 +167,47 @@ def _checkout_session_open(user: dict, *, now: datetime | None = None) -> bool:
 
 
 def checkout_pending(user: dict | None) -> bool:
-    """A payment was actually initiated and has not confirmed yet."""
+    """Stripe confirmed the payment (session complete) and the webhook has
+    not landed yet. An open-but-unpaid session is never 'pending'."""
     if not user:
         return False
     if str(user.get("stripe_subscription_status") or "") in ACTIVE_STATUSES:
         return False
-    return _checkout_session_open(user)
+    return str(user.get("stripe_checkout_state") or "") == "complete" and _checkout_session_open(user)
+
+
+def checkout_open(user: dict | None) -> bool:
+    """Checkout was started but not paid; the session can be continued."""
+    if not user:
+        return False
+    return str(user.get("stripe_checkout_state") or "") == "open" and _checkout_session_open(user)
+
+
+def reconcile_checkout_session(storage, user: dict) -> str:
+    """Sync the recorded Checkout session against Stripe's actual status.
+
+    Returns "", "open", "complete", or "expired". Expired (or otherwise
+    terminal) sessions are cleared so the account can start over; when
+    Stripe is unreachable the stored state stands.
+    """
+    session_id = str(user.get("stripe_checkout_session_id") or "")
+    if not session_id:
+        return ""
+    if not _checkout_session_open(user):
+        clear_checkout_session(storage, user)
+        return ""
+    try:
+        stripe.api_key = env.STRIPE_SECRET_KEY
+        session = stripe.checkout.Session.retrieve(session_id)
+        status = str(session.get("status") or "")
+    except Exception:
+        return str(user.get("stripe_checkout_state") or "open")
+    if status in {"open", "complete"}:
+        if str(user.get("stripe_checkout_state") or "") != status:
+            storage.update("app_users", user["id"], {"stripe_checkout_state": status})
+        return status
+    clear_checkout_session(storage, user)
+    return "expired"
 
 
 def clear_checkout_session(storage, user: dict) -> None:
@@ -186,7 +224,10 @@ def create_checkout_session(user: dict, *, success_url: str, cancel_url: str, st
     if not configured():
         raise BillingNotConfigured("Stripe is not configured")
     stripe.api_key = env.STRIPE_SECRET_KEY
-    if _checkout_session_open(user):
+    state = str(user.get("stripe_checkout_state") or "")
+    if state == "complete" and _checkout_session_open(user):
+        raise CheckoutInProgress("Your payment was submitted and is confirming. This takes a few seconds.")
+    if state == "open" and _checkout_session_open(user):
         try:
             existing = stripe.checkout.Session.retrieve(str(user["stripe_checkout_session_id"]))
         except Exception as exc:
@@ -208,11 +249,14 @@ def create_checkout_session(user: dict, *, success_url: str, cancel_url: str, st
         params["customer"] = user["stripe_customer_id"]
     else:
         params["customer_email"] = user.get("email") or ""
-    session = stripe.checkout.Session.create(**params)
+    # Idempotency: a stable per-account key turns a double-submit race into
+    # one session - Stripe replays the first response for the duplicate.
+    session = stripe.checkout.Session.create(**params, idempotency_key=f"checkout-{user['id']}")
     if storage is not None:
         storage.update("app_users", user["id"], {
             "stripe_checkout_session_id": session.id,
             "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+            "stripe_checkout_state": "open",
         })
     return session.url
 
@@ -250,6 +294,7 @@ def apply_subscription(storage, user: dict, subscription: dict, customer_id: str
         "stripe_subscription_status": status,
         "stripe_checkout_session_id": "",
         "stripe_checkout_at": "",
+        "stripe_checkout_state": "",
         "stripe_current_period_end": datetime.fromtimestamp(period_end_ts, tz=timezone.utc).isoformat() if period_end_ts else "",
     }
     if customer_id:
