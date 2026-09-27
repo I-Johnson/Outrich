@@ -395,6 +395,44 @@ class BillingTests(unittest.TestCase):
         self.assertIn("Payment confirmation in progress", page.text)
         self.assertEqual(self.raw.get("app_users", user["id"])["stripe_checkout_state"], "complete")
 
+    def test_reconcile_completed_session_self_repairs_missed_webhook(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_done",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        subscription = {
+            "id": "sub_1", "status": "active", "customer": "cus_1",
+            "current_period_end": int(time.time()) + 30 * 86400,
+            "items": {"data": [{"price": {"id": "price_test_25"}}]},
+        }
+        with patch("stripe.checkout.Session.retrieve", return_value={
+            "status": "complete", "customer": "cus_1", "subscription": "sub_1",
+        }), patch("stripe.Subscription.retrieve", return_value=subscription):
+            page = self.client.get("/billing?billing=pending")
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_customer_id"], "cus_1")
+        self.assertEqual(updated["stripe_subscription_id"], "sub_1")
+        self.assertEqual(updated["stripe_subscription_status"], "active")
+        self.assertEqual(updated["stripe_price_id"], "price_test_25")
+        self.assertEqual(updated["stripe_checkout_session_id"], "")
+        self.assertTrue(billing.has_access(updated))
+        self.assertIn("Subscription active. Welcome aboard.", page.text)
+
+    def test_reconcile_completed_session_retries_when_subscription_fetch_fails(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_done",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={
+            "status": "complete", "customer": "cus_1", "subscription": "sub_1",
+        }), patch("stripe.Subscription.retrieve", side_effect=Exception("stripe unavailable")):
+            page = self.client.get("/billing?billing=pending")
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_checkout_state"], "complete")
+        self.assertEqual(updated["stripe_checkout_session_id"], "cs_done")
+        self.assertIsNone(updated["stripe_subscription_status"])
+        self.assertIn("Payment submitted", page.text)
+
     def test_reconcile_clears_expired_session_and_restores_subscribe(self):
         _, user = self.signup()
         self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_dead",
