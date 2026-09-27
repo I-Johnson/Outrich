@@ -187,8 +187,10 @@ def reconcile_checkout_session(storage, user: dict) -> str:
     """Sync the recorded Checkout session against Stripe's actual status.
 
     Returns "", "open", "complete", or "expired". Expired (or otherwise
-    terminal) sessions are cleared so the account can start over; when
-    Stripe is unreachable the stored state stands.
+    terminal) sessions are cleared so the account can start over. A completed
+    subscription Checkout is also applied directly, so access self-repairs
+    when Stripe's webhook is delayed or missed. When Stripe is unreachable
+    the stored state stands.
     """
     session_id = str(user.get("stripe_checkout_session_id") or "")
     if not session_id:
@@ -205,6 +207,15 @@ def reconcile_checkout_session(storage, user: dict) -> str:
     if status in {"open", "complete"}:
         if str(user.get("stripe_checkout_state") or "") != status:
             storage.update("app_users", user["id"], {"stripe_checkout_state": status})
+        if status == "complete" and session.get("subscription"):
+            try:
+                subscription = stripe.Subscription.retrieve(str(session["subscription"]))
+                apply_subscription(storage, user, subscription, session.get("customer"))
+            except Exception:
+                # The payment is confirmed, but Stripe could be transiently
+                # unavailable while fetching the subscription. Keep the
+                # completed session recorded so the next page load retries.
+                return "complete"
         return status
     clear_checkout_session(storage, user)
     return "expired"
