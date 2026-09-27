@@ -58,8 +58,8 @@ class SignupLoginTests(unittest.TestCase):
         page = self.client.get("/freight")
         self.assertEqual(page.status_code, 200)
         self.assertNotIn('href="/leads"', page.text)
-        self.assertNotIn('href="/campaigns"', page.text)
-        self.assertNotIn("workspace-switch", page.text)
+        # Every signed-in user gets the Freight/Outreach workspace toggle.
+        self.assertIn("workspace-switch", page.text)
 
     def test_signup_validation_and_duplicates(self):
         self.assertIn("valid+email", self.signup(email="not-an-email").headers["location"])
@@ -82,15 +82,23 @@ class SignupLoginTests(unittest.TestCase):
         self.assertEqual(good.headers["location"], "/freight")
         self.assertEqual(self.client.get("/freight").status_code, 200)
 
-    def test_regular_user_cannot_reach_outreach_engine(self):
+    def test_customer_reaches_only_the_customer_ia(self):
         self.signup()
-        for path in ("/", "/leads", "/campaigns", "/settings", "/templates", "/scraper", "/pingram-inbox"):
+        for path in ("/", "/campaigns", "/settings"):
+            response = self.client.get(path, follow_redirects=False)
+            self.assertEqual(response.status_code, 200, path)
+        # Admin tools stay admin-only.
+        for path in ("/leads", "/templates", "/scraper", "/pingram-inbox", "/imports"):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303, path)
             self.assertEqual(response.headers["location"], "/freight", path)
-        self.assertEqual(self.client.post("/templates/save", data={"name": "x", "subject": "s", "body": "b", "vertical": "outreach"}, follow_redirects=False).status_code, 403)
-        saved = self.client.post("/templates/save", data={"name": "Mine", "subject": "Load", "body": "Hi", "vertical": "freight", "active": "on"}, follow_redirects=False)
-        self.assertEqual(saved.status_code, 303)
+        self.assertEqual(self.client.post("/settings/gmail-senders", data={"email": "x@gmail.com"}, follow_redirects=False).headers["location"], "/freight")
+        # Customers save their own templates in either vertical.
+        for vertical in ("outreach", "freight"):
+            saved = self.client.post("/templates/save", data={"name": f"Mine {vertical}", "subject": "Load", "body": "Hi", "vertical": vertical, "active": "on"}, follow_redirects=False)
+            self.assertEqual(saved.status_code, 303, vertical)
+        owner = OwnerStore(self.raw, str(self.raw.list("app_users", {"email": "driver@example.com"}, order="", limit=1)[0]["id"]))
+        self.assertEqual([t["name"] for t in owner.list("email_templates", {"vertical": "outreach", "name": "Mine outreach"})], ["Mine outreach"])
         settings = self.client.get("/freight/settings")
         self.assertNotIn('href="/admin/login"', settings.text)
         self.assertIn("driver@example.com", settings.text)
@@ -132,13 +140,17 @@ class SignupLoginTests(unittest.TestCase):
 
     def test_ordinary_user_is_not_elevated(self):
         self.signup()
-        for path in ("/", "/leads", "/campaigns", "/pingram-inbox"):
+        for path in ("/leads", "/pingram-inbox", "/scraper", "/templates"):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303, path)
             self.assertEqual(response.headers["location"], "/freight", path)
-        self.assertEqual(self.client.post("/templates/save", data={"name": "x", "subject": "s", "body": "b", "vertical": "outreach"}, follow_redirects=False).status_code, 403)
+        # The customer IA is reachable but shows none of the admin nav.
+        overview = self.client.get("/")
+        self.assertEqual(overview.status_code, 200)
+        self.assertNotIn('href="/leads"', overview.text)
+        self.assertNotIn('href="/pingram-inbox"', overview.text)
         freight = self.client.get("/freight")
-        self.assertNotIn("workspace-switch", freight.text)
+        self.assertIn("workspace-switch", freight.text)
         self.assertNotIn('href="/admin/login"', self.client.get("/freight/settings").text)
 
     def test_admin_sign_out_returns_to_visitor_state(self):
@@ -177,8 +189,8 @@ class SignupLoginTests(unittest.TestCase):
         self.assertNotIn('href="#"', page.text)
         self.signup()
         response = self.client.get("/", follow_redirects=False)
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers["location"], "/freight")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("workspace-switch", response.text)
         self.client.post("/logout")
         self.client.post("/login", data={"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD})
         admin = self.client.get("/", follow_redirects=False)

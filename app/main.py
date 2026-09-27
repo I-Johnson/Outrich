@@ -152,6 +152,25 @@ PUBLIC_PREFIXES = ("/static/", "/webhooks/")
 # Paths a regular (non-admin) user may reach. Everything else is the admin's outreach engine.
 USER_PREFIXES = ("/freight", "/api/agent-test", "/api/freight/agent-test")
 USER_PATHS = {"/logout", "/templates/save"}
+
+# Outreach routes a signed-in customer may use: the customer IA (Overview,
+# Campaigns incl. builder actions, one Settings) plus the Freight workspace.
+CUSTOMER_OUTREACH_EXACT = {"/", "/campaigns", "/settings", "/templates/save", "/templates/ai-generate"}
+CUSTOMER_OUTREACH_PREFIXES = ("/campaigns/", "/api/locations/search", "/templates/")
+CUSTOMER_ADMIN_ONLY_PREFIXES = ("/settings/gmail-senders", "/settings/test-email", "/email-log/")
+
+
+def customer_allowed(path: str) -> bool:
+    """True when a signed-in non-admin may reach this path."""
+    if path in USER_PATHS or path == "/freight" or path.startswith("/freight/") or path.startswith("/api/agent-test") or path.startswith("/api/freight/agent-test"):
+        return True
+    if path.startswith(CUSTOMER_ADMIN_ONLY_PREFIXES):
+        return False
+    if path in CUSTOMER_OUTREACH_EXACT:
+        return True
+    if path == "/templates" or path.startswith("/templates?"):
+        return False  # the legacy template library page stays admin-only
+    return path.startswith(CUSTOMER_OUTREACH_PREFIXES)
 SESSION_MAX_AGE = 60 * 60 * 24 * 30  # keep people signed in for 30 days
 
 
@@ -174,8 +193,9 @@ async def admin_auth(request: Request, call_next):
     if not public:
         if not signed_in:
             return RedirectResponse(f"/login?next={quote(path)}", 303)
-        if not is_admin(request) and not (path in USER_PATHS or path == "/freight" or path.startswith("/freight/") or path.startswith("/api/agent-test") or path.startswith("/api/freight/agent-test")):
-            # Signed-in customers only see Freight; the outreach engine stays admin-only.
+        if not is_admin(request) and not customer_allowed(path):
+            # Customers get the outreach Overview/Campaigns/Settings plus Freight;
+            # the admin tools (Leads, Discovery, Pingram Inbox, ...) stay admin-only.
             return RedirectResponse("/freight", 303)
     response = await call_next(request)
     response.headers.update({"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin"})
@@ -188,7 +208,6 @@ app.add_middleware(SessionMiddleware, secret_key=env.SESSION_SECRET, max_age=SES
 
 def page(request: Request, name: str, **context):
     workspace = context.pop("workspace", "freight" if request.url.path.startswith("/freight") else "outreach")
-    if not is_admin(request): workspace = "freight"
     owner = current_owner(request)
     scoped_settings = (OwnerStore(store, owner).get("settings", 1) if owner else store.get("settings", 1)) or {}
     context.update({"request": request, "env": env, "app_settings": scoped_settings, "workspace": workspace, "is_admin": is_admin(request)})
@@ -1593,16 +1612,17 @@ def template_list(request: Request, edit: str = "", vertical: str = "outreach"):
 async def template_save(request: Request):
     form = await request.form(); row_id = str(form.get("id") or "")
     vertical = "freight" if form.get("vertical") == "freight" else "outreach"
-    if vertical != "freight" and not is_admin(request): raise HTTPException(403, "Not allowed")
+    # Both verticals are owner-scoped; customers save their own templates.
     data = {"name": str(form.get("name") or ""), "subject": str(form.get("subject") or ""), "body": str(form.get("body") or ""), "type": str(form.get("type") or "plain"), "angle_tag": str(form.get("angle_tag") or ""), "active": bool(form.get("active")), "vertical": vertical, "updated_at": now_iso()}
     if not all(str(data[field]).strip() for field in ("name", "subject", "body")):
-        destination = "/freight/settings?tab=templates" if vertical == "freight" else "/templates?vertical=outreach"
-        return RedirectResponse(f"{destination}&notice=Template+name,+subject,+and+body+are+required", 303)
+        destination = "/freight/settings?tab=templates" if vertical == "freight" else ("/templates?vertical=outreach" if is_admin(request) else "/campaigns")
+        return RedirectResponse(f"{destination}{'&' if '?' in destination else '?'}notice=Template+name,+subject,+and+body+are+required", 303)
     unknown = unknown_variables(data["subject"] + data["body"])
     if unknown:
         if vertical == "freight":
             return RedirectResponse(f"/freight/settings?tab=templates&edit_template={row_id or 'new'}&notice=Error: Unknown variables: {', '.join(unknown)}", 303)
-        return RedirectResponse(f"/templates?vertical={vertical}&edit={row_id or 'new'}&notice=Error: Unknown variables: {', '.join(unknown)}", 303)
+        destination = f"/templates?vertical={vertical}&edit={row_id or 'new'}" if is_admin(request) else "/campaigns"
+        return RedirectResponse(f"{destination}{'&' if '?' in destination else '?'}notice=Error: Unknown variables: {', '.join(unknown)}", 303)
     target = freight_store(request) if vertical == "freight" else outreach_store(request)
     if row_id:
         existing = target.get("email_templates", row_id)
@@ -1612,7 +1632,8 @@ async def template_save(request: Request):
     else: target.insert("email_templates", {"id": new_id(), **data, "created_at": now_iso()})
     if vertical == "freight":
         return RedirectResponse("/freight/settings?tab=templates&notice=Template+saved+successfully", 303)
-    return RedirectResponse(f"/templates?vertical={vertical}&notice=Template+saved+successfully", 303)
+    destination = f"/templates?vertical={vertical}" if is_admin(request) else "/campaigns"
+    return RedirectResponse(f"{destination}?notice=Template+saved+successfully", 303)
 
 
 @app.post("/templates/ai-generate")
