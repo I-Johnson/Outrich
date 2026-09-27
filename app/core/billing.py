@@ -54,8 +54,9 @@ def has_access(user: dict | None, *, admin: bool = False, now: datetime | None =
     - The verified env admin is always in.
     - Billing off (Stripe keys absent) lets everyone in.
     - Grandfathered accounts (billing_exempt) keep access forever.
-    - trialing/active subscriptions are in; a canceled subscription keeps
-      access until the end of the paid period; everything else is out.
+    - trialing/active subscriptions are in; a canceled or past_due
+      subscription keeps access until the end of the paid period (the account
+      already paid for that time); everything else is out.
     """
     if not user:
         return False
@@ -68,7 +69,7 @@ def has_access(user: dict | None, *, admin: bool = False, now: datetime | None =
     status = str(user.get("stripe_subscription_status") or "")
     if status in ACTIVE_STATUSES:
         return True
-    if status == "canceled":
+    if status in {"canceled", "past_due"}:
         end = _period_end(user)
         if end and end > (now or datetime.now(timezone.utc)):
             return True
@@ -90,7 +91,8 @@ def plan_state(user: dict | None, *, admin: bool = False) -> dict:
     elif status == "canceled" and access:
         label, tone = f"Active until {end:%b %-d, %Y}" if end else "Canceled", "warn"
     elif status == "past_due":
-        label, tone = "Payment failed", "warn"
+        label = f"Payment failed - access through {end:%b %-d, %Y}" if access and end else "Payment failed"
+        tone = "warn"
     elif status:
         label, tone = status.replace("_", " ").capitalize(), "warn"
     else:
@@ -106,7 +108,7 @@ def plan_state(user: dict | None, *, admin: bool = False) -> dict:
         "is_admin": bool(admin or user.get("role") == "admin"),
         "can_manage": bool(user.get("stripe_customer_id")),
         "renews_at": end.strftime("%b %-d, %Y") if end and status in ACTIVE_STATUSES else "",
-        "access_until": end.strftime("%b %-d, %Y") if end and status == "canceled" and access else "",
+        "access_until": end.strftime("%b %-d, %Y") if end and status in {"canceled", "past_due"} and access else "",
     }
 
 

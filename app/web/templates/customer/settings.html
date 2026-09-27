@@ -102,7 +102,7 @@
   <div>
     <div class="card">
       <h2>Plan &amp; billing</h2>
-      <div class="row"><b>Outrich - ${{ billing.price }}/month</b><span class="pill {{ '' if billing.tone == 'ok' else 'amber' }}">{{ billing.label }}</span></div>
+      <div class="row"><b>{% if billing.exempt %}Outrich - Early access{% else %}Outrich - ${{ billing.price }}/month{% endif %}</b><span class="pill {{ '' if billing.tone == 'ok' else 'amber' }}">{{ billing.label }}</span></div>
       {% if billing.renews_at %}<p class="sub">Renews {{ billing.renews_at }}.</p>{% endif %}
       {% if billing.exempt %}<p class="sub">Early account - free forever.</p>{% endif %}
       <a class="btn light" href="/billing" style="margin-top:10px">Open plan</a>

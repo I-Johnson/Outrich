@@ -234,6 +234,27 @@ def page(request: Request, name: str, **context):
     return templates.TemplateResponse(request=request, name=name, context=context)
 
 
+def billing_grace_banner(request: Request) -> str:
+    """App-wide payment-failed notice: a past_due account inside its paid
+    period keeps access, but every page carries the Manage billing nudge.
+    Exposed as a Jinja global so routes that render directly get it too."""
+    try:
+        if request.url.path.startswith("/billing") or is_admin(request):
+            return ""
+        uid = request.session.get("uid")
+        user = store.get("app_users", str(uid)) if uid else None
+        if user and billing.configured() and not int(user.get("billing_exempt") or 0) \
+                and str(user.get("stripe_subscription_status") or "") == "past_due" \
+                and billing.has_access(user, admin=False):
+            return billing.plan_state(user)["access_until"]
+    except Exception:
+        pass
+    return ""
+
+
+templates.env.globals["billing_grace_banner"] = billing_grace_banner
+
+
 FREIGHT_NEEDS_YOU = {"draft_ready", "needs_attention", "offer_review", "protected_review", "accepted_pending_review", "mismatch", "send_uncertain", "confirmation_required"}
 FREIGHT_DONE = {"booked", "closed", "passed"}
 
@@ -384,7 +405,8 @@ def logout(request: Request): request.session.clear(); return RedirectResponse("
 def billing_page(request: Request):
     uid = request.session.get("uid")
     user = store.get("app_users", str(uid)) if uid else None
-    return page(request, "customer/billing.html", billing=billing.plan_state(user, admin=is_admin(request)))
+    return page(request, "customer/billing.html", billing=billing.plan_state(user, admin=is_admin(request)),
+                billing_pending=request.query_params.get("billing") == "pending")
 
 
 @app.post("/billing/checkout")
@@ -396,7 +418,7 @@ def billing_checkout(request: Request):
     try:
         url = billing.create_checkout_session(
             user,
-            success_url=f"{env.PUBLIC_BASE_URL}/billing?notice=Subscription+active.+Welcome+aboard.",
+            success_url=f"{env.PUBLIC_BASE_URL}/billing?billing=pending",
             cancel_url=f"{env.PUBLIC_BASE_URL}/billing?notice=Checkout+canceled+-+nothing+was+charged.",
         )
     except billing.BillingNotConfigured:

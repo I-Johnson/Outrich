@@ -20,8 +20,8 @@ input:focus{outline:2px solid var(--pine);outline-offset:0;border-color:var(--pi
 button{border:0;background:var(--pine);color:#fff;border-radius:10px;padding:13px 18px;font:600 15px 'Instrument Sans';cursor:pointer;width:100%;margin-top:4px}
 button:hover{background:var(--pine2)}
 .error{background:var(--amberBg);color:#805409;border-radius:10px;padding:12px 15px;font-size:13.5px;font-weight:600;margin-bottom:18px}
-.switch{margin:20px 0 0;font-size:13.5px;color:var(--muted);text-align:center}
-.switch a{color:var(--pine);font-weight:700;text-decoration:none}
-.switch a:hover{text-decoration:underline}
+.card>p.switch{margin:22px 0 0;font-size:13.5px;color:var(--muted);text-align:center}
+.card>p.switch a{color:var(--pine);font-weight:700;text-decoration:none}
+.card>p.switch a:hover{text-decoration:underline}
 .tagline{margin:26px 0 0;text-align:center;font-size:13px;color:var(--muted)}
 .tagline b{color:var(--ink2);font-weight:600}

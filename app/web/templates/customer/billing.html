@@ -11,6 +11,14 @@
 
 {% if not billing.configured %}
 <div class="banner"><b>Billing is not set up on this deployment yet.</b>Every account has full access while the Stripe keys are absent. Nothing to do here.</div>
+{% elif billing_pending and billing.has_access %}
+<div class="banner"><b>Subscription active. Welcome aboard.</b>Both workspaces are unlocked.</div>
+{% elif billing_pending %}
+<div class="banner"><b>Payment submitted - confirming your subscription.</b>This usually takes a few seconds: <a href="/billing?billing=pending" style="color:inherit;text-decoration:underline">refresh this page</a>. If it's been more than a few minutes, contact support.</div>
+{% elif billing.status == "past_due" and billing.has_access %}
+<div class="banner warn"><b>Your last payment failed.</b>Access runs through {{ billing.access_until }} - update your card under Manage billing to keep it going.</div>
+{% elif billing.status == "past_due" %}
+<div class="banner warn"><b>Your account is on hold.</b>Your last payment failed and the paid period has ended. Update your card under Manage billing to restore access.</div>
 {% elif not billing.has_access %}
 <div class="banner warn"><b>Your account is on hold.</b>Subscribe to keep using Outrich - your campaigns, leads, and freight data are all still here.</div>
 {% endif %}
@@ -18,14 +26,26 @@
 <div class="grid two">
   <div>
     <div class="card">
+      {% if billing.exempt %}
+      <h2>Early access</h2>
+      <p>Free forever - your account predates paid plans.</p>
+      <div class="metric">$0</div>
+      <div class="stack" style="margin-top:18px">
+        <div class="mini"><b>Outreach</b><span class="sub">Lead discovery, CSV imports, and drip campaigns sent from your own Gmail.</span></div>
+        <div class="mini"><b>Freight</b><span class="sub">The dispatch copilot: missions, broker threads, and drafts ready for your review.</span></div>
+      </div>
+      {% else %}
       <h2>Outrich</h2>
       <p>Everything, one subscription.</p>
       <div class="metric">${{ billing.price }}<span class="label"> / month</span></div>
       <div class="stack" style="margin-top:18px">
         <div class="mini"><b>Outreach</b><span class="sub">Lead discovery, CSV imports, and drip campaigns sent from your own Gmail.</span></div>
-        <div class="mini"><b>Freight</b><span class="sub">The dispatch copilot: missions, broker threads, drafts, and bookings.</span></div>
-        <div class="mini"><b>Cancel anytime</b><span class="sub">Access runs to the end of the paid month. No partial-month games.</span></div>
+        <div class="mini"><b>Freight</b><span class="sub">The dispatch copilot: missions, broker threads, and drafts ready for your review.</span></div>
+        {% if billing.status not in ["canceled"] %}
+        <div class="mini"><b>Cancel anytime</b><span class="sub">Cancellation keeps access through your current paid period.</span></div>
+        {% endif %}
       </div>
+      {% endif %}
       <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
         {% if billing.configured and not billing.exempt and not billing.is_admin %}
           {% if billing.status not in ["trialing", "active", "past_due"] %}
@@ -36,7 +56,7 @@
         <form method="post" action="/billing/portal"><button class="btn light" type="submit">Manage billing</button></form>
         {% endif %}
       </div>
-      {% if billing.configured %}
+      {% if billing.configured and not billing.exempt %}
       <p class="sub" style="margin-top:14px">Checkout and card management are handled by Stripe. Outrich never sees your card number.</p>
       {% endif %}
     </div>
@@ -53,15 +73,21 @@
           {% if billing.access_until %}
           <tr><td><b>Access until</b></td><td>{{ billing.access_until }}</td></tr>
           {% endif %}
+          {% if billing.exempt %}
+          <tr><td><b>Plan</b></td><td>Early access - free forever</td></tr>
+          {% else %}
           <tr><td><b>Plan</b></td><td>${{ billing.price }} / month</td></tr>
+          {% endif %}
         </tbody>
       </table>
       {% if billing.exempt %}
       <div class="note">Your account predates paid plans, so access is on us. Nothing changes for you.</div>
       {% elif billing.is_admin %}
       <div class="note">Admin accounts are always exempt from billing.</div>
+      {% elif billing.status == "past_due" and billing.has_access %}
+      <div class="note">Your last payment failed. Update your card under Manage billing - access runs through {{ billing.access_until }}.</div>
       {% elif billing.status == "past_due" %}
-      <div class="note">Your last payment failed. Update your card under Manage billing to restore access.</div>
+      <div class="note">Your last payment failed and the paid period has ended. Update your card under Manage billing to restore access.</div>
       {% endif %}
     </div>
   </div>

@@ -28,6 +28,8 @@
 </aside>
 <main>
 {% if request.query_params.get('notice') %}<div class="notice">{{ request.query_params.get('notice') }}</div>{% endif %}
+{% set billing_grace_until = billing_grace_banner(request) %}
+{% if billing_grace_until %}<div class="notice" style="background:#805409">Your last payment failed. Access runs through {{ billing_grace_until }} - <a href="/billing" style="color:#fff;text-decoration:underline">update your card</a>.</div>{% endif %}
 {% block main %}{% endblock %}
 </main>
 </div>

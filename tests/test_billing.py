@@ -107,9 +107,14 @@ class BillingTests(unittest.TestCase):
         lapsed = {**user, "stripe_subscription_status": "canceled", "stripe_current_period_end": self.future(-1)}
         self.assertFalse(billing.has_access(lapsed))
 
-    def test_past_due_has_no_access(self):
+    def test_past_due_keeps_access_until_period_end(self):
         _, user = self.signup()
-        self.assertFalse(billing.has_access({**user, "stripe_subscription_status": "past_due"}))
+        grace = {**user, "stripe_subscription_status": "past_due", "stripe_current_period_end": self.future(10)}
+        self.assertTrue(billing.has_access(grace))
+        lapsed = {**user, "stripe_subscription_status": "past_due", "stripe_current_period_end": self.future(-1)}
+        self.assertFalse(billing.has_access(lapsed))
+        no_end = {**user, "stripe_subscription_status": "past_due"}
+        self.assertFalse(billing.has_access(no_end))
 
     # --- gating (routes) ---
 
@@ -142,6 +147,26 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("$25", page.text)
         self.assertIn("Subscribe", page.text)
+
+    def test_grandfathered_plan_page_shows_no_sales_card(self):
+        _, user = self.signup()
+        self.grandfather(user)
+        page = self.client.get("/billing")
+        self.assertIn("Early access", page.text)
+        self.assertIn("$0", page.text)
+        self.assertIn("free forever", page.text)
+        self.assertNotIn("Cancel anytime", page.text)
+        self.assertNotIn("/billing/checkout", page.text)
+        settings = self.client.get("/settings")
+        self.assertIn("Early access", settings.text)
+
+    def test_canceled_plan_page_drops_the_evergreen_cancel_pitch(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
+                                                  "stripe_subscription_status": "canceled", "stripe_current_period_end": self.future(10)})
+        page = self.client.get("/billing")
+        self.assertIn("Access until", page.text)
+        self.assertNotIn("Cancel anytime", page.text)
 
     def test_settings_shows_plan_card(self):
         _, user = self.signup()
@@ -240,13 +265,58 @@ class BillingTests(unittest.TestCase):
     def test_webhook_invoice_payment_failed_marks_past_due(self):
         _, user = self.signup()
         self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
-                                                  "stripe_subscription_status": "active"})
+                                                  "stripe_subscription_status": "active", "stripe_current_period_end": self.future(10)})
         event = {"type": "invoice.payment_failed", "data": {"object": {"customer": "cus_1", "subscription": "sub_1"}}}
         response = self.post_webhook(event)
         self.assertEqual(response.status_code, 200)
         updated = self.raw.get("app_users", user["id"])
         self.assertEqual(updated["stripe_subscription_status"], "past_due")
-        self.assertFalse(billing.has_access(updated))
+        # Grace: the account already paid for this period, so it stays in.
+        self.assertTrue(billing.has_access(updated))
+        self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_past_due_in_grace_passes_the_gate_and_sees_the_banner(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
+                                                  "stripe_subscription_status": "past_due", "stripe_current_period_end": self.future(10)})
+        home = self.client.get("/")
+        self.assertEqual(home.status_code, 200)
+        self.assertIn("Your last payment failed", home.text)
+        self.assertIn("update your card", home.text)
+        plan = self.client.get("/billing")
+        self.assertIn("payment failed", plan.text.lower())
+        self.assertIn("Manage billing", plan.text)
+        # No Subscribe button while a subscription exists, even a failing one.
+        self.assertNotIn("/billing/checkout", plan.text)
+
+    def test_past_due_after_period_end_is_locked(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
+                                                  "stripe_subscription_status": "past_due", "stripe_current_period_end": self.future(-1)})
+        response = self.client.get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/billing")
+        plan = self.client.get("/billing")
+        self.assertIn("paid period has ended", plan.text)
+        self.assertIn("Manage billing", plan.text)
+
+    def test_pending_checkout_banner_is_neutral_until_webhook_confirms(self):
+        _, user = self.signup()
+        page = self.client.get("/billing?billing=pending")
+        self.assertIn("Payment submitted", page.text)
+        self.assertIn("refresh this page", page.text)
+        self.assertNotIn("Welcome aboard", page.text)
+        self.raw.update("app_users", user["id"], {"stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1",
+                                                  "stripe_subscription_status": "active", "stripe_current_period_end": self.future(30)})
+        page = self.client.get("/billing?billing=pending")
+        self.assertIn("Subscription active. Welcome aboard.", page.text)
+
+    def test_checkout_success_url_uses_pending_state(self):
+        _, user = self.signup()
+        with patch("stripe.checkout.Session.create") as create:
+            create.return_value = type("Session", (), {"url": "https://checkout.stripe.com/test-session"})()
+            self.client.post("/billing/checkout", follow_redirects=False)
+        self.assertTrue(create.call_args.kwargs["success_url"].endswith("/billing?billing=pending"))
 
     def test_webhook_invoice_paid_refreshes_subscription(self):
         _, user = self.signup()
