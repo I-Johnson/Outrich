@@ -4,6 +4,7 @@ import json
 import sqlite3
 import smtplib
 import unittest
+import httpx
 from collections import Counter
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
@@ -956,9 +957,10 @@ class DiscoveryTests(unittest.TestCase):
             def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
 
         candidate = {"business_name": "Acme Roofing", "website": "", "phone": "", "city": "Austin", "state": "TX", "source_detail": "serper_maps"}
-        with patch("app.core.scraper.store", MemoryStore()), patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper.serp_candidates", return_value=([candidate], 1)), patch("app.core.scraper.find_company_website", return_value=("", 1)), patch("app.core.scraper.crawl_contact", return_value=("", "")), patch("app.core.scraper.fallback_contact_search", return_value=("owner@acme.com", "+15125551212", "https://acme.com", 1)), patch("app.core.scraper.valid_email", side_effect=lambda value, check_mx=False: bool(value)):
+        with patch("app.core.scraper.store", MemoryStore()), patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper.serp_candidates", return_value=([candidate], 1)), patch("app.core.scraper.find_company_website", return_value=("", 1)), patch("app.core.scraper.crawl_contact", return_value=("", "")), patch("app.core.scraper.fallback_contact_search", return_value=("owner@acme.com", "+15125551212", "https://acme.com", 1)) as fallback_mock, patch("app.core.scraper.valid_email", side_effect=lambda value, check_mx=False: bool(value)):
             result = process_scrape_job("job")
 
+        fallback_mock.assert_called_once_with("Acme Roofing", "Austin", "TX", known_domain="")
         self.assertEqual(result, {"found": 1, "saved": 1, "discarded": 0})
         self.assertEqual(rows["scrape_jobs"]["job"]["serp_calls_used"], 3)
         saved = next(iter(rows["clients"].values()))
@@ -1011,3 +1013,208 @@ class WorkerSchedulerTests(unittest.TestCase):
         body = app_main.health()
         for key in ("enabled", "interval_seconds", "scheduler_running", "last_tick_started_at"):
             self.assertIn(key, body["scheduler"])
+
+
+class DiscoveryFixTests(unittest.TestCase):
+    """Regression tests for the four discovery audit fixes."""
+
+    def _client_context(self, client):
+        context = Mock()
+        context.__enter__ = Mock(return_value=client)
+        context.__exit__ = Mock(return_value=False)
+        return context
+
+    # Fix 1: fallback emails must carry evidence they belong to the candidate.
+    def test_fallback_rejects_email_without_candidate_evidence(self):
+        organic = [
+            {"title": "Best roofers in Austin, TX", "snippet": "Call directory@roofinglist.com for listings", "link": "https://roofinglist.com/tx/austin"},
+            {"title": "Acme Roofing - Home", "snippet": "Reach us at owner@acmeroofing.com", "link": "https://acmeroofing.com"},
+        ]
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=organic):
+            email, phone, website, calls = fallback_contact_search("Acme Roofing", "Austin", "TX")
+        self.assertEqual(email, "owner@acmeroofing.com")
+        self.assertEqual(calls, 1)
+
+    def test_fallback_rejects_stranger_freemail_and_accepts_named_freemail(self):
+        stranger = [{"title": "Acme Roofing", "snippet": "email john.smith@gmail.com for a quote", "link": "https://example.com"}]
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=stranger):
+            email, _, _, _ = fallback_contact_search("Acme Roofing", "Austin", "TX")
+        self.assertEqual(email, "")
+        named = [{"title": "Acme Roofing", "snippet": "email acmeroofing@gmail.com for a quote", "link": "https://example.com"}]
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=named):
+            email, _, _, _ = fallback_contact_search("Acme Roofing", "Austin", "TX")
+        self.assertEqual(email, "acmeroofing@gmail.com")
+
+    def test_fallback_accepts_email_on_known_domain(self):
+        organic = [{"title": "Contact", "snippet": "office@smithandsons.com", "link": "https://smithandsons.com"}]
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=organic):
+            email, _, _, _ = fallback_contact_search("Smith & Sons Plumbing", "Austin", "TX", known_domain="smithandsons.com")
+        self.assertEqual(email, "office@smithandsons.com")
+
+    def test_scrape_job_discards_candidate_when_only_unverified_email_found(self):
+        rows = {
+            "scrape_jobs": {"job": {"id": "job", "category": "roofers", "city": "Austin", "state": "TX", "result_limit": 10, "status": "queued"}},
+            "settings": {1: {"scrape_required_fields": ["email"]}},
+            "clients": {},
+            "scrape_discards": {},
+        }
+
+        class MemoryStore:
+            def get(self, table, row_id): return rows.get(table, {}).get(row_id)
+            def list(self, table, filters=None, order="", limit=1000): return list(rows.get(table, {}).values())[:limit]
+            def insert(self, table, row): rows.setdefault(table, {})[row["id"]] = dict(row); return row
+            def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
+
+        candidate = {"business_name": "Acme Roofing", "website": "", "phone": "+15125551212", "city": "Austin", "state": "TX", "source_detail": "serper_maps"}
+        organic = [{"title": "Roofers directory", "snippet": "contact admin@roofinglist.com", "link": "https://roofinglist.com"}]
+        with patch("app.core.scraper.store", MemoryStore()), \
+             patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
+             patch("app.core.scraper.serp_candidates", return_value=([candidate], 1)), \
+             patch("app.core.scraper.find_company_website", return_value=("", 1)), \
+             patch("app.core.scraper.crawl_contact", return_value=("", "")), \
+             patch("app.core.scraper._serper_search", return_value=organic), \
+             patch("app.core.scraper.valid_email", side_effect=lambda value, check_mx=False: bool(value)):
+            result = process_scrape_job("job")
+        self.assertEqual(result, {"found": 1, "saved": 0, "discarded": 1})
+        discard = next(iter(rows["scrape_discards"].values()))
+        self.assertEqual(discard["reason"], "no_email_or_invalid_mx")
+
+    # Fix 2: crawler redirect policy + fail-closed robots handling.
+    def test_crawler_fails_closed_when_robots_unreachable(self):
+        client = Mock()
+        client.get.side_effect = httpx.ConnectError("unreachable")
+        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
+            email, phone = crawl_contact("https://example.com")
+        self.assertEqual((email, phone), ("", ""))
+        self.assertEqual(client.get.call_count, 1)
+
+    def test_crawler_fails_closed_on_robots_5xx(self):
+        client = Mock()
+        client.get.return_value = Mock(status_code=503, text="")
+        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
+            email, phone = crawl_contact("https://example.com")
+        self.assertEqual((email, phone), ("", ""))
+        self.assertEqual(client.get.call_count, 1)
+
+    def test_crawler_never_follows_cross_origin_redirect(self):
+        robots = Mock(status_code=200, text="User-agent: *\nAllow: /")
+        redirect = Mock(status_code=302, headers={"location": "https://169.254.169.254/latest/meta-data"})
+        client = Mock()
+        client.get.side_effect = [robots, redirect, redirect, redirect]
+        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)), patch("app.core.scraper.time.sleep"):
+            email, phone = crawl_contact("https://example.com")
+        self.assertEqual((email, phone), ("", ""))
+        for call in client.get.call_args_list:
+            self.assertNotIn("169.254.169.254", str(call))
+
+    def test_crawler_follows_same_origin_redirect_and_rechecks_robots(self):
+        robots = Mock(status_code=200, text="User-agent: *\nAllow: /")
+        redirect = Mock(status_code=301, headers={"location": "/contact-us"})
+        page = Mock(status_code=200, text='<html><a href="mailto:owner@example.com">Email</a></html>', headers={"content-type": "text/html"})
+        page.raise_for_status.return_value = None
+        client = Mock()
+        client.get.side_effect = [robots, redirect, page, page, page]
+        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)), patch("app.core.scraper.time.sleep"):
+            email, phone = crawl_contact("https://example.com")
+        self.assertEqual(email, "owner@example.com")
+        self.assertIn("https://example.com/contact-us", str(client.get.call_args_list))
+
+    # Fix 3: SERP failures are loud, not "zero results".
+    def test_serper_search_raises_on_transport_error(self):
+        import app.core.scraper as scraper
+        client = Mock()
+        client.post.side_effect = httpx.ConnectError("boom")
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
+             patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
+            with self.assertRaises(httpx.ConnectError):
+                scraper._serper_search("anything")
+
+    def test_serper_search_raises_on_5xx_and_429(self):
+        import app.core.scraper as scraper
+        server_error = Mock(status_code=503)
+        server_error.raise_for_status.side_effect = httpx.HTTPStatusError("503", request=Mock(), response=Mock())
+        client = Mock()
+        client.post.return_value = server_error
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
+             patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
+            with self.assertRaises(httpx.HTTPStatusError):
+                scraper._serper_search("anything")
+        quota = Mock(status_code=429)
+        client.post.return_value = quota
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
+             patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
+            with self.assertRaisesRegex(RuntimeError, "quota"):
+                scraper._serper_search("anything")
+
+
+class WorkerDrainTests(unittest.TestCase):
+    """Fix 4: the worker drains up to WORKER_JOBS_PER_TICK queued jobs per tick."""
+
+    def _store(self, job_count):
+        rows = {
+            "jobs": {
+                f"job-{i}": {
+                    "id": f"job-{i}", "kind": "reschedule_email_queue", "status": "queued",
+                    "owner_id": "owner-1", "payload": {}, "attempts": 0,
+                    "run_after": "2000-01-01T00:00:00+00:00", "created_at": f"2026-09-27T00:00:0{i}+00:00",
+                }
+                for i in range(job_count)
+            }
+        }
+
+        class MemoryStore:
+            def list(self, table, filters=None, order="", limit=100, **kwargs):
+                items = list(rows.get(table, {}).values())
+                for key, want in (filters or {}).items():
+                    if isinstance(want, tuple):
+                        items = [item for item in items if (item.get(key) or "") <= want[1]]
+                    else:
+                        items = [item for item in items if item.get(key) == want]
+                if order == "created_at asc":
+                    items.sort(key=lambda item: item.get("created_at") or "")
+                return items[:limit]
+            def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
+
+        return MemoryStore(), rows
+
+    def _tick_with(self, store, per_tick):
+        from app.jobs import scheduler
+        with patch("app.jobs.scheduler.store", store), \
+             patch.object(scheduler, "send_due"), \
+             patch.object(scheduler, "poll_freight_replies"), \
+             patch.object(scheduler, "recover_uncertain_freight_sends"), \
+             patch.object(scheduler, "outreach_owner_ids", return_value=[]), \
+             patch.object(scheduler, "freight_owner_ids", return_value=[]), \
+             patch.object(scheduler, "reschedule_queued_emails"), \
+             patch.object(scheduler.settings, "WORKER_JOBS_PER_TICK", per_tick):
+            scheduler.tick()
+
+    def test_tick_drains_multiple_queued_jobs(self):
+        store, rows = self._store(3)
+        self._tick_with(store, 3)
+        self.assertTrue(all(job["status"] == "done" for job in rows["jobs"].values()))
+
+    def test_tick_respects_per_tick_cap(self):
+        store, rows = self._store(5)
+        self._tick_with(store, 3)
+        done = [job for job in rows["jobs"].values() if job["status"] == "done"]
+        queued = [job for job in rows["jobs"].values() if job["status"] == "queued"]
+        self.assertEqual((len(done), len(queued)), (3, 2))
+
+    def test_failed_job_requeues_without_stopping_the_drain(self):
+        store, rows = self._store(2)
+        from app.jobs import scheduler
+        with patch("app.jobs.scheduler.store", store), \
+             patch.object(scheduler, "send_due"), \
+             patch.object(scheduler, "poll_freight_replies"), \
+             patch.object(scheduler, "recover_uncertain_freight_sends"), \
+             patch.object(scheduler, "outreach_owner_ids", return_value=[]), \
+             patch.object(scheduler, "freight_owner_ids", return_value=[]), \
+             patch.object(scheduler, "reschedule_queued_emails", side_effect=[ValueError("boom"), None]), \
+             patch.object(scheduler.settings, "WORKER_JOBS_PER_TICK", 3):
+            scheduler.tick()
+        first, second = rows["jobs"]["job-0"], rows["jobs"]["job-1"]
+        self.assertEqual(first["status"], "queued")
+        self.assertEqual(first["attempts"], 1)
+        self.assertIn("boom", first["error"])
+        self.assertEqual(second["status"], "done")

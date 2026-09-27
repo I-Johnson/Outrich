@@ -108,21 +108,26 @@ def _tick():
         except Exception: logger.exception("freight send recovery tick failed for %s", owner)
         try: poll_freight_replies(scoped)
         except Exception: logger.exception("freight reply monitor tick failed for %s", owner)
-    try:
-        jobs = store.list("jobs", {"status": "queued", "run_after": ("lte", now_iso())}, order="created_at asc", limit=1)
-        if not jobs: return
-        work = jobs[0]; store.update("jobs", work["id"], {"status": "running", "locked_at": now_iso(), "updated_at": now_iso()})
-        scoped = OwnerStore(store, str(work.get("owner_id") or ADMIN_OWNER_ID))
-        if work["kind"] == "scrape": process_scrape_job(work["payload"]["scrape_job_id"], storage=scoped)
-        elif work["kind"] == "reschedule_email_queue": reschedule_queued_emails(storage=scoped)
-        else: raise ValueError(f"Unknown job kind: {work['kind']}")
-        store.update("jobs", work["id"], {"status": "done", "updated_at": now_iso()})
-    except Exception as exc:
-        logger.exception("background job failed")
-        if 'work' in locals():
-            attempts = int(work.get("attempts") or 0) + 1
-            retry_at = (datetime.now(timezone.utc) + timedelta(minutes=2 ** attempts * 5)).isoformat()
-            store.update("jobs", work["id"], {"status": "failed" if attempts >= 3 else "queued", "attempts": attempts, "run_after": retry_at, "locked_at": None, "error": str(exc)[:1000], "updated_at": now_iso()})
+    # Drain up to WORKER_JOBS_PER_TICK queued jobs so discovery queues do not
+    # back up behind the tick interval (one job per tick capped throughput at
+    # 6 jobs/minute on the fastest allowed interval).
+    for _ in range(max(int(settings.WORKER_JOBS_PER_TICK), 1)):
+        work = None
+        try:
+            jobs = store.list("jobs", {"status": "queued", "run_after": ("lte", now_iso())}, order="created_at asc", limit=1)
+            if not jobs: break
+            work = jobs[0]; store.update("jobs", work["id"], {"status": "running", "locked_at": now_iso(), "updated_at": now_iso()})
+            scoped = OwnerStore(store, str(work.get("owner_id") or ADMIN_OWNER_ID))
+            if work["kind"] == "scrape": process_scrape_job(work["payload"]["scrape_job_id"], storage=scoped)
+            elif work["kind"] == "reschedule_email_queue": reschedule_queued_emails(storage=scoped)
+            else: raise ValueError(f"Unknown job kind: {work['kind']}")
+            store.update("jobs", work["id"], {"status": "done", "updated_at": now_iso()})
+        except Exception as exc:
+            logger.exception("background job failed")
+            if work is not None:
+                attempts = int(work.get("attempts") or 0) + 1
+                retry_at = (datetime.now(timezone.utc) + timedelta(minutes=2 ** attempts * 5)).isoformat()
+                store.update("jobs", work["id"], {"status": "failed" if attempts >= 3 else "queued", "attempts": attempts, "run_after": retry_at, "locked_at": None, "error": str(exc)[:1000], "updated_at": now_iso()})
 
 
 def start():
