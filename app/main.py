@@ -141,7 +141,13 @@ def seed_owner_defaults(owner_id: str):
 def startup():
     init_db(); ensure_admin_user(); seed_templates()
     admin = OwnerStore(store, ADMIN_OWNER_ID)
-    seed_legacy_gmail_senders(admin); seed_owner_defaults(ADMIN_OWNER_ID); scheduler.start()
+    try:
+        seed_legacy_gmail_senders(admin); seed_owner_defaults(ADMIN_OWNER_ID)
+    except Exception:
+        # A seed failure must never take the worker down with it: the scheduler
+        # is what keeps freight replies and campaign sends moving.
+        logging.getLogger(__name__).exception("startup seed step failed")
+    scheduler.start()
 
 
 @app.exception_handler(LookupError)
@@ -2317,4 +2323,17 @@ def pingram_reply_delete(request: Request, reply_id: str):
 
 
 @app.get("/health")
-def health(): return {"ok": True, "database": "supabase" if env.using_supabase else "sqlite", "dry_run": env.DRY_RUN}
+def health():
+    cfg = store.get("settings", 1) or {}
+    return {
+        "ok": True,
+        "database": "supabase" if env.using_supabase else "sqlite",
+        "dry_run": env.DRY_RUN,
+        "scheduler": {
+            "enabled": env.SCHEDULER_ENABLED,
+            "interval_seconds": max(env.SCHEDULER_INTERVAL_SECONDS, 10),
+            "last_tick_started_at": cfg.get("worker_last_tick_started_at"),
+            "last_tick_finished_at": cfg.get("worker_last_tick_finished_at"),
+            "last_error": cfg.get("worker_last_error"),
+        },
+    }

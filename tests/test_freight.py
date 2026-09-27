@@ -284,6 +284,15 @@ class FreightConversationTests(unittest.TestCase):
             **overrides,
         }
 
+    def test_poll_warns_when_threads_have_no_matching_sender(self):
+        # A thread whose sender account no active gmail sender matches (e.g. the
+        # sender row is owned by a different owner) must log loudly - silently
+        # skipping is how the prod cursor froze without any trace.
+        with self.assertLogs("app.core.freight", level="WARNING") as logs:
+            result = freight_module.poll_freight_replies(self.storage)
+        self.assertEqual(result["accounts"], 0)
+        self.assertTrue(any("no active gmail sender" in line for line in logs.output))
+
     def test_three_turn_rate_negotiation_and_counter_events(self):
         first = self.inbound("Pickup 09/23, delivery to Dallas, TX. 1,068 miles, weight 40,000 lbs. Rate- 4,000.00")
         self.assertEqual(first["action"], "draft")

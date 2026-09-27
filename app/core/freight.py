@@ -2607,6 +2607,12 @@ def poll_freight_replies(storage=None) -> dict[str, int]:
     cfg = storage.get("settings", 1) or {}
     account_ids = {str(row.get("sender_account")) for row in storage.list("freight_threads", order="", limit=10000) if row.get("state") != "closed"}
     senders = [row for row in list_gmail_senders(active_only=True, storage=storage, cfg=cfg) if str(row.get("id")) in account_ids and row.get("provider", "gmail") == "gmail"]
+    if account_ids and not senders:
+        # Threads exist but none of their sender accounts resolve to an active
+        # gmail sender in this owner's scope - polling would silently no-op and
+        # the cursor would freeze. This almost always means the sender row is
+        # owned by a different owner_id than the threads.
+        logger.warning("freight threads reference sender accounts %s but no active gmail sender matches in this scope; reply polling skipped", sorted(account_ids))
     totals = {"accounts": 0, "messages": 0, "matched": 0}
     totals["recovered"] = reconcile_unprocessed_inbound(storage)
     for sender in senders:
@@ -2708,6 +2714,7 @@ def poll_freight_replies(storage=None) -> dict[str, int]:
                 else:
                     storage.insert("freight_mail_cursors", {"id": new_id(), "sender_account": account_id, **values})
                 totals["accounts"] += 1
+                logger.info("freight poll sender %s: %d candidate uids, %d messages, %d matched", account_id, len(uids), totals["messages"], totals["matched"])
         except Exception as exc:
             logger.warning("Freight IMAP poll failed for sender %s: %s", account_id, exc)
             stamp = now_iso()

@@ -52,7 +52,35 @@ def recover_stale_jobs(now: datetime | None = None) -> int:
     return len(stale)
 
 
+def _record_heartbeat(started_at: str, error: str | None = None) -> None:
+    """Persist worker liveness so /health can show the scheduler is really ticking."""
+    try:
+        store.update("settings", 1, {
+            "worker_last_tick_started_at": started_at,
+            "worker_last_tick_finished_at": now_iso(),
+            "worker_interval_seconds": max(settings.SCHEDULER_INTERVAL_SECONDS, 10),
+            "worker_last_error": error,
+            "updated_at": now_iso(),
+        })
+    except Exception:
+        logger.exception("worker heartbeat write failed")
+
+
 def tick():
+    started_at = now_iso()
+    logger.info("worker tick started")
+    error = None
+    try:
+        _tick()
+    except Exception as exc:
+        error = str(exc)[:500]
+        logger.exception("worker tick failed")
+    finally:
+        _record_heartbeat(started_at, error)
+    logger.info("worker tick finished")
+
+
+def _tick():
     try: recover_stale_jobs()
     except Exception: logger.exception("stale job recovery failed")
     try: owners = outreach_owner_ids(store)
@@ -96,7 +124,15 @@ def tick():
 
 def start():
     global _scheduler
-    if _scheduler or not settings.SCHEDULER_ENABLED: return _scheduler
+    if _scheduler or not settings.SCHEDULER_ENABLED:
+        logger.info("worker scheduler not started (already running=%s, SCHEDULER_ENABLED=%s)", bool(_scheduler), settings.SCHEDULER_ENABLED)
+        return _scheduler
+    interval = max(settings.SCHEDULER_INTERVAL_SECONDS, 10)
     _scheduler = BackgroundScheduler(daemon=True)
-    _scheduler.add_job(tick, "interval", seconds=max(settings.SCHEDULER_INTERVAL_SECONDS, 10), id="worker", max_instances=1, coalesce=True)
-    _scheduler.start(); return _scheduler
+    # First tick runs immediately so a startup failure surfaces now, not one
+    # interval later; subsequent ticks follow the configured interval.
+    _scheduler.add_job(tick, "interval", seconds=interval, id="worker", max_instances=1, coalesce=True,
+                       next_run_time=datetime.now(timezone.utc))
+    _scheduler.start()
+    logger.info("worker scheduler started: interval=%ss (SCHEDULER_INTERVAL_SECONDS=%s)", interval, settings.SCHEDULER_INTERVAL_SECONDS)
+    return _scheduler
