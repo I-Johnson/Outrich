@@ -210,8 +210,19 @@ def reconcile_checkout_session(storage, user: dict) -> str:
     return "expired"
 
 
+def _checkout_cleared_values(user: dict) -> dict:
+    """Every checkout field cleared together, and the attempt counter bumped
+    so the next checkout uses a fresh idempotency key (never a dead replay)."""
+    return {
+        "stripe_checkout_session_id": "",
+        "stripe_checkout_at": "",
+        "stripe_checkout_state": "",
+        "stripe_checkout_attempt": int(user.get("stripe_checkout_attempt") or 0) + 1,
+    }
+
+
 def clear_checkout_session(storage, user: dict) -> None:
-    storage.update("app_users", user["id"], {"stripe_checkout_session_id": "", "stripe_checkout_at": ""})
+    storage.update("app_users", user["id"], _checkout_cleared_values(user))
 
 
 def create_checkout_session(user: dict, *, success_url: str, cancel_url: str, storage=None) -> str:
@@ -249,9 +260,11 @@ def create_checkout_session(user: dict, *, success_url: str, cancel_url: str, st
         params["customer"] = user["stripe_customer_id"]
     else:
         params["customer_email"] = user.get("email") or ""
-    # Idempotency: a stable per-account key turns a double-submit race into
-    # one session - Stripe replays the first response for the duplicate.
-    session = stripe.checkout.Session.create(**params, idempotency_key=f"checkout-{user['id']}")
+    # Idempotency scoped to THIS attempt: concurrent/retried posts for one
+    # attempt replay one session, while a canceled or expired attempt gets a
+    # fresh key (and a fresh session) next time.
+    session = stripe.checkout.Session.create(
+        **params, idempotency_key=f"checkout-{user['id']}-{int(user.get('stripe_checkout_attempt') or 0)}")
     if storage is not None:
         storage.update("app_users", user["id"], {
             "stripe_checkout_session_id": session.id,
@@ -292,9 +305,7 @@ def apply_subscription(storage, user: dict, subscription: dict, customer_id: str
     values = {
         "stripe_subscription_id": subscription.get("id") or "",
         "stripe_subscription_status": status,
-        "stripe_checkout_session_id": "",
-        "stripe_checkout_at": "",
-        "stripe_checkout_state": "",
+        **_checkout_cleared_values(user),
         "stripe_current_period_end": datetime.fromtimestamp(period_end_ts, tz=timezone.utc).isoformat() if period_end_ts else "",
     }
     if customer_id:

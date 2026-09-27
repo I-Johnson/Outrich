@@ -416,7 +416,10 @@ def billing_page(request: Request):
                     billing.stripe.api_key = env.STRIPE_SECRET_KEY
                     billing.stripe.checkout.Session.expire(str(user.get("stripe_checkout_session_id") or ""))
                 except Exception:
-                    pass
+                    # Keep the local record until Stripe confirms the close -
+                    # the old session is still live, so no instant retry.
+                    return RedirectResponse("/billing?notice=" + quote(
+                        "Checkout canceled. We're closing out the session - reload this page in a few seconds to start over."), 303)
                 billing.clear_checkout_session(store, user)
                 return RedirectResponse("/billing?notice=Checkout+canceled+-+nothing+was+charged.", 303)
             if state == "complete":

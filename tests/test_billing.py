@@ -191,7 +191,7 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(params["client_reference_id"], str(user["id"]))
         self.assertEqual(params["customer_email"], "new@example.com")
         # The open session is recorded on the account row.
-        self.assertEqual(params["idempotency_key"], f"checkout-{user['id']}")
+        self.assertEqual(params["idempotency_key"], f"checkout-{user['id']}-0")
         updated = self.raw.get("app_users", user["id"])
         self.assertEqual(updated["stripe_checkout_session_id"], "cs_test_1")
         self.assertTrue(updated["stripe_checkout_at"])
@@ -316,6 +316,8 @@ class BillingTests(unittest.TestCase):
         self.assertEqual(updated["stripe_price_id"], "price_test_25")
         self.assertTrue(billing.has_access(updated))
         self.assertEqual(updated["stripe_checkout_session_id"], "")
+        self.assertEqual(updated["stripe_checkout_state"], "")
+        self.assertEqual(int(updated["stripe_checkout_attempt"]), 1)
         self.assertFalse(billing.checkout_pending(updated))
         # The previously locked user now passes the gate.
         self.assertEqual(self.client.get("/").status_code, 200)
@@ -418,9 +420,48 @@ class BillingTests(unittest.TestCase):
         expire.assert_called_once_with("cs_open")
         updated = self.raw.get("app_users", user["id"])
         self.assertEqual(updated["stripe_checkout_session_id"], "")
+        self.assertEqual(updated["stripe_checkout_state"], "")
+        self.assertEqual(int(updated["stripe_checkout_attempt"]), 1)
         page = self.client.get("/billing")
         self.assertIn("/billing/checkout", page.text)
         self.assertNotIn("Payment submitted", page.text)
+
+    def test_subscribe_after_cancel_mints_a_new_session_with_a_fresh_key(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "open"}), \
+             patch("stripe.checkout.Session.expire"):
+            self.client.get("/billing?checkout=canceled", follow_redirects=False)
+        with patch("stripe.checkout.Session.create") as create:
+            create.return_value = type("Session", (), {"id": "cs_new", "url": "https://checkout.stripe.com/new-session"})()
+            response = self.client.post("/billing/checkout", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "https://checkout.stripe.com/new-session")
+        self.assertEqual(create.call_args.kwargs["idempotency_key"], f"checkout-{user['id']}-1")
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_checkout_session_id"], "cs_new")
+        self.assertEqual(updated["stripe_checkout_state"], "open")
+        self.assertEqual(int(updated["stripe_checkout_attempt"]), 1)
+
+    def test_cancel_keeps_the_record_when_stripe_cannot_confirm_expiry(self):
+        _, user = self.signup()
+        self.raw.update("app_users", user["id"], {"stripe_checkout_session_id": "cs_open",
+                                                  "stripe_checkout_at": datetime.now(timezone.utc).isoformat(),
+                                                  "stripe_checkout_state": "open"})
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "open"}), \
+             patch("stripe.checkout.Session.expire", side_effect=Exception("stripe unreachable")):
+            response = self.client.get("/billing?checkout=canceled", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("closing%20out%20the%20session", response.headers["location"])
+        # Record kept: no instant retry while the old session may be live.
+        updated = self.raw.get("app_users", user["id"])
+        self.assertEqual(updated["stripe_checkout_session_id"], "cs_open")
+        self.assertEqual(int(updated["stripe_checkout_attempt"]), 0)
+        with patch("stripe.checkout.Session.retrieve", return_value={"status": "open"}):
+            page = self.client.get("/billing")
+        self.assertIn("Continue checkout", page.text)
+        self.assertNotIn("Subscribe - $25", page.text)
 
     def test_canceled_url_with_a_completed_session_shows_pending(self):
         _, user = self.signup()

@@ -11,6 +11,7 @@ alter table app_users add column if not exists stripe_current_period_end text;
 alter table app_users add column if not exists stripe_checkout_session_id text;
 alter table app_users add column if not exists stripe_checkout_at text;
 alter table app_users add column if not exists stripe_checkout_state text;
+alter table app_users add column if not exists stripe_checkout_attempt integer not null default 0;
 alter table app_users add column if not exists billing_exempt integer not null default 0;
 
 -- Grandfather every pre-launch account.
