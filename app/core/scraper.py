@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 from urllib.parse import urljoin, urlparse
@@ -13,6 +14,8 @@ from app.config import settings
 from app.core.leads import duplicate_reason, normalize_email, normalize_phone, normalize_website, short_name, valid_email
 from app.db import new_id, now_iso, store
 
+logger = logging.getLogger(__name__)
+
 EMAIL_FIND = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 PHONE_FIND = re.compile(r"(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
 SKIP_DOMAINS = {
@@ -22,6 +25,11 @@ SKIP_DOMAINS = {
     "thumbtack.com", "tiktok.com", "wikipedia.org", "yellowpages.com", "yelp.com",
     "youtube.com", "zillow.com",
 }
+GENERIC_NAME_TOKENS = {
+    "llc", "inc", "corp", "company", "services", "service", "group",
+    "solutions", "consulting", "enterprises", "industries", "the", "and",
+}
+REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 
 
 def serp_candidates(category: str, city: str, state: str, limit: int) -> tuple[list[dict], int]:
@@ -68,6 +76,9 @@ def serp_candidates(category: str, city: str, state: str, limit: int) -> tuple[l
 
 
 def _serper_search(query: str, *, count: int = 4) -> list[dict]:
+    """One Serper organic query. Transport errors and non-2xx responses raise:
+    a dead key or an outage must fail loudly, not masquerade as an empty market
+    while still burning the job's call counter."""
     if not settings.SERP_API_KEY:
         return []
     try:
@@ -77,14 +88,15 @@ def _serper_search(query: str, *, count: int = 4) -> list[dict]:
                 headers={"X-API-KEY": settings.SERP_API_KEY, "Content-Type": "application/json"},
                 json={"q": query, "num": count},
             )
-        if res.status_code == 429:
-            raise RuntimeError("SERP quota or rate limit reached")
-        res.raise_for_status()
-        return res.json().get("organic", [])
-    except RuntimeError:
+    except httpx.HTTPError as exc:
+        logger.warning("serper search transport failure for query %r: %s", query, exc)
         raise
-    except Exception:
-        return []
+    if res.status_code == 429:
+        raise RuntimeError("SERP quota or rate limit reached")
+    if res.status_code >= 500:
+        logger.warning("serper search HTTP %s for query %r", res.status_code, query)
+    res.raise_for_status()
+    return res.json().get("organic", [])
 
 
 def find_company_website(company: str, city: str, state: str) -> tuple[str, int]:
@@ -99,16 +111,67 @@ def find_company_website(company: str, city: str, state: str) -> tuple[str, int]
     return "", 1
 
 
-def fallback_contact_search(company: str, city: str, state: str) -> tuple[str, str, str, int]:
-    """Use one fallback SERP query to recover public email/phone details."""
+def _company_tokens(company: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", company.lower())
+        if len(token) >= 4 and token not in GENERIC_NAME_TOKENS
+    }
+
+
+def _label_matches_tokens(label: str, tokens: set[str]) -> bool:
+    """True when the whole label is a concatenation of company tokens
+    ('acmeroofing' for 'Acme Roofing'). A stray word like 'directory' or
+    'list' ('roofingdirectory.com') fails, which is what keeps directory
+    emails from passing as the candidate's own address."""
+    remaining = label
+    while remaining:
+        for token in sorted(tokens, key=len, reverse=True):
+            if remaining.startswith(token):
+                remaining = remaining[len(token):]
+                break
+        else:
+            return False
+    return True
+
+
+def _email_belongs_to_candidate(email: str, company: str, *, known_domain: str = "") -> bool:
+    """Evidence check tying an email to this candidate, not to a directory or
+    a same-named stranger. Accepts when the email domain is the candidate's
+    known website domain, or when the domain label or local part is composed
+    entirely of distinctive company-name tokens."""
+    local, _, domain = email.partition("@")
+    if not domain or any(skipped in domain for skipped in SKIP_DOMAINS):
+        return False
+    if known_domain and domain == known_domain:
+        return True
+    tokens = _company_tokens(company)
+    if not tokens:
+        return False
+    return _label_matches_tokens(domain.split(".")[0], tokens) or _label_matches_tokens(local, tokens)
+
+
+def fallback_contact_search(company: str, city: str, state: str, known_domain: str = "") -> tuple[str, str, str, int]:
+    """Use one fallback SERP query to recover public contact details.
+
+    An email is accepted only with evidence it belongs to this candidate
+    (domain match or name-token composition); a bare regex hit from a
+    directory page would leak other people's addresses into campaigns.
+    """
     if not settings.SERP_API_KEY:
         return "", "", "", 0
     organic = _serper_search(f'"{company}" email phone {city} {state}', count=6)
-    text = " ".join(
-        f"{result.get('title', '')} {result.get('snippet', '')}"
-        for result in organic
-    )
-    email = next((normalize_email(value) for value in EMAIL_FIND.findall(text) if valid_email(value)), "")
+    email = ""
+    for result in organic:
+        text = f"{result.get('title', '')} {result.get('snippet', '')}"
+        for value in EMAIL_FIND.findall(text):
+            candidate_email = normalize_email(value)
+            if valid_email(candidate_email) and _email_belongs_to_candidate(candidate_email, company, known_domain=known_domain):
+                email = candidate_email
+                break
+        if email:
+            break
+    text = " ".join(f"{result.get('title', '')} {result.get('snippet', '')}" for result in organic)
     phone = next((normalize_phone(value) for value in PHONE_FIND.findall(text) if normalize_phone(value)), "")
     website = ""
     for result in organic:
@@ -120,6 +183,11 @@ def fallback_contact_search(company: str, city: str, state: str) -> tuple[str, s
     return email, phone, website, 1
 
 
+def _same_origin(url: str, origin: str) -> bool:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}" == origin
+
+
 def crawl_contact(website: str) -> tuple[str, str]:
     website, domain = normalize_website(website)
     if not website or any(sd in domain for sd in SKIP_DOMAINS):
@@ -128,18 +196,54 @@ def crawl_contact(website: str) -> tuple[str, str]:
     robot = RobotFileParser()
     robot.set_url(urljoin(origin, "/robots.txt"))
     emails, phones = [], []
-    with httpx.Client(timeout=8, follow_redirects=True, headers={"User-Agent": settings.CRAWLER_USER_AGENT}) as client:
+    # Redirects are followed manually and only within the original origin: a
+    # candidate's site must not be able to bounce the crawler onto an
+    # unrelated host whose robots rules were never consulted.
+    with httpx.Client(timeout=8, follow_redirects=False, headers={"User-Agent": settings.CRAWLER_USER_AGENT}) as client:
+        # Robots policy per RFC 9309: 2xx = parsed rules, 4xx = unrestricted,
+        # 5xx or unreachable = full disallow.
+        current = urljoin(origin, "/robots.txt")
+        robots_response = None
         try:
-            robots_response = client.get(urljoin(origin, "/robots.txt"))
-            robot.parse(robots_response.text.splitlines() if robots_response.status_code == 200 else [])
+            for _ in range(4):
+                robots_response = client.get(current)
+                if robots_response.status_code in REDIRECT_STATUSES:
+                    target = urljoin(current, robots_response.headers.get("location", ""))
+                    if not _same_origin(target, origin):
+                        return "", ""
+                    current = target
+                    continue
+                break
+            else:
+                return "", ""
         except Exception:
+            return "", ""
+        if robots_response.status_code == 200:
+            robot.parse(robots_response.text.splitlines())
+        elif 400 <= robots_response.status_code < 500:
             robot.parse([])
+        else:
+            return "", ""
         paths = list(dict.fromkeys((website, urljoin(origin, "/contact"), urljoin(origin, "/about"))))
         for index, path in enumerate(paths):
-            if not robot.can_fetch(settings.CRAWLER_USER_AGENT, path):
-                continue
+            current, response = path, None
             try:
-                response = client.get(path)
+                for _ in range(4):
+                    if not robot.can_fetch(settings.CRAWLER_USER_AGENT, current):
+                        break
+                    response = client.get(current)
+                    if response.status_code in REDIRECT_STATUSES:
+                        target = urljoin(current, response.headers.get("location", ""))
+                        if not _same_origin(target, origin):
+                            response = None
+                            break
+                        current = target
+                        continue
+                    break
+                else:
+                    response = None
+                if response is None:
+                    continue
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "")
                 if content_type and "html" not in content_type:
@@ -182,6 +286,7 @@ def process_scrape_job(job_id: str, storage=None) -> dict:
                     candidate.get("business_name", ""),
                     candidate.get("city", job["city"]),
                     candidate.get("state", job["state"]),
+                    known_domain=domain,
                 )
                 calls += fallback_calls
                 if needs_email and fallback_email:
