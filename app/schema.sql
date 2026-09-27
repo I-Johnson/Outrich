@@ -4,6 +4,12 @@ CREATE TABLE IF NOT EXISTS app_users (
   password_hash TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL DEFAULT 'user',
+  stripe_customer_id TEXT,
+  stripe_subscription_id TEXT,
+  stripe_subscription_status TEXT,
+  stripe_price_id TEXT,
+  stripe_current_period_end TEXT,
+  billing_exempt INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   last_login_at TEXT
 );

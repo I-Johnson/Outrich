@@ -26,6 +26,7 @@ from app.config import settings as env
 from app.core.ai_copywriter import generate_or_improve
 from app.core.agent_test import agent_test_state, approve_test_draft, confirm_test_facts, create_local_test_session, inject_broker_reply, scenario_catalog
 from app.core.auth import MIN_PASSWORD_LENGTH, hash_password, normalize_email as normalize_login_email, verify_password
+from app.core import billing
 from app.core.campaign_reporting import campaign_performance
 from app.core.crypto import encrypt_secret
 from app.core.gmail_check import check_gmail_login, clean_app_password, looks_like_app_password
@@ -156,8 +157,8 @@ USER_PATHS = {"/logout", "/templates/save"}
 
 # Outreach routes a signed-in customer may use: the customer IA (Overview,
 # Campaigns incl. builder actions, one Settings) plus the Freight workspace.
-CUSTOMER_OUTREACH_EXACT = {"/", "/campaigns", "/settings", "/templates/save", "/templates/ai-generate", "/imports/preview"}
-CUSTOMER_OUTREACH_PREFIXES = ("/campaigns/", "/settings/", "/api/locations/search", "/templates/", "/imports/")
+CUSTOMER_OUTREACH_EXACT = {"/", "/campaigns", "/settings", "/billing", "/templates/save", "/templates/ai-generate", "/imports/preview"}
+CUSTOMER_OUTREACH_PREFIXES = ("/campaigns/", "/settings/", "/billing/", "/api/locations/search", "/templates/", "/imports/")
 CUSTOMER_ADMIN_ONLY_PREFIXES = ("/email-log/",)
 
 
@@ -172,6 +173,15 @@ def customer_allowed(path: str) -> bool:
     if path == "/templates" or path.startswith("/templates?"):
         return False  # the legacy template library page stays admin-only
     return path.startswith(CUSTOMER_OUTREACH_PREFIXES)
+BILLING_OPEN_PATHS = {"/billing", "/logout", "/health"}
+BILLING_OPEN_PREFIXES = ("/billing/", "/static/", "/webhooks/")
+
+
+def billing_open(path: str) -> bool:
+    """Paths an account without an active subscription may still reach."""
+    return path in BILLING_OPEN_PATHS or path.startswith(BILLING_OPEN_PREFIXES)
+
+
 SESSION_MAX_AGE = 60 * 60 * 24 * 30  # keep people signed in for 30 days
 
 
@@ -199,6 +209,14 @@ async def admin_auth(request: Request, call_next):
             # Customers get the outreach Overview/Campaigns/Settings plus Freight;
             # the admin tools (Leads, Discovery, Pingram Inbox, ...) stay admin-only.
             return RedirectResponse("/freight", 303)
+        # Billing gate: grandfathered and subscribed accounts pass; anyone
+        # else is held on /billing until they subscribe. Billing stays off
+        # (everyone passes) when the Stripe env keys are absent.
+        if not is_admin(request) and not billing_open(path):
+            uid = request.session.get("uid")
+            user = store.get("app_users", str(uid)) if uid else None
+            if not billing.has_access(user, admin=False):
+                return RedirectResponse("/billing", 303)
     response = await call_next(request)
     response.headers.update({"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin"})
     return response
@@ -352,11 +370,68 @@ def signup(request: Request, name: str = Form(""), email: str = Form(...), passw
         _record_failure(key, attempts); return RedirectResponse("/login?error=That+email+already+has+an+account.+Log+in+instead.", 303)
     user = store.insert("app_users", {"id": new_id(), "email": email, "password_hash": hash_password(password), "name": name, "role": "user", "created_at": now_iso(), "last_login_at": now_iso()})
     seed_owner_defaults(str(user["id"]))
-    _start_user_session(request, user); return RedirectResponse("/?notice=Welcome+to+Outrich.+Create+your+first+campaign+when+you+are+ready.", 303)
+    _start_user_session(request, user)
+    if not billing.has_access(user, admin=False):
+        return RedirectResponse("/billing?notice=Welcome+to+Outrich.+One+plan+unlocks+both+workspaces.", 303)
+    return RedirectResponse("/?notice=Welcome+to+Outrich.+Create+your+first+campaign+when+you+are+ready.", 303)
 
 
 @app.post("/logout")
 def logout(request: Request): request.session.clear(); return RedirectResponse("/login", 303)
+
+
+@app.get("/billing", response_class=HTMLResponse)
+def billing_page(request: Request):
+    uid = request.session.get("uid")
+    user = store.get("app_users", str(uid)) if uid else None
+    return page(request, "customer/billing.html", billing=billing.plan_state(user, admin=is_admin(request)))
+
+
+@app.post("/billing/checkout")
+def billing_checkout(request: Request):
+    uid = request.session.get("uid")
+    user = store.get("app_users", str(uid)) if uid else None
+    if not user:
+        return RedirectResponse("/login", 303)
+    try:
+        url = billing.create_checkout_session(
+            user,
+            success_url=f"{env.PUBLIC_BASE_URL}/billing?notice=Subscription+active.+Welcome+aboard.",
+            cancel_url=f"{env.PUBLIC_BASE_URL}/billing?notice=Checkout+canceled+-+nothing+was+charged.",
+        )
+    except billing.BillingNotConfigured:
+        return RedirectResponse("/billing?notice=Billing+is+not+set+up+on+this+deployment+yet.", 303)
+    return RedirectResponse(url, 303)
+
+
+@app.post("/billing/portal")
+def billing_portal(request: Request):
+    uid = request.session.get("uid")
+    user = store.get("app_users", str(uid)) if uid else None
+    if not user:
+        return RedirectResponse("/login", 303)
+    try:
+        url = billing.create_portal_session(user, return_url=f"{env.PUBLIC_BASE_URL}/billing")
+    except billing.BillingNotConfigured:
+        return RedirectResponse("/billing?notice=Billing+is+not+set+up+on+this+deployment+yet.", 303)
+    except ValueError as exc:
+        return RedirectResponse(f"/billing?notice={quote(str(exc))}", 303)
+    return RedirectResponse(url, 303)
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    try:
+        event = billing.construct_webhook_event(payload, request.headers.get("stripe-signature"))
+    except billing.BillingNotConfigured:
+        return PlainTextResponse("Stripe is not configured", status_code=503)
+    except ValueError as exc:
+        return PlainTextResponse(str(exc), status_code=400)
+    outcome = billing.handle_webhook_event(store, event)
+    logging.getLogger(__name__).info("stripe webhook: %s", outcome)
+    return JSONResponse({"received": True, "outcome": outcome})
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1978,10 +2053,12 @@ def settings_page(request: Request):
                 used[str(tid)] = used.get(str(tid), 0) + 1
         for t in templates_out:
             t["used"] = used.get(str(t["id"]), 0)
+        user = store.get("app_users", str(request.session.get("uid") or ""))
         return templates.TemplateResponse(request=request, name="customer/settings.html",
                                           context={"request": request, "env": env, "cfg": cfg,
                                                    "senders": list_gmail_senders(storage=s, cfg=cfg),
-                                                   "templates": templates_out})
+                                                   "templates": templates_out,
+                                                   "billing": billing.plan_state(user, admin=False)})
     return page(request, "settings.html", gmail_senders=list_gmail_senders(storage=s, cfg=cfg))
 
 

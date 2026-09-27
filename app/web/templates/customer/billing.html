@@ -1,0 +1,69 @@
+{% extends "customer/base.html" %}
+{% block title %}Plan - Outrich{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <div class="eyebrow">Account / Plan</div>
+    <h1>One plan. Both workspaces.</h1>
+    <p>Outreach campaigns and the freight dispatch copilot, ${{ billing.price }} a month.</p>
+  </div>
+</div>
+
+{% if not billing.configured %}
+<div class="banner"><b>Billing is not set up on this deployment yet.</b>Every account has full access while the Stripe keys are absent. Nothing to do here.</div>
+{% elif not billing.has_access %}
+<div class="banner warn"><b>Your account is on hold.</b>Subscribe to keep using Outrich - your campaigns, leads, and freight data are all still here.</div>
+{% endif %}
+
+<div class="grid two">
+  <div>
+    <div class="card">
+      <h2>Outrich</h2>
+      <p>Everything, one subscription.</p>
+      <div class="metric">${{ billing.price }}<span class="label"> / month</span></div>
+      <div class="stack" style="margin-top:18px">
+        <div class="mini"><b>Outreach</b><span class="sub">Lead discovery, CSV imports, and drip campaigns sent from your own Gmail.</span></div>
+        <div class="mini"><b>Freight</b><span class="sub">The dispatch copilot: missions, broker threads, drafts, and bookings.</span></div>
+        <div class="mini"><b>Cancel anytime</b><span class="sub">Access runs to the end of the paid month. No partial-month games.</span></div>
+      </div>
+      <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+        {% if billing.configured and not billing.exempt and not billing.is_admin %}
+          {% if billing.status not in ["trialing", "active", "past_due"] %}
+          <form method="post" action="/billing/checkout"><button class="btn" type="submit">Subscribe - ${{ billing.price }}/month</button></form>
+          {% endif %}
+        {% endif %}
+        {% if billing.can_manage %}
+        <form method="post" action="/billing/portal"><button class="btn light" type="submit">Manage billing</button></form>
+        {% endif %}
+      </div>
+      {% if billing.configured %}
+      <p class="sub" style="margin-top:14px">Checkout and card management are handled by Stripe. Outrich never sees your card number.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>Your plan</h2>
+      <table>
+        <tbody>
+          <tr><td><b>Status</b></td><td><span class="pill {{ '' if billing.tone == 'ok' else 'amber' }}">{{ billing.label }}</span></td></tr>
+          {% if billing.renews_at %}
+          <tr><td><b>Renews</b></td><td>{{ billing.renews_at }}</td></tr>
+          {% endif %}
+          {% if billing.access_until %}
+          <tr><td><b>Access until</b></td><td>{{ billing.access_until }}</td></tr>
+          {% endif %}
+          <tr><td><b>Plan</b></td><td>${{ billing.price }} / month</td></tr>
+        </tbody>
+      </table>
+      {% if billing.exempt %}
+      <div class="note">Your account predates paid plans, so access is on us. Nothing changes for you.</div>
+      {% elif billing.is_admin %}
+      <div class="note">Admin accounts are always exempt from billing.</div>
+      {% elif billing.status == "past_due" %}
+      <div class="note">Your last payment failed. Update your card under Manage billing to restore access.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -11,3 +11,4 @@ phonenumbers==8.13.52
 beautifulsoup4==4.12.3
 itsdangerous==2.2.0
 pypdf==6.19.0
+stripe==11.4.1

@@ -53,6 +53,9 @@ class Settings:
     PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     CRAWLER_USER_AGENT = os.getenv("CRAWLER_USER_AGENT", "OutreachResearchBot/1.0 (+admin-only lead research)")
     MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "")
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 
     @property
     def using_supabase(self) -> bool:
