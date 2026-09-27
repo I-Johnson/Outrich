@@ -196,7 +196,7 @@
       <p class="fx-form-sub">Signed in as {{ request.session.get('email') or request.session.get('admin') or 'your account' }}.</p>
     </div>
     <div class="fx-row-wrap-sm">
-      {% if request.session.get('admin_workspace') %}<a class="fx-btn ghost" href="/">Open admin workspace</a>{% else %}<a class="fx-btn ghost" href="/admin/login">Admin login</a>{% endif %}
+      {% if is_admin %}<a class="fx-btn ghost" href="/">Open Outreach workspace</a>{% endif %}
       <form action="/logout" method="post" class="fx-m0"><button class="fx-btn">Sign out</button></form>
     </div>
   </div>

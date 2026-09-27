@@ -4,10 +4,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css?v=20260924-gmail">{% if workspace == 'freight' %}<link rel="stylesheet" href="/static/freight.css?v=20260924-ui"><script>try{if(localStorage.getItem('fx-side')==='collapsed')document.documentElement.classList.add('fx-collapsed')}catch(e){}</script>{% endif %}{% block head %}{% endblock %}</head>
-<body class="ws-{{ workspace }} {% block body_class %}{% endblock %}">{% set auth_page = request.url.path in ('/login', '/signup', '/admin/login') %}{% set signed_in = request.session.get('uid') or request.session.get('admin') %}{% if signed_in and not auth_page %}{% if workspace == 'freight' %}{% include "_fx_icons.html" %}
+<body class="ws-{{ workspace }} {% block body_class %}{% endblock %}">{% set auth_page = request.url.path in ('/login', '/signup') %}{% set signed_in = request.session.get('uid') or request.session.get('admin') %}{% if signed_in and not auth_page %}{% if workspace == 'freight' %}{% include "_fx_icons.html" %}
 <aside class="fx-side">
   <div class="fx-brand-row"><a class="brand" href="/freight"><span>F</span><span class="fx-nav-t">Freight</span></a><button type="button" class="fx-collapse" id="fx-collapse" aria-label="Collapse sidebar" title="Collapse sidebar"><svg class="i"><use href="#i-chevleft"/></svg></button></div>
-  {% if request.session.get('admin_workspace') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="active">Freight</a></div>{% endif %}
+  {% if is_admin %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="active">Freight</a></div>{% endif %}
   <nav>
     <a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}" title="Loads"><svg class="i"><use href="#i-inbox"/></svg><span class="fx-nav-t">Loads</span>{% if fx_nav and fx_nav.needs_you %}<span class="fx-count num" title="{{ fx_nav.needs_you }} need you">{{ fx_nav.needs_you }}</span>{% endif %}</a>
     <a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}" title="Missions &amp; fleet"><svg class="i"><use href="#i-route"/></svg><span class="fx-nav-t">Missions &amp; fleet</span></a>
@@ -29,7 +29,7 @@
 </aside>
 <script>document.getElementById('fx-collapse').addEventListener('click',function(){var c=document.documentElement.classList.toggle('fx-collapsed');try{localStorage.setItem('fx-side',c?'collapsed':'open')}catch(e){}this.setAttribute('aria-label',c?'Expand sidebar':'Collapse sidebar');this.title=c?'Expand sidebar':'Collapse sidebar'});</script>
 {% else %}<aside><a class="brand" href="{{'/freight' if workspace == 'freight' else '/'}}"><span>{{'F' if workspace == 'freight' else 'O'}}</span> {{'Freight' if workspace == 'freight' else 'Outreach'}}</a>
-{% if request.session.get('admin_workspace') %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
+{% if is_admin %}<div class="workspace-switch"><a href="/" class="{{'active' if workspace == 'outreach' else ''}}">Outreach</a><a href="/freight" class="{{'active' if workspace == 'freight' else ''}}">Freight</a></div>{% endif %}<nav>
 {% if workspace == 'freight' %}
 <a href="/freight" class="{{'active' if request.url.path == '/freight' else ''}}">Loads & conversations</a><a href="/freight/missions" class="{{'active' if request.url.path.startswith('/freight/missions') else ''}}">Missions & fleet</a><a href="/freight/agent-test" class="{{'active' if request.url.path.startswith('/freight/agent-test') else ''}}">Agent test</a><a href="/freight/settings" class="{{'active' if request.url.path.startswith('/freight/settings') else ''}}">Settings & templates</a>
 {% else %}
