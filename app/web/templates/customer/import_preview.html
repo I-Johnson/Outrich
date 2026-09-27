@@ -1,0 +1,55 @@
+{% extends "customer/base.html" %}
+{% block title %}Review import - Outrich{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <div class="eyebrow">Campaigns / Import</div>
+    <h1>Review before saving.</h1>
+    <p>{{ batch.filename }} · {{ batch.total_rows }} rows. Nothing is saved until you confirm.</p>
+  </div>
+  <a class="btn light" href="/campaigns">Back to campaigns</a>
+</div>
+<div class="grid">
+  <div class="card"><div class="label">Ready rows</div><div class="metric">{{ batch.ready_count }}</div><small>Will become leads</small></div>
+  <div class="card"><div class="label">Duplicates</div><div class="metric">{{ batch.duplicate_rows }}</div><small>Already in your leads</small></div>
+  <div class="card"><div class="label">Rejected</div><div class="metric">{{ batch.rejected_rows }}</div><small>Missing required fields</small></div>
+</div>
+<div class="card section">
+  <h2>Column mapping</h2>
+  <p>Check that each column from your file lands on the right field.</p>
+  <form action="/imports/{{ batch.id }}/remap" method="post">
+    <div class="fields">
+      {% for source in batch.headers %}
+      <div class="field"><label>{{ source }}</label>
+        <select name="map__{{ source }}">
+          <option value="">Ignore</option>
+          {% for field in fields %}<option value="{{ field }}" {% if batch.column_mapping.get(source) == field %}selected{% endif %}>{{ field }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endfor %}
+    </div>
+    <button class="btn subtle" type="submit" style="margin-top:14px">Apply mapping</button>
+  </form>
+</div>
+{% if batch.ready %}
+<div class="card section">
+  <h2>First ready rows</h2>
+  <table>
+    <thead><tr><th>Business</th><th>Email</th><th>City</th><th>State</th></tr></thead>
+    <tbody>
+      {% for r in batch.ready[:10] %}
+      <tr><td><b>{{ r.get('short_name') or r.get('business_name') or '-' }}</b></td><td>{{ r.get('email') or '-' }}</td><td>{{ r.get('city') or '-' }}</td><td>{{ r.get('state') or '-' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+<div class="card section">
+  <h2>Save these leads?</h2>
+  <p>{{ batch.ready_count }} rows will be added to your leads and preselected in the campaign builder.</p>
+  <form method="post" action="/imports/{{ batch.id }}/confirm" style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+    <button name="action" value="campaign" class="btn" {% if not batch.ready %}disabled{% endif %}>Import and continue to the builder</button>
+    <a class="btn subtle" href="/campaigns">Cancel</a>
+  </form>
+</div>
+{% endblock %}

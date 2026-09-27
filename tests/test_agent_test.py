@@ -118,7 +118,9 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         # flagged as a restate, and never consumes another counter round.
         self.assertEqual(repeated["decision"]["action"], "sent")
         self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in", "out"])
-        events = self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)
+        # Scope to this thread: the shared file DB keeps events from other tests.
+        thread_id = repeated["state"]["thread"]["id"]
+        events = self.storage.list("freight_negotiation_events", {"event_type": "counter", "thread_id": thread_id}, order="created_at asc", limit=10)
         self.assertEqual(len(events), 2)
         self.assertEqual([(event.get("details") or {}).get("restate", False) for event in events], [False, True])
         self.assertEqual(self.storage.get("freight_loads", load_id)["current_round"], 1)
@@ -205,7 +207,7 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         other = create_local_test_session(self.storage, {"mission_id": self.mission_id})
         with patch.object(main, "store", self.storage.base):
             client = TestClient(main.app)
-            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD})
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
             reloaded = client.get("/freight/agent-test/state", params={"load_id": load_id})
             self.assertEqual(reloaded.status_code, 200)
             self.assertEqual(reloaded.json()["pending_drafts"][0]["id"], draft_id)
@@ -236,7 +238,7 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         self.storage.update("freight_loads", real["load"]["id"], {"dat_reference": "real-load"})
         with patch.object(main, "store", self.storage.base):
             client = TestClient(main.app)
-            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD})
+            client.post("/login", data={"email": main.env.ADMIN_EMAIL, "password": main.env.ADMIN_PASSWORD}, follow_redirects=False)
             self.assertEqual(client.post("/freight/agent-test/reset", json={"load_id": real["load"]["id"]}).status_code, 404)
             other = TestClient(main.app)
             other.post("/signup", data={"email": "reset-test@example.com", "password": "test-password-123", "name": "Other"})

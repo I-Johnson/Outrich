@@ -5,35 +5,37 @@
    blue = waiting on broker, green = booked/connected, gray = closed.
    ========================================================================== */
 .ws-freight {
-  --fx-bg: #f6f7f9; --fx-panel: #fff; --fx-line: #e4e7ec; --fx-line-2: #eef0f3;
-  --fx-ink: #1f2937; --fx-ink-h: #0b0d12; --fx-muted: #5b6577; --fx-subtle: #8a93a3;
-  --fx-dark: #0b0d12;
-  --fx-amber: #b45309; --fx-amber-bg: #fff7e6; --fx-amber-bd: #fcd9a0;
-  --fx-blue: #1d4ed8; --fx-blue-bg: #eef3ff; --fx-blue-bd: #c9d7fb;
-  --fx-green: #15803d; --fx-green-bg: #ecfbf1; --fx-green-bd: #b7ecc9;
+  /* Landing-page palette: pine / fog / paper */
+  --fx-bg: #eef1ec; --fx-panel: #f8f9f6; --fx-line: #c6cec5; --fx-line-2: #dce1db;
+  --fx-ink: #15201c; --fx-ink-h: #15201c; --fx-muted: #48544e; --fx-subtle: #77827b;
+  --fx-dark: #1d4a3e;
+  --fx-amber: #b87a0c; --fx-amber-bg: #f8efdc; --fx-amber-bd: #ecd9ae;
+  --fx-blue: #1e5aa8; --fx-blue-bg: #e4edf8; --fx-blue-bd: #c0d4ec;
+  --fx-green: #2d8a58; --fx-green-bg: #e6f3ea; --fx-green-bd: #bcdfc8;
   --fx-red: #b91c1c; --fx-red-bg: #fef1f1; --fx-red-bd: #f8c9c9;
-  --fx-gray-bg: #f1f3f6;
+  --fx-gray-bg: #dce1db;
   --fx-shadow: 0 1px 3px rgba(16, 24, 40, .06);
   --fx-side: 232px;
   background: var(--fx-bg); background-image: none;
   font-size: 14px; line-height: 1.5; letter-spacing: -.005em; color: var(--fx-ink);
+  font-family: 'Instrument Sans', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 .ws-freight .num { font-variant-numeric: tabular-nums; }
 .ws-freight svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .ws-freight svg.i.sm { width: 14px; height: 14px; }
 
 /* ---------- Sidebar (collapsible) ---------- */
-.ws-freight aside.fx-side { width: var(--fx-side); padding: 16px 12px; background: #fbfbfc; border-right: 1px solid var(--fx-line); transition: width .16s ease; }
+.ws-freight aside.fx-side { width: var(--fx-side); padding: 16px 12px; background: var(--fx-panel); border-right: 1px solid var(--fx-line); transition: width .16s ease; }
 .ws-freight main { margin-left: var(--fx-side); padding: 28px 32px; max-width: none; transition: margin-left .16s ease; }
 .fx-side .fx-brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 16px 6px; }
 .fx-side .brand { font-size: 16px; font-weight: 700; margin: 0; padding: 0; gap: 10px; white-space: nowrap; }
 .fx-side .brand span:first-child { width: 28px; height: 28px; border-radius: 8px; font-size: 14px; background: var(--fx-dark); box-shadow: none; }
 .fx-collapse { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border-radius: 7px; border: 0; background: transparent; color: var(--fx-muted); box-shadow: none; }
-.fx-collapse:hover { background: #eceef2; color: var(--fx-ink-h); transform: none; box-shadow: none; }
+.fx-collapse:hover { background: var(--fx-line-2); color: var(--fx-ink-h); transform: none; box-shadow: none; }
 .fx-side nav { gap: 2px; }
 .fx-side nav a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--fx-muted); font-weight: 500; font-size: 14px; white-space: nowrap; box-shadow: none; border: 0; }
-.fx-side nav a:hover { background: #f1f3f6; color: var(--fx-ink-h); transform: none; }
-.fx-side nav a.active, .fx-side nav a.active:hover { background: #eceef2; color: var(--fx-ink-h); font-weight: 600; box-shadow: none; }
+.fx-side nav a:hover { background: var(--fx-line-2); color: var(--fx-ink-h); transform: none; }
+.fx-side nav a.active, .fx-side nav a.active:hover { background: var(--fx-line-2); color: var(--fx-ink-h); font-weight: 600; box-shadow: none; }
 .fx-side nav a .fx-count { margin-left: auto; font-size: 12px; font-weight: 700; color: #fff; background: var(--fx-amber); border-radius: 999px; padding: 0 7px; line-height: 20px; }
 .fx-side .fx-foot { margin-top: auto; border-top: 1px solid var(--fx-line); padding: 14px 6px 0; font-size: 12.5px; color: var(--fx-muted); }
 .fx-side .fx-conn { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; line-height: 1.45; }
@@ -64,10 +66,10 @@ html.fx-collapsed .fx-collapse svg { transform: rotate(180deg); }
 .fx-top h1 { font-size: 22px; line-height: 30px; margin: 0; letter-spacing: -.02em; font-weight: 700; }
 .fx-top .fx-sub { color: var(--fx-muted); font-size: 13.5px; margin: 2px 0 0; }
 .fx-top .fx-spacer { flex: 1; }
-.ws-freight .fx-btn, .ws-freight button.fx-btn { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--fx-line); background: #fff; color: var(--fx-ink-h); font: 600 13px/1 'Plus Jakarta Sans', sans-serif; white-space: nowrap; box-shadow: none; cursor: pointer; text-decoration: none; }
+.ws-freight .fx-btn, .ws-freight button.fx-btn { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--fx-line); background: #fff; color: var(--fx-ink-h); font: 600 13px/1 'Instrument Sans', 'Plus Jakarta Sans', sans-serif; white-space: nowrap; box-shadow: none; cursor: pointer; text-decoration: none; }
 .ws-freight .fx-btn:hover { background: #f6f7f9; color: var(--fx-ink-h); transform: none; box-shadow: none; }
 .ws-freight .fx-btn.primary { background: var(--fx-dark); border-color: var(--fx-dark); color: #fff; }
-.ws-freight .fx-btn.primary:hover { background: #1c1f26; color: #fff; }
+.ws-freight .fx-btn.primary:hover { background: #15382f; color: #fff; }
 .ws-freight .fx-btn.ghost { border-color: transparent; background: transparent; color: var(--fx-muted); }
 .ws-freight .fx-btn.ghost:hover { background: #f1f3f6; color: var(--fx-ink-h); }
 .ws-freight .fx-btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
@@ -1016,3 +1018,10 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .fx-mb6 { margin-bottom: 6px; }
 .fx-mb24 { margin-bottom: 24px; }
 .fx-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+
+/* ---------- Typography (landing language: Bricolage Grotesque + Instrument Sans) ---------- */
+.ws-freight h1, .ws-freight h2, .ws-freight h3, .ws-freight .fx-brand-row .brand {
+  font-family: 'Bricolage Grotesque', 'Plus Jakarta Sans', sans-serif;
+  letter-spacing: -.02em;
+}
+.ws-freight .fx-top h1, .ws-freight .fx-pagehead h1 { font-weight: 600; letter-spacing: -.025em; }

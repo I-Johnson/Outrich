@@ -1,158 +1,193 @@
-# Outreach Admin
+# Outrich
 
-Private, single-admin lead discovery and cold-outreach application. It imports and standardizes CSVs, discovers business leads through SERP/crawling, manages deduplicated contacts in Supabase, and schedules personalized 1-to-1 outreach through Gmail and Pingram.
+One app, two workspaces:
 
-> 📖 **New to the team?** Check out the **[Developer Onboarding Guide (ONBOARDING.md)](ONBOARDING.md)** for 5-minute local Docker setup, shared Supabase configuration, and Git workflow.
+- **Outreach** - lead discovery, CSV import, and drip cold outreach. Customers
+  build campaigns in a five-step builder (Find, Audience, Message, Sender,
+  Review), and a durable scheduler sends personalized 1-to-1 email through
+  Gmail or Pingram inside each account's send window and daily caps.
+- **Freight** - a dispatch copilot. Truck profiles and missions define what the
+  agent may do; inbound broker email is interpreted (Gemini, with a rules-only
+  fallback), rate math and mission rules are enforced in code, and permitted
+  replies are drafted or sent. Loads move toward booking with rate-con
+  comparison, multi-stop routes, and a full audit trail.
 
----
+Self-serve signup is open; every account's data is isolated per owner. One
+verified admin (env credentials) keeps the full toolset - lead lists, the
+discovery/scraper console, the template library, queue and inbox views - while
+customers see a focused surface: Overview, Campaigns, one Settings page, plus
+the Freight workspace.
 
-## 🚀 Daily Development & Deployment Workflow
-
-You can make all your code changes locally and deploy them directly to Railway without needing to run containers or complex local servers.
-
-### The 3-Step Deploy Workflow
-
-1. **Make code changes** in your editor (templates, routes, business logic, etc.).
-2. **Commit changes locally** (tracked in your local Git):
-   ```bash
-   git add .
-   git commit -m "Describe your changes"
-   ```
-3. **Deploy directly to Railway**:
-   ```bash
-   railway up
-   ```
-   * Railway uploads the updated code, builds the container in the cloud, and redeploys automatically in ~1 minute.
-   * View live changes immediately at:
-     👉 **[https://outreach-pipeline-production.up.railway.app](https://outreach-pipeline-production.up.railway.app)**
+> New to the team? [ONBOARDING.md](ONBOARDING.md) covers the 5-minute local
+> setup. Working on this codebase with an agent? Start with [AGENTS.md](AGENTS.md).
 
 ---
 
-## ⚙️ How Environment Variables Work (Local vs. Railway)
+## Quick start
 
-> **Important Concept:** Does Railway automatically read your local `.env` file?
->
-> **No.** Your local `.env` file is strictly kept on your machine (it is `.gitignore`d and `.railwayignore`d so your secrets are never exposed).
->
-> Instead:
-> * **Already Synced:** All your environment variables (Supabase URL, Service Role Key, Admin Login, Encryption Keys, Pingram, etc.) have **already been pushed to Railway's cloud settings**. Both environments point to the exact same live Supabase database.
-> * **If you ever change or add a NEW variable locally:** You must also set it in Railway so the cloud deployment knows about it:
->   ```bash
->   railway variable set MY_NEW_KEY="value"
->   ```
->   *(Or update it via the Railway Web Dashboard under Settings → Variables)*.
-
----
-
-## 🐳 Running with Docker (Recommended for Team)
-
-For full details on environment configuration, team collaboration, and Docker commands, see the **[Docker & Environment Setup Guide](DOCKER_AND_ENV_GUIDE.md)**.
+### Docker (recommended for team)
 
 ```bash
-# 1. Copy the template and paste your keys
-cp .env.example .env
-
-# 2. Start the container with hot-reloading
+cp .env.example .env   # paste your keys
 docker compose up --build
 ```
-Open **[http://localhost:8000](http://localhost:8000)**. It automatically mounts your `./app` directory for instant live code updates.
 
----
+Open http://localhost:8000. The `./app` directory is mounted for live reload.
 
-## 💻 Alternative: Running Locally with Python (No Docker Required)
-
-If you prefer running without Docker:
+### Local Python
 
 ```bash
-# 1. Activate python environment
-source .venv/bin/activate
-
-# 2. Start local dev server with auto-reload
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
-Open [http://localhost:8000](http://localhost:8000). Both Docker and Python connect directly to the shared Supabase instance.
+
+Both modes connect to the same Supabase project configured in `.env`
+(`DATABASE_BACKEND=supabase`). With `DATABASE_BACKEND=sqlite` the app runs
+entirely on a local file (`DB_PATH`, default under `/tmp`) - this is how the
+test suite runs.
+
+### Safety default
+
+`DRY_RUN=true` in `.env.example` means no real email leaves and no credits are
+consumed until you explicitly toggle it off.
 
 ---
 
-## 🗄️ Architecture & Backend
+## Testing
 
-- **Runtime:** Dockerized FastAPI on Railway (single replica, owns APScheduler worker).
-- **Database:** Supabase Postgres (accessed via REST API with server-side service-role key).
-- **Queues:** Durable Postgres tables (`jobs`, `scrape_jobs`, `email_log`); no Redis required.
-- **Drip Emailing:** Gmail SMTP with encrypted, independently branded sender accounts.
-- **Safety Default:** `DRY_RUN=true` ensures no emails or credits are consumed until explicitly toggled.
+```bash
+python -m pytest tests/ -q
+```
 
-### Gmail SMTP on Railway
+The suite runs on SQLite, no external services needed. One frontend race test
+(`tests/frontend_race.js`) runs under node when node is installed and skips
+cleanly otherwise. See [tests/AGENTS.md](tests/AGENTS.md) for conventions.
 
-Gmail SMTP works locally with an app password. Railway blocks outbound SMTP on
-Free, Trial, and Hobby plans, which produces `OSError: [Errno 101] Network is
-unreachable` before Gmail ever sees the login. This project therefore defaults
-to direct SMTP locally and the authenticated Supabase `send-gmail` Edge Function
-on Railway (`GMAIL_TRANSPORT=auto`). Gmail app passwords are encrypted before
-storage and are sent to the authenticated function only over HTTPS.
+## Deploy (Railway)
 
-As an alternative, a Railway Pro workspace can use direct Gmail SMTP instead of
-the Supabase HTTPS bridge.
+```bash
+railway up            # build in the cloud, redeploy in ~1 minute
+railway logs          # live logs
+railway status
+```
 
-The Settings test-email action and campaign send log display the provider error.
-Manual sends end in `failed` (with a retry button) rather than remaining in
-`sending` or silently requeueing.
+Railway builds the Dockerfile, runs a single replica (which owns the
+APScheduler worker), and healthchecks `/health`. Your local `.env` is never
+uploaded - set new variables with `railway variable set KEY=VALUE` or in the
+Railway dashboard.
 
-### Multiple Gmail senders
+## Database migrations
 
-Add, edit, enable, or disable Gmail senders from **Settings → Gmail sender
-accounts**. Each sender has its own email, encrypted app password, display name,
-reply-to, and signature. Campaign creation can select any number of enabled
-senders; durable email-log rows rotate between them and retain the assigned
-sender for retries. Each account receives an independent send cursor, delay
-jitter, and daily cap. The original `GMAIL_USER` / `GMAIL_USER_2` environment
-variables remain as compatibility fallbacks only.
+Schema lives in `supabase/migrations/`, numbered in order. Migrations are
+applied manually against the production Supabase project (SQL editor or
+`supabase db push`) - deploying code does not migrate the database. Local
+SQLite dev and tests create their schema from `app/schema.sql` and do not use
+the migration files. The `send-gmail` Edge Function lives in
+`supabase/functions/send-gmail/`.
 
-### Freight agent test
+## Environment variables
 
-Open **Freight → Agent test** after signing in to exercise the real freight
-decision engine without email transport. Select an existing truck profile and
-mission, start a local session, and paste broker replies into the page one at a
-time. The page uses the same `evaluate_inbound` path as production. By default,
-Gemini reads the latest broker reply with recent thread context and returns a
-structured interpretation. Rate calculations, mission rules, and send permissions
-are then enforced in code. Set `GEMINI_API_KEY` to enable interpretation;
-`FREIGHT_AGENT_MODE=rules` is an explicit legacy mode for offline development.
-If model interpretation fails, the thread pauses for review. Auto missions record
-permitted agent responses immediately; approve missions leave a draft for the **Approve response**
-button. Nothing is sent to Gmail and no broker mailbox is required.
-Auto Mode requires one exact destination lane and a saved target total or
-target all-in RPM. Use separate missions for lanes such as Florida → New Jersey
-and Florida → Dallas. Approve Mode may leave the target unset; the evaluator
-pauses on a broker offer until the dispatcher sets it. Unknown delivery cities
-and missions covering multiple destinations also pause before price judgment.
-The page shows live checks from the current load and mission. For automatic
-rate replies, confirm the broker's load details in the test page and recheck
-the latest reply; missing details keep a response as a reviewable draft.
+The full list with comments is in [.env.example](.env.example). The ones that
+change how the app behaves:
 
-The JSON endpoints are:
-
-- `POST /freight/agent-test/start` to start a local test session.
-- `POST /freight/agent-test/message` to evaluate one broker reply.
-- `POST /freight/agent-test/approve` to approve a pending local draft.
-- `POST /freight/agent-test/facts` to confirm load details and re-evaluate the latest reply locally.
-- `POST /freight/agent-test/mission` to add a mission from the test page.
-- `POST /freight/agent-test/reset` to remove the current local test session.
-- `GET /freight/agent-test/state?load_id=...` to read the durable test state.
-
-The corresponding `/api/freight/agent-test/...` aliases are available for API
-clients. `GET /freight/agent-test/scenarios` returns rule-checklist presets;
-these are descriptive examples for API clients and do not change the agent's rules.
-
----
-
-## 🛠️ Useful Commands
-
-| Task | Command |
+| Variable | What it controls |
 | :--- | :--- |
-| **Deploy changes** | `railway up` |
-| **View live logs** | `railway logs` |
-| **Check service status** | `railway status` |
-| **Set an env var** | `railway variable set KEY=VALUE` |
-| **Run unit tests** | `.venv/bin/python -m unittest discover -s tests -v` |
-| **Check git history** | `git log --oneline` |
+| `DATABASE_BACKEND` | `supabase` (production) or `sqlite` (local/tests) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | The single verified admin login |
+| `SESSION_SECRET` / `SECRET_KEY` / `ENCRYPTION_KEY` | Sessions and at-rest encryption of Gmail app passwords |
+| `DRY_RUN` | When true, nothing sends and no credits are consumed |
+| `GMAIL_TRANSPORT` | `auto`: direct SMTP locally, `send-gmail` Edge Function on Railway |
+| `GEMINI_API_KEY` / `FREIGHT_AGENT_MODE` | Freight reply interpretation; `rules` is the offline legacy mode |
+| `SERP_PROVIDER` / `SERP_API_KEY` | Lead discovery search |
+| `SCHEDULER_ENABLED` / `SCHEDULER_INTERVAL_MIN` | The background worker loop |
+
+---
+
+## How the app works
+
+### Auth model
+
+- Self-serve signup/login with scrypt-hashed passwords (`app/core/auth.py`);
+  sessions are signed cookies, 30-day max age.
+- The admin is one verified entitlement: env credentials (or a DB user with
+  role `admin`) set `session["admin"]`. There is no second admin gate.
+- Every signed-in request resolves an owner id; `OwnerStore`
+  (`app/core/tenancy.py`) scopes every read and write to that owner. Cross-
+  account access is impossible by construction, not by filter discipline in
+  each route.
+- Non-admins are limited to the customer surface (`customer_allowed` in
+  `app/main.py`): Overview, Campaigns, Settings, imports, and Freight. Admin
+  tools redirect to `/freight`.
+
+### Outreach: campaign flow
+
+1. **Find** (builder step 1) queues bounded SERP scrape jobs per
+   category/city; results land in the account's leads as they save. The page
+   polls for status with backoff and stops on completion or repeated errors.
+2. **Audience** (step 2) filters the account's leads. A live count
+   distinguishes *matching records* from *eligible to send* - eligible mirrors
+   the queue's real exclusions (replied / do-not-contact / bounced, suppressed
+   emails and domains, contacted inside the resend-block window), stated as
+   "before message checks". The count is fail-closed: step 3 and final submit
+   require a fresh successful count with at least one eligible lead, and the
+   server re-validates eligibility at save and at start.
+3. **Message / Sender / Review** (steps 3-5) pick active templates and sender
+   identities (one provider per campaign), then confirm.
+4. **Queueing** (`app/core/sender.py`) assigns each lead a sender account and a
+   durable scheduled timestamp inside the account's send window, per-account
+   and global daily caps, and per-sender delay jitter. The schedule is honest
+   about settings: an empty send-day list means sending is off, not weekdays.
+5. **Sending** (`send_due`, driven by the scheduler) renders the template,
+   sends via Gmail (SMTP locally, the `send-gmail` Edge Function on Railway)
+   or Pingram, and records every outcome on the durable `email_log` row.
+   Campaign detail shows per-lead state: queued, delivered, replied, bounced,
+   failed, skipped. Interrupted sends become `failed` for explicit review
+   rather than risking an automatic duplicate.
+
+### Freight workspace
+
+Missions define lanes, targets, and permissions per account; truck profiles
+carry the equipment facts brokers may see. Inbound broker threads are
+interpreted by Gemini with recent context, then code enforces mission rules
+and rate math - auto missions send permitted replies, approve missions leave
+drafts. Bookings capture the agreed terms, compare the rate con against them,
+and gate route changes on verification. **Freight > Agent test** exercises the
+real decision engine locally with pasted broker replies and no email
+transport; its JSON endpoints are documented under `/freight/agent-test` in
+`app/main.py`.
+
+### Architecture
+
+- **FastAPI + Jinja2**, server-rendered; static CSS per workspace
+  (`outreach.css`, `freight.css`) sharing one design-token set.
+- **Storage**: one facade (`app/db.py`) - Supabase Postgres over REST with the
+  service-role key in production, SQLite locally and in tests.
+- **Work queues**: durable Postgres tables (`jobs`, `scrape_jobs`,
+  `email_log`); no Redis. A single-replica APScheduler worker
+  (`app/jobs/scheduler.py`) sends due email, processes scrape jobs, polls
+  freight replies, and recovers stale work after a crash.
+- **Adapters** (`app/adapters/`): Gmail, Pingram, SERP, Mapbox, public records.
+
+## Repo layout
+
+```
+app/main.py            all HTTP routes + auth middleware
+app/core/              domain logic (sender, schedule, freight, tenancy, importer, ...)
+app/jobs/scheduler.py  the durable background worker
+app/web/templates/     Jinja templates (customer/ holds the customer surface)
+app/web/static/        CSS + the shared count-gate JS module
+app/adapters/          external service adapters
+tests/                 pytest suite (+ one node frontend test)
+supabase/              migrations + the send-gmail Edge Function
+seed/                  starter email templates
+vertical/              product notes
+```
+
+## More docs
+
+- [ONBOARDING.md](ONBOARDING.md) - team setup and Git workflow
+- [DOCKER_AND_ENV_GUIDE.md](DOCKER_AND_ENV_GUIDE.md) - environment deep dive
+- [EMAIL_TEMPLATES_GUIDE.md](EMAIL_TEMPLATES_GUIDE.md) - template variables and library
+- [HANDOFF_FREIGHT_MVP.md](HANDOFF_FREIGHT_MVP.md) - freight MVP handoff notes
+- [AGENTS.md](AGENTS.md) - rules for coding agents (root + subfolders)
