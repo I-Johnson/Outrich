@@ -269,6 +269,28 @@ def freight_group(load: dict) -> str:
     return "waiting"
 
 
+def _visible_freight_records(db, loads: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Hide inbound-only mailbox artifacts from every Freight surface.
+
+    A real conversation has an outbound message written by send_first_touch.
+    Loads without a thread remain visible because they may be drafts or failed
+    sends that need attention; a load with an inbound-only thread never does.
+    """
+    threads = db.list("freight_threads", order="updated_at desc", limit=10000)
+    outbound_thread_ids = {
+        str(row.get("thread_id"))
+        for row in db.list("freight_messages", {"direction": "out"}, order="", limit=10000)
+    }
+    visible_threads = [row for row in threads if str(row.get("id")) in outbound_thread_ids]
+    threaded_load_ids = {str(row.get("load_id")) for row in threads}
+    visible_load_ids = {str(row.get("load_id")) for row in visible_threads}
+    visible_loads = [
+        row for row in loads
+        if str(row.get("id")) not in threaded_load_ids or str(row.get("id")) in visible_load_ids
+    ]
+    return visible_loads, visible_threads
+
+
 def _ago(value) -> str:
     if not value:
         return ""
@@ -292,7 +314,8 @@ def freight_nav(db, *, loads: list[dict] | None = None, senders: list[dict] | No
     """Sidebar data for the Freight workspace: 'needs you' count and Gmail status."""
     if loads is None:
         loads = [row for row in db.list("freight_loads", order="updated_at desc", limit=500) if row.get("dat_reference") != "agent-test"]
-        threads = {str(r["load_id"]): r for r in db.list("freight_threads", order="updated_at desc", limit=1000)}
+        loads, visible_threads = _visible_freight_records(db, loads)
+        threads = {str(r["load_id"]): r for r in visible_threads}
         open_alert_threads = {str(a.get("thread_id")) for a in db.list("freight_alerts", {"status": "open"}, limit=200)}
         draft_threads = {str(d.get("thread_id")) for d in db.list("freight_drafts", {"status": "pending"}, limit=500)}
         loads = [{**row, "alerts": str((threads.get(str(row["id"])) or {}).get("id")) in open_alert_threads,
@@ -609,7 +632,7 @@ def freight_dashboard(request: Request, load_id: str = ""):
     profiles = db.list("freight_truck_profiles", order="created_at desc", limit=500)
     mission_map = {str(row["id"]): row for row in missions}
     profile_map = {str(row["id"]): row for row in profiles}
-    threads = db.list("freight_threads", order="updated_at desc", limit=1000)
+    loads, threads = _visible_freight_records(db, loads)
     thread_map = {str(row["load_id"]): row for row in threads}
     open_alerts = db.list("freight_alerts", {"status": "open"}, order="created_at desc", limit=200)
     alerts_by_thread: dict[str, list[dict]] = {}

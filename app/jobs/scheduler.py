@@ -98,5 +98,5 @@ def start():
     global _scheduler
     if _scheduler or not settings.SCHEDULER_ENABLED: return _scheduler
     _scheduler = BackgroundScheduler(daemon=True)
-    _scheduler.add_job(tick, "interval", seconds=max(settings.SCHEDULER_INTERVAL_SECONDS, 15), id="worker", max_instances=1, coalesce=True)
+    _scheduler.add_job(tick, "interval", seconds=max(settings.SCHEDULER_INTERVAL_SECONDS, 10), id="worker", max_instances=1, coalesce=True)
     _scheduler.start(); return _scheduler
