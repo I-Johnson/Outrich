@@ -401,7 +401,7 @@
   </section>
   <section class="panel">
     <div class="panel-head"><div><h2>Quick start</h2><p>From setup to first send</p></div></div>
-    <ol class="steps"><li><a href="/settings">Complete your business profile</a><small>Sender, offer, and schedule</small></li><li><a href="/leads">Import or add leads</a><small>CSV preview catches problems first</small></li><li><a href="/templates">Review templates</a><small>Every detail comes from Settings</small></li><li><a href="/campaigns">Create a campaign</a><small>Start a slow, durable drip</small></li></ol>
+    <ol class="steps"><li><a href="/settings">Complete your business profile</a><small>Sender, offer, and schedule</small></li>{% if is_admin %}<li><a href="/leads">Import or add leads</a><small>CSV preview catches problems first</small></li><li><a href="/templates">Review templates</a><small>Every detail comes from Settings</small></li>{% endif %}<li><a href="/campaigns">Create a campaign</a><small>Start a slow, durable drip</small></li></ol>
   </section>
 </div>
 

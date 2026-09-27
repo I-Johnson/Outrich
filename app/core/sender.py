@@ -99,7 +99,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
 def _schedule_config(cfg: dict) -> dict:
     return {
         "timezone": cfg.get("timezone") or "UTC",
-        "send_days": cfg.get("send_days") or [0, 1, 2, 3, 4],
+        "send_days": ([0, 1, 2, 3, 4] if cfg.get("send_days") is None else cfg.get("send_days")),
         "send_start": cfg.get("send_start") or "09:00",
         "send_end": cfg.get("send_end") or "17:00",
         "min_delay_minutes": int(cfg.get("min_delay_minutes") or 3),
