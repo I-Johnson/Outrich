@@ -118,7 +118,9 @@ class AgentTestWorkspaceTests(unittest.TestCase):
         # flagged as a restate, and never consumes another counter round.
         self.assertEqual(repeated["decision"]["action"], "sent")
         self.assertEqual([row["direction"] for row in repeated["state"]["messages"]], ["in", "out", "out", "in", "out"])
-        events = self.storage.list("freight_negotiation_events", {"event_type": "counter"}, order="", limit=10)
+        # Scope to this thread: the shared file DB keeps events from other tests.
+        thread_id = repeated["state"]["thread"]["id"]
+        events = self.storage.list("freight_negotiation_events", {"event_type": "counter", "thread_id": thread_id}, order="created_at asc", limit=10)
         self.assertEqual(len(events), 2)
         self.assertEqual([(event.get("details") or {}).get("restate", False) for event in events], [False, True])
         self.assertEqual(self.storage.get("freight_loads", load_id)["current_round"], 1)

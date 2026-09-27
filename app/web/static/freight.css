@@ -18,6 +18,7 @@
   --fx-side: 232px;
   background: var(--fx-bg); background-image: none;
   font-size: 14px; line-height: 1.5; letter-spacing: -.005em; color: var(--fx-ink);
+  font-family: 'Instrument Sans', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 .ws-freight .num { font-variant-numeric: tabular-nums; }
 .ws-freight svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -65,7 +66,7 @@ html.fx-collapsed .fx-collapse svg { transform: rotate(180deg); }
 .fx-top h1 { font-size: 22px; line-height: 30px; margin: 0; letter-spacing: -.02em; font-weight: 700; }
 .fx-top .fx-sub { color: var(--fx-muted); font-size: 13.5px; margin: 2px 0 0; }
 .fx-top .fx-spacer { flex: 1; }
-.ws-freight .fx-btn, .ws-freight button.fx-btn { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--fx-line); background: #fff; color: var(--fx-ink-h); font: 600 13px/1 'Plus Jakarta Sans', sans-serif; white-space: nowrap; box-shadow: none; cursor: pointer; text-decoration: none; }
+.ws-freight .fx-btn, .ws-freight button.fx-btn { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--fx-line); background: #fff; color: var(--fx-ink-h); font: 600 13px/1 'Instrument Sans', 'Plus Jakarta Sans', sans-serif; white-space: nowrap; box-shadow: none; cursor: pointer; text-decoration: none; }
 .ws-freight .fx-btn:hover { background: #f6f7f9; color: var(--fx-ink-h); transform: none; box-shadow: none; }
 .ws-freight .fx-btn.primary { background: var(--fx-dark); border-color: var(--fx-dark); color: #fff; }
 .ws-freight .fx-btn.primary:hover { background: #1c1f26; color: #fff; }
@@ -1017,3 +1018,10 @@ button.fx-acct-add:hover { background: #fafbfc; color: var(--fx-ink-h); transfor
 .fx-mb6 { margin-bottom: 6px; }
 .fx-mb24 { margin-bottom: 24px; }
 .fx-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+
+/* ---------- Typography (landing language: Bricolage Grotesque + Instrument Sans) ---------- */
+.ws-freight h1, .ws-freight h2, .ws-freight h3, .ws-freight .fx-brand-row .brand {
+  font-family: 'Bricolage Grotesque', 'Plus Jakarta Sans', sans-serif;
+  letter-spacing: -.02em;
+}
+.ws-freight .fx-top h1, .ws-freight .fx-pagehead h1 { font-weight: 600; letter-spacing: -.025em; }

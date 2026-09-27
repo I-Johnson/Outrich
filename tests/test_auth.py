@@ -44,10 +44,10 @@ class SignupLoginTests(unittest.TestCase):
     def signup(self, client=None, email="Driver@Example.com", password="longenough1", name="Dee"):
         return (client or self.client).post("/signup", data={"name": name, "email": email, "password": password}, follow_redirects=False)
 
-    def test_signup_creates_user_session_and_lands_in_freight(self):
+    def test_signup_creates_user_session_and_lands_on_overview(self):
         response = self.signup()
         self.assertEqual(response.status_code, 303)
-        self.assertTrue(response.headers["location"].startswith("/freight"))
+        self.assertTrue(response.headers["location"].startswith("/?notice="))
         users = self.raw.list("app_users", {"email": "driver@example.com"}, order="", limit=5)
         self.assertEqual(len(users), 1)
         self.assertEqual(users[0]["role"], "user")
@@ -79,7 +79,8 @@ class SignupLoginTests(unittest.TestCase):
         bad = self.client.post("/login", data={"email": "driver@example.com", "password": "nope-nope"}, follow_redirects=False)
         self.assertIn("Invalid", bad.headers["location"])
         good = self.client.post("/login", data={"email": "DRIVER@example.com", "password": "longenough1"}, follow_redirects=False)
-        self.assertEqual(good.headers["location"], "/freight")
+        self.assertEqual(good.headers["location"], "/")
+        self.assertEqual(self.client.get("/").status_code, 200)
         self.assertEqual(self.client.get("/freight").status_code, 200)
 
     def test_customer_reaches_only_the_customer_ia(self):
@@ -92,8 +93,9 @@ class SignupLoginTests(unittest.TestCase):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303, path)
             self.assertEqual(response.headers["location"], "/freight", path)
-        self.assertEqual(self.client.post("/settings/gmail-senders", data={"email": "x@gmail.com"}, follow_redirects=False).headers["location"], "/freight")
-        # Customers save their own templates in either vertical.
+        # Customers manage their own senders and templates.
+        self.assertEqual(self.client.post("/settings/gmail-senders", data={"email": "x@gmail.com", "app_password": "abcd efgh ijkl mnop"}, follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post("/email-log/some-id/send-now", follow_redirects=False).headers["location"], "/freight")
         for vertical in ("outreach", "freight"):
             saved = self.client.post("/templates/save", data={"name": f"Mine {vertical}", "subject": "Load", "body": "Hi", "vertical": vertical, "active": "on"}, follow_redirects=False)
             self.assertEqual(saved.status_code, 303, vertical)
@@ -190,7 +192,8 @@ class SignupLoginTests(unittest.TestCase):
         self.signup()
         response = self.client.get("/", follow_redirects=False)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("workspace-switch", response.text)
+        self.assertIn("Find people. Start conversations.", response.text)
+        self.assertIn('href="/freight"', response.text)
         self.client.post("/logout")
         self.client.post("/login", data={"email": self.main.env.ADMIN_EMAIL, "password": self.main.env.ADMIN_PASSWORD})
         admin = self.client.get("/", follow_redirects=False)

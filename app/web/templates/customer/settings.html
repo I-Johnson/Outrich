@@ -1,0 +1,135 @@
+{% extends "customer/base.html" %}
+{% block title %}Settings - Outrich{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <div class="eyebrow">Account / Settings</div>
+    <h1>Set the rules in one place.</h1>
+    <p>Your sender, schedule, business details, templates, and workspaces.</p>
+  </div>
+</div>
+<div class="grid two">
+  <div>
+    <div class="card">
+      <h2>Sending identity</h2>
+      <p>Emails go out from these identities. App passwords are stored encrypted.</p>
+      {% if senders %}
+      <table>
+        <thead><tr><th>Sender</th><th>Provider</th><th>State</th><th></th></tr></thead>
+        <tbody>
+        {% for snd in senders %}
+          <tr>
+            <td><b>{{ snd.display_name or snd.email }}</b><small>{{ snd.email }}</small></td>
+            <td>{{ (snd.provider or 'gmail')|capitalize }}</td>
+            <td><span class="pill {{ '' if snd.active else 'gray' }}">{{ "Active" if snd.active else "Off" }}</span></td>
+            <td>
+              <form method="post" action="/settings/test-email" style="display:flex;gap:6px">
+                <input type="hidden" name="gmail_sender_id" value="{{ snd.id }}">
+                <input type="email" name="to" placeholder="you@example.com" required style="min-height:36px;padding:7px 10px;width:170px">
+                <button class="btn subtle" type="submit" style="padding:7px 12px">Test</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No sender connected yet. Add your Gmail below to start sending.</div>
+      {% endif %}
+      <details class="tpl-edit" style="margin-top:14px">
+        <summary>Add a sender</summary>
+        <form method="post" action="/settings/gmail-senders" class="inline-form">
+          <div class="fields">
+            <div class="field"><label>Gmail address</label><input type="email" name="email" required></div>
+            <div class="field"><label>App password</label><input type="password" name="app_password" placeholder="16-letter app password"></div>
+            <div class="field"><label>Display name</label><input type="text" name="display_name" placeholder="Sam from Acme"></div>
+            <div class="field"><label>Reply-to (optional)</label><input type="email" name="reply_to"></div>
+            <div class="field full"><label>Signature</label><textarea name="signature" style="min-height:80px"></textarea></div>
+          </div>
+          <button class="btn light" type="submit">Add sender</button>
+        </form>
+      </details>
+    </div>
+
+    <form method="post" action="/settings">
+    <div class="card section">
+      <h2>Schedule &amp; daily caps</h2>
+      <div class="fields">
+        <div class="field"><label>Timezone</label><input type="text" name="timezone" value="{{ cfg.get('timezone') or 'America/New_York' }}"></div>
+        <div class="field"><label>Daily cap per sender</label><input type="number" name="daily_cap" value="{{ cfg.get('daily_cap') or 20 }}" min="1" max="200"></div>
+        <div class="field"><label>Send window starts</label><input type="time" name="send_start" value="{{ cfg.get('send_start') or '09:00' }}"></div>
+        <div class="field"><label>Send window ends</label><input type="time" name="send_end" value="{{ cfg.get('send_end') or '17:00' }}"></div>
+        <div class="field"><label>Min delay between sends (minutes)</label><input type="number" name="min_delay_minutes" value="{{ cfg.get('min_delay_minutes') or 3 }}" min="1"></div>
+        <div class="field"><label>Max delay between sends (minutes)</label><input type="number" name="max_delay_minutes" value="{{ cfg.get('max_delay_minutes') or 15 }}" min="1"></div>
+      </div>
+      <div class="field full" style="margin-top:14px"><label>Send on these days</label>
+        <div class="checks">
+          {% set days = cfg.get('send_days') or [0,1,2,3,4] %}
+          {% for label, val in [("Mon",0),("Tue",1),("Wed",2),("Thu",3),("Fri",4),("Sat",5),("Sun",6)] %}
+          <label><input type="checkbox" name="send_days" value="{{ val }}" {{ 'checked' if val in days else '' }}> {{ label }}</label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="card section">
+      <h2>Business &amp; message details</h2>
+      <div class="fields">
+        <div class="field"><label>Your name</label><input type="text" name="sender_name" value="{{ cfg.get('sender_name') or '' }}"></div>
+        <div class="field"><label>Your email</label><input type="email" name="sender_email" value="{{ cfg.get('sender_email') or '' }}"></div>
+        <div class="field"><label>Business name</label><input type="text" name="sender_business" value="{{ cfg.get('sender_business') or '' }}"></div>
+        <div class="field"><label>Business website</label><input type="text" name="sender_business_url" value="{{ cfg.get('sender_business_url') or '' }}"></div>
+        <div class="field"><label>What you offer</label><input type="text" name="product_name" value="{{ cfg.get('product_name') or '' }}"></div>
+        <div class="field"><label>Offer link</label><input type="text" name="product_url" value="{{ cfg.get('product_url') or '' }}"></div>
+        <div class="field"><label>Booking link</label><input type="text" name="booking_link" value="{{ cfg.get('booking_link') or '' }}"></div>
+        <div class="field"><label>Callback number</label><input type="text" name="callback_number" value="{{ cfg.get('callback_number') or '' }}"></div>
+        <div class="field full"><label>What you tell leads about your business</label><textarea name="business_context">{{ cfg.get('business_context') or '' }}</textarea></div>
+        <div class="field full"><label>Email signature</label><textarea name="email_signature" style="min-height:80px">{{ cfg.get('email_signature') or '' }}</textarea></div>
+      </div>
+      <button class="btn" type="submit" style="margin-top:16px">Save changes</button>
+    </div>
+    </form>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Used templates</h2>
+      <p>Your message library. The campaign builder picks from these.</p>
+      {% if templates %}
+      <table>
+        <thead><tr><th>Template</th><th>Used in</th><th>State</th></tr></thead>
+        <tbody>
+        {% for t in templates %}
+          <tr>
+            <td><b>{{ t.name }}</b><small>{{ t.subject }}</small></td>
+            <td>{{ t.used }} {{ "campaign" if t.used == 1 else "campaigns" }}</td>
+            <td><span class="pill {{ '' if t.active else 'gray' }}">{{ "Active" if t.active else "Off" }}</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No templates yet.</div>
+      {% endif %}
+      <details class="tpl-edit" style="margin-top:14px">
+        <summary>New template</summary>
+        <form method="post" action="/templates/save" class="inline-form">
+          <input type="hidden" name="vertical" value="outreach">
+          <input type="hidden" name="active" value="on">
+          <div class="fields">
+            <div class="field"><label>Name</label><input type="text" name="name" required></div>
+            <div class="field"><label>Type</label><select name="type"><option value="plain">Plain</option><option value="html">HTML</option></select></div>
+            <div class="field full"><label>Subject</label><input type="text" name="subject" required></div>
+            <div class="field full"><label>Body</label><textarea name="body" required></textarea></div>
+          </div>
+          <button class="btn light" type="submit">Save template</button>
+        </form>
+      </details>
+    </div>
+    <div class="card section">
+      <h2>Freight</h2>
+      <p>Your freight workspace has its own loads, missions, and settings. Switch over from the sidebar anytime; nothing here changes your freight setup.</p>
+      <a class="btn light" href="/freight/settings" style="margin-top:14px">Open freight settings</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

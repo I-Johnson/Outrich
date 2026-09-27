@@ -1,0 +1,158 @@
+{% extends "customer/base.html" %}
+{% block title %}Campaigns - Outrich{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <div class="eyebrow">Outreach / Campaigns</div>
+    <h1>One place to build outreach.</h1>
+    <p>Find your audience, write your message, choose your sender, then review.</p>
+  </div>
+</div>
+<div class="grid two">
+  <div class="card">
+    <div class="eyebrow">Create campaign</div>
+    <div class="steps" id="steps">
+      <span class="step selected" data-goto="1">1 Find</span>
+      <span class="step" data-goto="2">2 Audience</span>
+      <span class="step" data-goto="3">3 Message</span>
+      <span class="step" data-goto="4">4 Sender</span>
+      <span class="step" data-goto="5">5 Review</span>
+    </div>
+
+    <div class="builder-page active" data-page="1">
+      <h2>Find your audience</h2>
+      <p>Run a discovery search, or bring your own list. Found leads are saved to your account and can be queued into this campaign from the Audience step.</p>
+      <form action="/campaigns/discovery" method="post" class="inline-form">
+        <div class="fields">
+          <div class="field"><label>Businesses to find</label><input type="text" name="categories" placeholder="Roofing contractors" required></div>
+          <div class="field"><label>Where (City, ST)</label><input type="text" name="locations" placeholder="Austin, TX" required></div>
+          <div class="field"><label>Results per city</label><input type="number" name="result_limit" value="30" min="1" max="100"></div>
+        </div>
+        <button class="btn light" type="submit">Start discovery</button>
+      </form>
+      <form action="/imports/preview" method="post" enctype="multipart/form-data" class="inline-form" style="margin-top:18px;border-top:1px solid var(--line);padding-top:18px">
+        <div class="field"><label>Or bring your own list (CSV)</label><input type="file" name="file" accept=".csv" required></div>
+        <button class="btn subtle" type="submit">Preview import</button>
+      </form>
+      {% if scrape_jobs %}
+      <h3 style="margin-top:22px">Recent discovery</h3>
+      {% for j in scrape_jobs %}<div class="row"><div><b>{{ j.category }} - {{ j.city }}, {{ j.state }}</b><small>{{ j.status|capitalize }} · {{ j.saved_count }} saved of {{ j.found_count }} found</small></div><span class="pill {{ 'amber' if j.status in ('queued','running') else '' }}">{{ j.status }}</span></div>{% endfor %}
+      {% endif %}
+      <div class="note">Discovery runs in the background. Nothing sends automatically after discovery.</div>
+      <div class="builder-nav"><span></span><button class="btn" type="button" data-next="2">Continue to audience</button></div>
+    </div>
+
+    <form action="/campaigns/save" method="post" id="builder-form">
+    <div class="builder-page" data-page="2">
+      <h2>Choose the audience</h2>
+      <p>Filter which of your leads this campaign reaches. Leave everything blank to reach every eligible lead.</p>
+      <div class="fields">
+        <div class="field"><label>Category</label><input type="text" name="category" placeholder="roofing"></div>
+        <div class="field"><label>State</label><input type="text" name="state" placeholder="TX" maxlength="2"></div>
+        <div class="field"><label>City</label><input type="text" name="city" placeholder="Austin"></div>
+        <div class="field"><label>Only leads with status</label><select name="status"><option value="">Any eligible</option><option value="new">New</option></select></div>
+      </div>
+      <p class="fine">{{ lead_count }} leads in your account. Discovery results and imports land here once saved.</p>
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="1">Back</button><button class="btn" type="button" data-next="3">Continue to message</button></div>
+    </div>
+
+    <div class="builder-page" data-page="3">
+      <h2>Pick the message</h2>
+      <p>Choose one or more of your templates. New leads rotate through the selected templates.</p>
+      {% if templates %}
+      <div class="stack">
+        {% for t in templates %}
+        <label class="pick"><input type="checkbox" name="template_ids" value="{{ t.id }}"><span><b>{{ t.name }}</b><small>{{ t.subject }}</small></span></label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">No templates yet. Create one below or in Settings.</div>
+      {% endif %}
+      <details class="tpl-edit" style="margin-top:14px">
+        <summary>New template</summary>
+        <form action="/templates/save" method="post" class="inline-form">
+          <input type="hidden" name="vertical" value="outreach">
+          <input type="hidden" name="active" value="on">
+          <div class="fields">
+            <div class="field"><label>Name</label><input type="text" name="name" required></div>
+            <div class="field"><label>Type</label><select name="type"><option value="plain">Plain</option><option value="html">HTML</option></select></div>
+            <div class="field full"><label>Subject</label><input type="text" name="subject" required></div>
+            <div class="field full"><label>Body</label><textarea name="body" required></textarea></div>
+          </div>
+          <button class="btn light" type="submit">Save template</button>
+          <p class="fine">Saving takes you back to Campaigns; your new template appears in this picker.</p>
+        </form>
+      </details>
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="2">Back</button><button class="btn" type="button" data-next="4">Continue to sender</button></div>
+    </div>
+
+    <div class="builder-page" data-page="4">
+      <h2>Choose the sender</h2>
+      <p>Emails go out from this identity on your schedule and caps from Settings.</p>
+      {% if senders %}
+      <div class="stack">
+        {% for snd in senders %}
+        <label class="pick"><input type="checkbox" name="gmail_accounts" value="{{ snd.id }}" data-provider="{{ snd.provider or 'gmail' }}"><span><b>{{ snd.display_name or snd.email }}</b><small>{{ snd.email }} · {{ (snd.provider or 'gmail')|capitalize }}</small></span></label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">No sender connected yet. Add one in Settings under Sending identity.</div>
+      {% endif %}
+      <input type="hidden" name="provider" value="{{ default_provider }}">
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="3">Back</button><button class="btn" type="button" data-next="5">Review</button></div>
+    </div>
+
+    <div class="builder-page" data-page="5">
+      <h2>Review and create</h2>
+      <div class="field full"><label>Campaign name</label><input type="text" name="name" id="campaign-name" placeholder="Roofing companies in Austin" required></div>
+      <div class="note" id="review-summary">Choose templates and a sender, then create the campaign. Nothing sends until you press Start on the campaign page.</div>
+      <div class="builder-nav"><button class="btn subtle" type="button" data-next="4">Back</button><button class="btn" type="submit">Create campaign</button></div>
+    </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Your campaigns</h2>
+    {% if campaigns %}
+      {% for c in campaigns %}
+      <a class="row" href="/campaigns/{{ c.id }}">
+        <div><b>{{ c.name }}</b><small>{{ c.state|capitalize }} · {{ c.delivered }} sent · {{ c.replies }} {{ "reply" if c.replies == 1 else "replies" }}</small></div>
+        <span class="pill {{ 'amber' if c.state in ('draft','paused','stopped') else '' }}">{{ "Open" if c.state == 'running' else ("Continue" if c.state == 'draft' else "Review") }}</span>
+      </a>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No campaigns yet. Build your first one on the left.</div>
+    {% endif %}
+    <p class="fine">Step 3 picks from your template library (also in Settings as used templates); step 4 picks from your connected senders. Queued recipients and emails are visible on the campaign page before you start.</p>
+  </div>
+</div>
+<script>
+(() => {
+  const pages = document.querySelectorAll('.builder-page');
+  const steps = document.querySelectorAll('#steps .step');
+  const go = (n) => {
+    pages.forEach(p => p.classList.toggle('active', p.dataset.page == n));
+    steps.forEach(s => {
+      s.classList.toggle('selected', s.dataset.goto == n);
+      s.classList.toggle('done', Number(s.dataset.goto) < Number(n));
+    });
+    if (n == 5) fillReview();
+  };
+  document.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => go(b.dataset.next)));
+  steps.forEach(s => s.addEventListener('click', () => go(s.dataset.goto)));
+  const fillReview = () => {
+    const tpls = document.querySelectorAll('input[name="template_ids"]:checked').length;
+    const snds = document.querySelectorAll('input[name="gmail_accounts"]:checked').length;
+    const bits = [];
+    bits.push(tpls ? tpls + ' template' + (tpls > 1 ? 's' : '') : 'no template yet');
+    bits.push(snds ? snds + ' sender' + (snds > 1 ? 's' : '') : 'no sender yet');
+    document.getElementById('review-summary').textContent =
+      'This campaign uses ' + bits.join(' and ') + '. Nothing sends until you press Start on the campaign page.';
+  };
+  document.getElementById('builder-form').addEventListener('submit', (e) => {
+    if (!document.querySelector('input[name="template_ids"]:checked')) { e.preventDefault(); go(3); }
+    else if (!document.querySelector('input[name="gmail_accounts"]:checked')) { e.preventDefault(); go(4); }
+  });
+})();
+</script>
+{% endblock %}

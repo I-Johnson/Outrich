@@ -155,9 +155,9 @@ USER_PATHS = {"/logout", "/templates/save"}
 
 # Outreach routes a signed-in customer may use: the customer IA (Overview,
 # Campaigns incl. builder actions, one Settings) plus the Freight workspace.
-CUSTOMER_OUTREACH_EXACT = {"/", "/campaigns", "/settings", "/templates/save", "/templates/ai-generate"}
-CUSTOMER_OUTREACH_PREFIXES = ("/campaigns/", "/api/locations/search", "/templates/")
-CUSTOMER_ADMIN_ONLY_PREFIXES = ("/settings/gmail-senders", "/settings/test-email", "/email-log/")
+CUSTOMER_OUTREACH_EXACT = {"/", "/campaigns", "/settings", "/templates/save", "/templates/ai-generate", "/imports/preview"}
+CUSTOMER_OUTREACH_PREFIXES = ("/campaigns/", "/settings/", "/api/locations/search", "/templates/", "/imports/")
+CUSTOMER_ADMIN_ONLY_PREFIXES = ("/email-log/",)
 
 
 def customer_allowed(path: str) -> bool:
@@ -181,7 +181,8 @@ def is_admin(request: Request) -> bool:
 
 
 def home_for(request: Request) -> str:
-    return "/" if is_admin(request) else "/freight"
+    # Outreach is the default workspace; Freight is a toggle away.
+    return "/"
 
 
 @app.middleware("http")
@@ -350,7 +351,7 @@ def signup(request: Request, name: str = Form(""), email: str = Form(...), passw
         _record_failure(key, attempts); return RedirectResponse("/login?error=That+email+already+has+an+account.+Log+in+instead.", 303)
     user = store.insert("app_users", {"id": new_id(), "email": email, "password_hash": hash_password(password), "name": name, "role": "user", "created_at": now_iso(), "last_login_at": now_iso()})
     seed_owner_defaults(str(user["id"]))
-    _start_user_session(request, user); return RedirectResponse("/freight?notice=Welcome+to+Outrich.+Start+by+connecting+your+Gmail.", 303)
+    _start_user_session(request, user); return RedirectResponse("/?notice=Welcome+to+Outrich.+Create+your+first+campaign+when+you+are+ready.", 303)
 
 
 @app.post("/logout")
@@ -362,6 +363,21 @@ def dashboard(request: Request):
     if not (request.session.get("uid") or request.session.get("admin")):
         return templates.TemplateResponse(request=request, name="landing.html", context={"request": request})
     s = outreach_store(request)
+    if not is_admin(request):
+        logs = s.list("email_log", order="", limit=20000)
+        campaigns = s.list("campaigns", order="created_at desc", limit=50)
+        rows = []
+        for c in campaigns:
+            clogs = [x for x in logs if str(x.get("campaign_id")) == str(c["id"])]
+            rows.append({"id": c["id"], "name": c["name"], "state": c["state"],
+                         "delivered": sum(1 for x in clogs if x.get("sent_at")),
+                         "replies": sum(1 for x in clogs if x.get("status") == "replied")})
+        metrics = {"running": sum(1 for c in campaigns if c["state"] == "running"),
+                   "campaigns": len(campaigns),
+                   "delivered": sum(1 for x in logs if x.get("sent_at")),
+                   "replies": sum(1 for x in logs if x.get("status") == "replied")}
+        return templates.TemplateResponse(request=request, name="customer/overview.html",
+                                          context={"request": request, "env": env, "metrics": metrics, "campaigns": rows})
     campaigns = s.list("campaigns", limit=100)
     logs = s.list("email_log", order="", limit=20000)
     recent = s.list("email_log", limit=10)
@@ -1481,7 +1497,7 @@ async def leads_bulk(request: Request):
         if not campaign or campaign.get("state") not in {"draft", "running", "paused"}:
             return RedirectResponse("/leads?notice=Choose+an+active+or+draft+campaign", 303)
         try:
-            result = queue_campaign(campaign_id, {str(value) for value in ids})
+            result = queue_campaign(campaign_id, {str(value) for value in ids}, storage=s)
         except ValueError as exc:
             return RedirectResponse(f"/leads?notice={quote(str(exc))}", 303)
         return RedirectResponse(f"/campaigns/{campaign_id}?notice=Queued+{result['queued']}+selected+leads%2C+skipped+{result['skipped']}", 303)
@@ -1684,11 +1700,51 @@ def template_preview(request: Request, template_id: str):
 @app.get("/campaigns", response_class=HTMLResponse)
 def campaigns(request: Request, edit: str = "", batch_id: str = ""):
     s = outreach_store(request)
+    cfg0 = s.get("settings", 1) or {}
+    if not is_admin(request):
+        campaigns = s.list("campaigns", order="created_at desc", limit=100)
+        logs = s.list("email_log", order="", limit=20000)
+        rows = []
+        for c in campaigns:
+            clogs = [x for x in logs if str(x.get("campaign_id")) == str(c["id"])]
+            rows.append({"id": c["id"], "name": c["name"], "state": c["state"],
+                         "delivered": sum(1 for x in clogs if x.get("sent_at")),
+                         "replies": sum(1 for x in clogs if x.get("status") == "replied")})
+        return templates.TemplateResponse(request=request, name="customer/campaigns.html",
+                                          context={"request": request, "env": env, "campaigns": rows,
+                                                   "templates": s.list("email_templates", {"active": True, "vertical": "outreach"}, order="name asc", limit=200),
+                                                   "senders": list_gmail_senders(active_only=True, storage=s, cfg=cfg0),
+                                                   "default_provider": cfg0.get("email_provider") or "gmail",
+                                                   "lead_count": len(s.list("clients", order="", limit=20000, select="id")),
+                                                   "scrape_jobs": s.list("scrape_jobs", order="created_at desc", limit=5)})
     batch = s.get("import_batches", batch_id) if batch_id else None
     batches = s.list("import_batches", {"status": "done"}, order="uploaded_at desc", limit=10)
     cfg = s.get("settings", 1) or {}
     gmail_accounts = list_gmail_senders(active_only=True, storage=s, cfg=cfg)
     return page(request, "campaigns.html", campaigns=s.list("campaigns"), templates=s.list("email_templates", {"active": True, "vertical": "outreach"}), campaign=s.get("campaigns", edit) if edit else None, selected_batch=batch, batches=batches, batch_id=batch_id, gmail_accounts=gmail_accounts)
+
+
+@app.post("/campaigns/discovery")
+async def campaign_discovery(request: Request):
+    s = outreach_store(request)
+    form = await request.form()
+    categories = [c.strip() for c in str(form.get("categories") or "").split(",") if c.strip()]
+    locations = [l.strip() for l in str(form.get("locations") or "").replace("\n", ";").split(";") if l.strip()]
+    try: result_limit = min(max(int(form.get("result_limit") or 30), 1), 100)
+    except ValueError: result_limit = 30
+    created = 0
+    for category in categories:
+        for loc in locations:
+            city, _, state = loc.partition(",")
+            city, state = city.strip(), state.strip().upper()[:2]
+            if not (city and state): continue
+            stamp = now_iso(); jid = new_id()
+            s.insert("scrape_jobs", {"id": jid, "category": category, "state": state, "city": city, "result_limit": result_limit, "status": "queued", "found_count": 0, "saved_count": 0, "discarded_count": 0, "serp_calls_used": 0, "created_at": stamp, "updated_at": stamp})
+            s.insert("jobs", {"id": new_id(), "kind": "scrape", "payload": {"scrape_job_id": jid}, "status": "queued", "attempts": 0, "run_after": stamp, "created_at": stamp, "updated_at": stamp})
+            created += 1
+    if not created:
+        return RedirectResponse("/campaigns?notice=Tell+discovery+what+to+find+and+where+(City,+ST)", 303)
+    return RedirectResponse(f"/campaigns?notice=Discovery+started+-+{created}+search{'es' if created > 1 else ''}+queued.+Leads+appear+in+the+Audience+step+as+they+are+saved.", 303)
 
 
 @app.post("/campaigns/save")
@@ -1726,13 +1782,24 @@ def campaign_detail(request: Request, campaign_id: str):
     cfg = s.get("settings", 1) or {}
     gmail_account_emails = {str(row["id"]): row.get("email") for row in list_gmail_senders(storage=s, cfg=cfg)}
     performance = campaign_performance(logs, {str(key): value for key, value in templates_map.items()})
+    if not is_admin(request):
+        bucket_map = {"queued": ("queued", "Queued"), "sending": ("queued", "Queued"),
+                      "sent": ("delivered", "Delivered"), "replied": ("replied", "Reply recorded"),
+                      "bounced": ("failed", "Bounced"), "failed": ("failed", "Failed"), "skipped": ("failed", "Skipped")}
+        for l in logs:
+            l["bucket"], l["label"] = bucket_map.get(str(l.get("status")), ("queued", "Queued"))
+        counts = {"queued": sum(1 for l in logs if l["bucket"] == "queued"),
+                  "delivered": sum(1 for l in logs if l["bucket"] == "delivered"),
+                  "replied": sum(1 for l in logs if l["bucket"] == "replied")}
+        return templates.TemplateResponse(request=request, name="customer/campaign.html",
+                                          context={"request": request, "env": env, "campaign": campaign, "logs": logs, "counts": counts})
     return page(request, "campaign.html", campaign=campaign, logs=logs, gmail_account_emails=gmail_account_emails, performance=performance)
 
 
 @app.post("/campaigns/{campaign_id}/start")
 def campaign_start(request: Request, campaign_id: str):
     s = outreach_store(request)
-    result = queue_campaign(campaign_id); return RedirectResponse(f"/campaigns/{campaign_id}?notice=Queued+{result['queued']}%2C+skipped+{result['skipped']}", 303)
+    result = queue_campaign(campaign_id, storage=s); return RedirectResponse(f"/campaigns/{campaign_id}?notice=Queued+{result['queued']}%2C+skipped+{result['skipped']}", 303)
 
 
 @app.post("/campaigns/{campaign_id}/state")
@@ -1740,7 +1807,7 @@ def campaign_state(request: Request, campaign_id: str, state: str = Form(...)):
     s = outreach_store(request)
     if state not in {"running", "paused", "stopped"}: raise HTTPException(422)
     if state == "stopped":
-        cancel_campaign_queue(campaign_id)
+        cancel_campaign_queue(campaign_id, storage=s)
     s.update("campaigns", campaign_id, {"state": state, "stopped_at": now_iso() if state == "stopped" else None, "updated_at": now_iso()}); return RedirectResponse(f"/campaigns/{campaign_id}", 303)
 
 
@@ -1748,7 +1815,7 @@ def campaign_state(request: Request, campaign_id: str, state: str = Form(...)):
 def campaign_delete(request: Request, campaign_id: str):
     s = outreach_store(request)
     try:
-        delete_campaign(campaign_id)
+        delete_campaign(campaign_id, storage=s)
     except ValueError as exc:
         return RedirectResponse(f"/campaigns/{campaign_id}?notice={quote(str(exc))}", 303)
     return RedirectResponse("/campaigns?notice=Campaign+deleted", 303)
@@ -1804,6 +1871,18 @@ def preset_save(request: Request, name: str = Form(...), categories: str = Form(
 def settings_page(request: Request):
     s = outreach_store(request)
     cfg = s.get("settings", 1) or {}
+    if not is_admin(request):
+        templates_out = s.list("email_templates", {"vertical": "outreach"}, order="name asc", limit=200)
+        used = {}
+        for c in s.list("campaigns", order="", limit=500):
+            for tid in (c.get("template_ids") or []):
+                used[str(tid)] = used.get(str(tid), 0) + 1
+        for t in templates_out:
+            t["used"] = used.get(str(t["id"]), 0)
+        return templates.TemplateResponse(request=request, name="customer/settings.html",
+                                          context={"request": request, "env": env, "cfg": cfg,
+                                                   "senders": list_gmail_senders(storage=s, cfg=cfg),
+                                                   "templates": templates_out})
     return page(request, "settings.html", gmail_senders=list_gmail_senders(storage=s, cfg=cfg))
 
 
@@ -1838,12 +1917,13 @@ async def gmail_sender_add(request: Request):
         return RedirectResponse("/settings?notice=Valid+email+is+required", 303)
     if provider == "gmail" and not password:
         return RedirectResponse("/settings?notice=App+password+is+required+for+Gmail+senders", 303)
-    if any(str(row.get("email") or "").lower() == email for row in list_gmail_senders(storage=store)):
+    s = outreach_store(request)
+    if any(str(row.get("email") or "").lower() == email for row in list_gmail_senders(storage=s)):
         return RedirectResponse("/settings?notice=That+sender+already+exists", 303)
-        
+
     stamp = now_iso()
     reply_to = normalize_email(str(form.get("reply_to") or "")) or ("outreach@contractorops.ai" if provider == "pingram" else email)
-    OwnerStore(store, ADMIN_OWNER_ID).insert("gmail_senders", {
+    s.insert("gmail_senders", {
         "id": new_id(),
         "email": email,
         "display_name": str(form.get("display_name") or "").strip() or "Outreach",
@@ -1860,12 +1940,12 @@ async def gmail_sender_add(request: Request):
 
 @app.post("/settings/gmail-senders/{sender_id}")
 async def gmail_sender_update(request: Request, sender_id: str):
-    admin_db = OwnerStore(store, ADMIN_OWNER_ID)
+    admin_db = outreach_store(request)
     sender = admin_db.get("gmail_senders", sender_id)
     if not sender: raise HTTPException(404)
     form = await request.form(); email = normalize_email(str(form.get("email") or ""))
     if not valid_email(email): return RedirectResponse("/settings?notice=Enter+a+valid+Gmail+address", 303)
-    duplicate = [row for row in list_gmail_senders(storage=store) if str(row.get("id")) != sender_id and str(row.get("email") or "").lower() == email]
+    duplicate = [row for row in list_gmail_senders(storage=admin_db) if str(row.get("id")) != sender_id and str(row.get("email") or "").lower() == email]
     if duplicate: return RedirectResponse("/settings?notice=That+Gmail+sender+already+exists", 303)
     values = {"email": email, "display_name": str(form.get("display_name") or "").strip() or "Outreach", "signature": str(form.get("signature") or "").strip(), "reply_to": normalize_email(str(form.get("reply_to") or "")) or email, "active": form.get("active") == "on", "updated_at": now_iso()}
     password = clean_app_password(str(form.get("app_password") or ""))
@@ -1875,8 +1955,9 @@ async def gmail_sender_update(request: Request, sender_id: str):
 
 
 @app.post("/settings/test-email")
-def test_email(to: str = Form(...), gmail_sender_id: str = Form(...)):
-    cfg = store.get("settings", 1) or {}; sender = get_gmail_sender(gmail_sender_id, storage=store, cfg=cfg)
+def test_email(request: Request, to: str = Form(...), gmail_sender_id: str = Form(...)):
+    s = outreach_store(request)
+    cfg = s.get("settings", 1) or {}; sender = get_gmail_sender(gmail_sender_id, storage=s, cfg=cfg)
     if not sender: return RedirectResponse("/settings?notice=Sender+not+found", 303)
     identity = sender_context(cfg, sender); provider = get_provider(sender.get("provider") or "gmail", cfg, gmail_sender_id, gmail_sender=sender)
     result = provider.send(to=to, subject="Outreach email test", body=f"Your sender {identity['sender_name']} ({identity['sender_email']}) is connected.\n\n{identity['signature']}", content_type="plain", from_address=identity["sender_email"], from_name=identity["sender_name"], reply_to=identity["reply_to"])
