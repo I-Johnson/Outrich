@@ -38,7 +38,7 @@
       <div id="discovery-live" data-active="{{ '1' if active_job else '0' }}">
         <h3 style="margin-top:22px" id="discovery-head" {{ 'style="display:none"' if not scrape_jobs else '' }}>Recent discovery</h3>
         <div id="discovery-jobs">
-          {% for j in scrape_jobs %}<div class="row"><div><b>{{ j.category }} - {{ j.city }}, {{ j.state }}</b><small>{{ j.status|capitalize }} · {{ j.saved_count }} saved of {{ j.found_count }} found</small></div><span class="pill {{ 'amber' if j.status in ('queued','running') else '' }}">{{ j.status }}</span></div>{% endfor %}
+          {% for j in scrape_jobs %}<div class="row"><div><b>{{ j.category }} - {{ j.city }}, {{ j.state }}</b><small>{{ j.status|capitalize }} · {{ j.saved_count }} saved of {{ j.found_count }} found{% if j.discarded_count %} · {{ j.discarded_count }} discarded{% endif %}</small>{% if j.discard_reasons %}<small>{% for item in j.discard_reasons %}{{ item.count }} {{ item.label }}{{ "; " if not loop.last else "" }}{% endfor %}</small>{% endif %}{% if j.user_error %}<small>{{ j.user_error }}</small>{% endif %}</div><span class="pill {{ 'amber' if j.status in ('queued','running') else '' }}">{{ j.status }}</span></div>{% endfor %}
         </div>
         <div class="note" id="discovery-note">{% if active_job %}Discovery is running. This list updates itself - your builder picks stay put.{% else %}Discovery runs in the background. Nothing sends automatically after discovery.{% endif %}</div>
       </div>
@@ -295,8 +295,18 @@
               const left = document.createElement('div');
               const title = document.createElement('b'); title.textContent = j.category + ' - ' + j.city + ', ' + j.state;
               const status = j.status.charAt(0).toUpperCase() + j.status.slice(1);
-              const detail = document.createElement('small'); detail.textContent = status + ' \u00b7 ' + j.saved_count + ' saved of ' + j.found_count + ' found';
+              const detail = document.createElement('small');
+              detail.textContent = status + ' \u00b7 ' + j.saved_count + ' saved of ' + j.found_count + ' found' + (j.discarded_count ? ' \u00b7 ' + j.discarded_count + ' discarded' : '');
               left.append(title, detail);
+              if (j.discard_reasons && j.discard_reasons.length) {
+                const reasons = document.createElement('small');
+                reasons.textContent = j.discard_reasons.map(item => item.count + ' ' + item.label).join('; ');
+                left.appendChild(reasons);
+              }
+              if (j.user_error) {
+                const error = document.createElement('small'); error.textContent = j.user_error;
+                left.appendChild(error);
+              }
               const pill = document.createElement('span');
               pill.className = 'pill' + ((j.status === 'queued' || j.status === 'running') ? ' amber' : '');
               pill.textContent = j.status;
@@ -306,7 +316,11 @@
           }
           if (!data.active) {
             stopped = true;
-            if (note) note.textContent = 'Discovery finished. Your new leads are ready in the Audience step.';
+            const failed = data.jobs.some(j => j.status === 'failed');
+            const saved = data.jobs.reduce((total, j) => total + j.saved_count, 0);
+            if (note && failed) note.textContent = 'Discovery finished with an error. Review the job details above.';
+            else if (note && !saved) note.textContent = 'Discovery finished, but no qualified leads were saved. Review the discard reasons above.';
+            else if (note) note.textContent = 'Discovery finished. Your new leads are ready in the Audience step.';
             gate.refresh();
             return;
           }

@@ -34,7 +34,10 @@ def valid_email(value: str | None, check_mx: bool = False) -> bool:
     if not EMAIL_RE.fullmatch(email): return False
     if not check_mx: return True
     try:
-        return bool(dns.resolver.resolve(email.rsplit("@", 1)[1], "MX", lifetime=3))
+        answers = dns.resolver.resolve(email.rsplit("@", 1)[1], "MX", lifetime=3)
+        # RFC 7505 null MX (exchange ".") explicitly says the domain accepts
+        # no email.  A DNS answer by itself is therefore not sufficient.
+        return any(str(getattr(answer, "exchange", "")).rstrip(".") for answer in answers)
     except Exception:
         return False
 
@@ -125,4 +128,3 @@ def infer_name_from_email(email: str | None, business_name: str = "", domain: st
     if names_set and cand not in names_set:
         return None
     return cand.capitalize()
-

@@ -615,8 +615,8 @@ class SupportContactStartupTests(unittest.TestCase):
         import subprocess, sys
         env = {**os.environ, "STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_PRICE_ID": "price_x",
                "SUPPORT_EMAIL": "", "ADMIN_EMAIL": "", "SCHEDULER_ENABLED": "false",
-               "DATABASE_BACKEND": "sqlite", "DB_PATH": "/tmp/outrich-support-test.db"}
-        env.pop("SUPPORT_EMAIL", None); env.pop("ADMIN_EMAIL", None)
+               "DATABASE_BACKEND": "sqlite", "DB_PATH": "/tmp/outrich-support-test.db",
+               "PYTHON_DOTENV_DISABLED": "1"}
         result = subprocess.run([sys.executable, "-c", "import app.config"],
                                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 env=env, capture_output=True, text=True)

@@ -53,6 +53,13 @@ class TexasAdapter(PublicRecordsAdapter):
     def search(self, category: str, city: str, limit: int) -> list[RecordCandidate]:
         clean_cat = category.strip().lower()
         naics = CATEGORY_TO_NAICS.get(clean_cat)
+        # This data set only represents the explicitly mapped construction
+        # trades.  Treating an unknown category as "all construction" creates
+        # plausible-looking but unrelated leads (for example, an insurance
+        # adjuster search returning plumbers).  Serper remains the source for
+        # arbitrary business categories.
+        if not naics:
+            return []
         city_clean = city.strip().upper()
 
         where_clauses = [
@@ -62,10 +69,7 @@ class TexasAdapter(PublicRecordsAdapter):
         if city_clean:
             where_clauses.append(f"upper(outlet_city)='{city_clean}'")
 
-        if naics:
-            where_clauses.append(f"outlet_naics_code='{naics}'")
-        else:
-            where_clauses.append("outlet_naics_code >= 230000 AND outlet_naics_code <= 239999")
+        where_clauses.append(f"outlet_naics_code='{naics}'")
 
         params = {
             "$select": "taxpayer_number,taxpayer_name,outlet_name,outlet_address,outlet_city,outlet_state,outlet_zip_code,outlet_permit_issue_date,outlet_naics_code",
@@ -112,4 +116,3 @@ ADAPTERS = {"TX": TexasAdapter(), "CA": CaliforniaAdapter()}
 def label_for_state(state: str) -> str:
     adapter = ADAPTERS.get(state)
     return "records + search" if adapter and adapter.available else "search only"
-

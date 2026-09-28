@@ -99,8 +99,8 @@ change how the app behaves:
 | `DRY_RUN` | When true, nothing sends and no credits are consumed |
 | `GMAIL_TRANSPORT` | `auto`: direct SMTP locally, `send-gmail` Edge Function on Railway |
 | `GEMINI_API_KEY` / `FREIGHT_AGENT_MODE` | Freight reply interpretation; `rules` is the offline legacy mode |
-| `SERP_PROVIDER` / `SERP_API_KEY` | Lead discovery search |
-| `SCHEDULER_ENABLED` / `SCHEDULER_INTERVAL_MIN` | The background worker loop |
+| `SERP_PROVIDER` / `SERP_API_KEY` | SerpApi lead discovery search (`SERP_PROVIDER=serpapi`) |
+| `SCHEDULER_ENABLED` / `SCHEDULER_INTERVAL_MIN` | The in-process scheduler loop |
 
 ---
 
@@ -143,8 +143,14 @@ One plan: $25/month, both workspaces included (`app/core/billing.py`).
 ### Outreach: campaign flow
 
 1. **Find** (builder step 1) queues bounded SERP scrape jobs per
-   category/city; results land in the account's leads as they save. The page
-   polls for status with backoff and stops on completion or repeated errors.
+   category/city; results land in the account's leads as they save. The
+   in-process scheduler requires a SerpApi `SERP_API_KEY` on the same Railway
+   service; no separate worker service is required. It fails clearly when
+   search is not configured. Texas public records supplement only explicitly mapped
+   construction trades; an unknown category never falls back to unrelated
+   construction businesses. Candidate emails must be tied to the business
+   and pass syntax plus MX checks. The page polls for status with backoff,
+   shows discard reasons, and stops on completion or repeated errors.
 2. **Audience** (step 2) filters the account's leads. A live count
    distinguishes *matching records* from *eligible to send* - eligible mirrors
    the queue's real exclusions (replied / do-not-contact / bounced, suppressed

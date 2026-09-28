@@ -212,6 +212,17 @@ class FreightSettingsAndSendTests(unittest.TestCase):
 
 class FreightConversationTests(unittest.TestCase):
     def setUp(self):
+        # Freight fixtures intentionally have no legacy env-backed Gmail
+        # account. Keep the test hermetic even when a developer's .env has
+        # production sender credentials configured.
+        from app.core import gmail_senders
+        for key in ("GMAIL_USER", "GMAIL_APP_PASSWORD", "GMAIL_USER_2", "GMAIL_APP_PASSWORD_2"):
+            env_patch = patch.object(gmail_senders.env, key, "")
+            env_patch.start()
+            self.addCleanup(env_patch.stop)
+        mode_patch = patch.object(freight_module.settings, "FREIGHT_AGENT_MODE", "rules")
+        mode_patch.start()
+        self.addCleanup(mode_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.raw = SQLiteStore(os.path.join(self.temp.name, "freight.db"))

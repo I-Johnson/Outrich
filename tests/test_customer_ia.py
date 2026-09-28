@@ -84,6 +84,52 @@ class CustomerIATests(unittest.TestCase):
         self.assertEqual(status.status_code, 200)
         self.assertIn("active", status.json())
 
+    def test_discovery_status_explains_scoped_discard_reasons(self):
+        job = self.owner.insert("scrape_jobs", {
+            "id": new_id(), "category": "insurance adjuster", "city": "Austin", "state": "TX",
+            "result_limit": 30, "status": "done", "found_count": 2, "saved_count": 0,
+            "discarded_count": 2, "serp_calls_used": 3, "created_at": STAMP, "updated_at": STAMP,
+        })
+        for name, reason in (("One Adjusting", "no_email_found"), ("Two Adjusting", "email_domain_has_no_mx")):
+            self.owner.insert("scrape_discards", {
+                "id": new_id(), "scrape_job_id": job["id"], "business_name": name,
+                "reason": reason, "created_at": STAMP,
+            })
+        other = OwnerStore(self.raw, ADMIN_OWNER_ID)
+        other_job = other.insert("scrape_jobs", {
+            "id": new_id(), "category": "private", "city": "Dallas", "state": "TX",
+            "result_limit": 1, "status": "done", "found_count": 1, "saved_count": 0,
+            "discarded_count": 1, "serp_calls_used": 1, "created_at": STAMP, "updated_at": STAMP,
+        })
+        other.insert("scrape_discards", {
+            "id": new_id(), "scrape_job_id": other_job["id"], "business_name": "Private",
+            "reason": "duplicate_email", "created_at": STAMP,
+        })
+
+        body = self.client.get("/campaigns/discovery-status").json()
+        self.assertEqual(len(body["jobs"]), 1)
+        self.assertEqual(body["jobs"][0]["discarded_count"], 2)
+        self.assertEqual(
+            {item["reason"] for item in body["jobs"][0]["discard_reasons"]},
+            {"no_email_found", "email_domain_has_no_mx"},
+        )
+        page = self.client.get("/campaigns").text
+        self.assertIn("1 no email found", page)
+        self.assertIn("1 email domain has no mail server", page)
+        self.assertNotIn("duplicate email", page)
+
+    def test_discovery_status_names_serpapi_auth_failure_without_worker_instruction(self):
+        self.owner.insert("scrape_jobs", {
+            "id": new_id(), "category": "roofing contractors", "city": "Austin", "state": "TX",
+            "result_limit": 30, "status": "failed", "found_count": 0, "saved_count": 0,
+            "discarded_count": 0, "serp_calls_used": 0,
+            "error": "SerpApi rejected SERP_API_KEY; verify the key and account access.",
+            "created_at": STAMP, "updated_at": STAMP,
+        })
+        job = self.client.get("/campaigns/discovery-status").json()["jobs"][0]
+        self.assertEqual(job["user_error"], "SerpApi rejected the API key. Verify the key and account access.")
+        self.assertNotIn("worker", job["user_error"].lower())
+
 
     def test_empty_send_days_blocks_queueing(self):
         from app.core.sender import _schedule_config

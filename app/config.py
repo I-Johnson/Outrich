@@ -28,7 +28,7 @@ class Settings:
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "change-me")
     SESSION_SECRET = os.getenv("SESSION_SECRET", os.getenv("SECRET_KEY", "change-me-session-secret"))
     ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
-    SERP_PROVIDER = os.getenv("SERP_PROVIDER", "serper")
+    SERP_PROVIDER = os.getenv("SERP_PROVIDER", "serpapi").strip().lower()
     SERP_API_KEY = os.getenv("SERP_API_KEY", "")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")

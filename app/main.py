@@ -1868,6 +1868,46 @@ def template_preview(request: Request, template_id: str):
     return page(request, "template_preview.html", template=item, subject=subject, body=body, missing=sorted(set(sm + bm)), vertical=vertical, workspace=vertical)
 
 
+DISCOVERY_REASON_LABELS = {
+    "no_email_found": "no email found",
+    "invalid_email_syntax": "invalid email format",
+    "email_domain_has_no_mx": "email domain has no mail server",
+    "email_not_linked_to_business": "email not linked to the business",
+    "no_email_or_invalid_mx": "no email or invalid mail domain",  # Historical jobs.
+    "no_phone": "no valid phone",
+    "duplicate_email": "duplicate email",
+    "duplicate_domain": "duplicate website domain",
+}
+
+
+def _discovery_job_rows(s, limit: int = 5) -> list[dict]:
+    jobs = s.list("scrape_jobs", order="created_at desc", limit=limit)
+    output = []
+    for job in jobs:
+        reasons = Counter(
+            str(row.get("reason") or "unknown")
+            for row in s.list("scrape_discards", {"scrape_job_id": job["id"]}, order="", limit=1000)
+        )
+        row = dict(job)
+        row["discard_reasons"] = [
+            {"reason": reason, "label": DISCOVERY_REASON_LABELS.get(reason, reason.replace("_", " ")), "count": count}
+            for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        error = str(job.get("error") or "")
+        if "not configured" in error.lower() and "SERP_API_KEY" in error:
+            row["user_error"] = "Discovery is not configured. Add SERP_API_KEY to the Railway service."
+        elif "rejected SERP_API_KEY" in error:
+            row["user_error"] = "SerpApi rejected the API key. Verify the key and account access."
+        elif "quota" in error.lower() or "rate limit" in error.lower():
+            row["user_error"] = "SerpApi quota or rate limit was reached."
+        elif job.get("status") == "failed":
+            row["user_error"] = "Discovery could not finish. Check the SerpApi configuration and try again."
+        else:
+            row["user_error"] = ""
+        output.append(row)
+    return output
+
+
 @app.get("/campaigns", response_class=HTMLResponse)
 def campaigns(request: Request, edit: str = "", batch_id: str = ""):
     s = outreach_store(request)
@@ -1881,7 +1921,7 @@ def campaigns(request: Request, edit: str = "", batch_id: str = ""):
             rows.append({"id": c["id"], "name": c["name"], "state": c["state"],
                          "delivered": sum(1 for x in clogs if x.get("sent_at")),
                          "replies": sum(1 for x in clogs if x.get("status") == "replied")})
-        scrape_jobs = s.list("scrape_jobs", order="created_at desc", limit=5)
+        scrape_jobs = _discovery_job_rows(s)
         import_batch = None
         if batch_id:
             batch = s.get("import_batches", batch_id)
@@ -1908,9 +1948,11 @@ def campaigns(request: Request, edit: str = "", batch_id: str = ""):
 @app.get("/campaigns/discovery-status")
 def campaign_discovery_status(request: Request):
     s = outreach_store(request)
-    jobs = s.list("scrape_jobs", order="created_at desc", limit=5)
+    jobs = _discovery_job_rows(s)
     return {"jobs": [{"id": j["id"], "category": j.get("category"), "city": j.get("city"), "state": j.get("state"),
-                      "status": j.get("status"), "saved_count": j.get("saved_count") or 0, "found_count": j.get("found_count") or 0}
+                      "status": j.get("status"), "saved_count": j.get("saved_count") or 0,
+                      "found_count": j.get("found_count") or 0, "discarded_count": j.get("discarded_count") or 0,
+                      "discard_reasons": j.get("discard_reasons") or [], "user_error": j.get("user_error") or ""}
                      for j in jobs],
             "active": any(j.get("status") in ("queued", "running") for j in jobs)}
 

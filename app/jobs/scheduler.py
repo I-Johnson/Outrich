@@ -62,6 +62,9 @@ def heartbeat() -> dict:
         "enabled": settings.SCHEDULER_ENABLED,
         "interval_seconds": max(settings.SCHEDULER_INTERVAL_SECONDS, 10),
         "scheduler_running": bool(_scheduler and getattr(_scheduler, "running", False)),
+        "last_tick_started_at": None,
+        "last_tick_finished_at": None,
+        "last_error": None,
         **_heartbeat,
     }
 

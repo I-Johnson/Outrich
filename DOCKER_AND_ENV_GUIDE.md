@@ -100,8 +100,8 @@ DRY_RUN=false
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-flash-latest
 MAPBOX_ACCESS_TOKEN=pk.your-mapbox-token
-SERP_PROVIDER=serper
-SERP_API_KEY=your-serper-api-key
+SERP_PROVIDER=serpapi
+SERP_API_KEY=your-serpapi-api-key
 ```
 
 ### 5. Email Providers

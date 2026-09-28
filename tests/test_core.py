@@ -20,7 +20,8 @@ from app.core.campaign_reporting import campaign_performance
 from app.core.leads import duplicate_reason, short_name, valid_email
 from app.core.lead_status import set_client_status
 from app.core.schedule import calendar_events, in_send_window, next_send_day_start, next_send_time
-from app.core.scraper import crawl_contact, fallback_contact_search, process_scrape_job
+from app.core.scraper import crawl_contact, fallback_contact_search, find_company_website, process_scrape_job, serp_candidates
+from app.adapters.public_records import TexasAdapter
 from app.core.template_engine import render_template
 from app.adapters.gmail_adapter import GmailProvider
 from app.core.sender import _choose_account_slot, _choose_pingram_conveyor_slot, _global_schedule_state, _next_global_slot, cancel_campaign_queue, delete_campaign, queue_campaign, recover_interrupted_sends, refresh_campaign_states, reschedule_queued_emails, send_due
@@ -113,6 +114,7 @@ class TemplateTests(unittest.TestCase):
 
 class GmailProviderTests(unittest.TestCase):
     @patch("app.adapters.gmail_adapter.settings.DRY_RUN", False)
+    @patch("app.adapters.gmail_adapter.settings.GMAIL_TRANSPORT", "smtp")
     @patch("app.adapters.gmail_adapter.smtplib.SMTP_SSL")
     def test_temporary_recipient_refusal_is_retryable_not_a_bounce(self, smtp_ssl):
         smtp = smtp_ssl.return_value.__enter__.return_value
@@ -128,6 +130,7 @@ class GmailProviderTests(unittest.TestCase):
         self.assertFalse(result.hard_bounce)
 
     @patch("app.adapters.gmail_adapter.settings.DRY_RUN", False)
+    @patch("app.adapters.gmail_adapter.settings.GMAIL_TRANSPORT", "smtp")
     @patch("app.adapters.gmail_adapter.smtplib.SMTP_SSL")
     def test_missing_recipient_is_a_hard_bounce(self, smtp_ssl):
         smtp = smtp_ssl.return_value.__enter__.return_value
@@ -143,6 +146,7 @@ class GmailProviderTests(unittest.TestCase):
         self.assertTrue(result.hard_bounce)
 
     @patch("app.adapters.gmail_adapter.settings.DRY_RUN", False)
+    @patch("app.adapters.gmail_adapter.settings.GMAIL_TRANSPORT", "smtp")
     @patch("app.adapters.gmail_adapter.smtplib.SMTP_SSL")
     def test_network_unreachable_is_clear_and_not_retryable(self, smtp_ssl):
         smtp_ssl.side_effect = OSError(errno.ENETUNREACH, "Network is unreachable")
@@ -897,6 +901,13 @@ class ImportTests(unittest.TestCase):
         row = clean_row({"Company Name": "ACME, LLC", "Email Address": " SALES@EXAMPLE.COM ", "Telephone": "(512) 555-1212", "Web": "example.com"}, mapping)
         self.assertEqual(row["short_name"], "Acme"); self.assertEqual(row["email"], "sales@example.com"); self.assertEqual(row["domain"], "example.com")
         self.assertTrue(valid_email(row["email"]))
+
+    def test_mx_validation_rejects_domains_that_explicitly_accept_no_mail(self):
+        with patch("app.core.leads.dns.resolver.resolve", return_value=[Mock(exchange=".")]):
+            self.assertFalse(valid_email("owner@example.com", check_mx=True))
+        with patch("app.core.leads.dns.resolver.resolve", return_value=[Mock(exchange="mx.example.com.")]):
+            self.assertTrue(valid_email("owner@example.com", check_mx=True))
+
     def test_dedupe_email_and_domain(self):
         existing = [{"email": "a@example.com", "domain": "example.com"}]
         self.assertEqual(duplicate_reason({"email": "A@EXAMPLE.COM", "domain": "other.com"}, existing), "duplicate_email")
@@ -912,7 +923,7 @@ class DiscoveryTests(unittest.TestCase):
                 "link": "https://acmeroofing.com/contact",
             }
         ]
-        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=organic):
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serpapi_organic_search", return_value=organic), patch("app.core.scraper.valid_email", return_value=True):
             email, phone, website, calls = fallback_contact_search("Acme Roofing", "Austin", "TX")
         self.assertEqual(email, "owner@acmeroofing.com")
         self.assertEqual(phone, "+15125551212")
@@ -932,7 +943,7 @@ class DiscoveryTests(unittest.TestCase):
         context = Mock()
         context.__enter__ = Mock(return_value=client)
         context.__exit__ = Mock(return_value=False)
-        with patch("app.core.scraper.httpx.Client", return_value=context), patch("app.core.scraper.time.sleep"):
+        with patch("app.core.scraper.httpx.Client", return_value=context), patch("app.core.scraper.time.sleep"), patch("app.core.scraper.valid_email", return_value=True):
             email, phone = crawl_contact("https://example.com")
         self.assertEqual(email, "owner@example.com")
         self.assertEqual(phone, "+15125551212")
@@ -956,7 +967,7 @@ class DiscoveryTests(unittest.TestCase):
             def insert(self, table, row): rows.setdefault(table, {})[row["id"]] = dict(row); return row
             def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
 
-        candidate = {"business_name": "Acme Roofing", "website": "", "phone": "", "city": "Austin", "state": "TX", "source_detail": "serper_maps"}
+        candidate = {"business_name": "Acme Roofing", "website": "", "phone": "", "city": "Austin", "state": "TX", "source_detail": "serpapi_google_maps"}
         with patch("app.core.scraper.store", MemoryStore()), patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper.serp_candidates", return_value=([candidate], 1)), patch("app.core.scraper.find_company_website", return_value=("", 1)), patch("app.core.scraper.crawl_contact", return_value=("", "")), patch("app.core.scraper.fallback_contact_search", return_value=("owner@acme.com", "+15125551212", "https://acme.com", 1)) as fallback_mock, patch("app.core.scraper.valid_email", side_effect=lambda value, check_mx=False: bool(value)):
             result = process_scrape_job("job")
 
@@ -1030,24 +1041,24 @@ class DiscoveryFixTests(unittest.TestCase):
             {"title": "Best roofers in Austin, TX", "snippet": "Call directory@roofinglist.com for listings", "link": "https://roofinglist.com/tx/austin"},
             {"title": "Acme Roofing - Home", "snippet": "Reach us at owner@acmeroofing.com", "link": "https://acmeroofing.com"},
         ]
-        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=organic):
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serpapi_organic_search", return_value=organic), patch("app.core.scraper.valid_email", return_value=True):
             email, phone, website, calls = fallback_contact_search("Acme Roofing", "Austin", "TX")
         self.assertEqual(email, "owner@acmeroofing.com")
         self.assertEqual(calls, 1)
 
     def test_fallback_rejects_stranger_freemail_and_accepts_named_freemail(self):
         stranger = [{"title": "Acme Roofing", "snippet": "email john.smith@gmail.com for a quote", "link": "https://example.com"}]
-        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=stranger):
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serpapi_organic_search", return_value=stranger), patch("app.core.scraper.valid_email", return_value=True):
             email, _, _, _ = fallback_contact_search("Acme Roofing", "Austin", "TX")
         self.assertEqual(email, "")
         named = [{"title": "Acme Roofing", "snippet": "email acmeroofing@gmail.com for a quote", "link": "https://example.com"}]
-        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=named):
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serpapi_organic_search", return_value=named), patch("app.core.scraper.valid_email", return_value=True):
             email, _, _, _ = fallback_contact_search("Acme Roofing", "Austin", "TX")
         self.assertEqual(email, "acmeroofing@gmail.com")
 
     def test_fallback_accepts_email_on_known_domain(self):
         organic = [{"title": "Contact", "snippet": "office@smithandsons.com", "link": "https://smithandsons.com"}]
-        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serper_search", return_value=organic):
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serpapi_organic_search", return_value=organic), patch("app.core.scraper.valid_email", return_value=True):
             email, _, _, _ = fallback_contact_search("Smith & Sons Plumbing", "Austin", "TX", known_domain="smithandsons.com")
         self.assertEqual(email, "office@smithandsons.com")
 
@@ -1065,19 +1076,39 @@ class DiscoveryFixTests(unittest.TestCase):
             def insert(self, table, row): rows.setdefault(table, {})[row["id"]] = dict(row); return row
             def update(self, table, row_id, values): rows[table][row_id].update(values); return rows[table][row_id]
 
-        candidate = {"business_name": "Acme Roofing", "website": "", "phone": "+15125551212", "city": "Austin", "state": "TX", "source_detail": "serper_maps"}
+        candidate = {"business_name": "Acme Roofing", "website": "", "phone": "+15125551212", "city": "Austin", "state": "TX", "source_detail": "serpapi_google_maps"}
         organic = [{"title": "Roofers directory", "snippet": "contact admin@roofinglist.com", "link": "https://roofinglist.com"}]
         with patch("app.core.scraper.store", MemoryStore()), \
              patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
              patch("app.core.scraper.serp_candidates", return_value=([candidate], 1)), \
              patch("app.core.scraper.find_company_website", return_value=("", 1)), \
              patch("app.core.scraper.crawl_contact", return_value=("", "")), \
-             patch("app.core.scraper._serper_search", return_value=organic), \
+             patch("app.core.scraper._serpapi_organic_search", return_value=organic), \
              patch("app.core.scraper.valid_email", side_effect=lambda value, check_mx=False: bool(value)):
             result = process_scrape_job("job")
         self.assertEqual(result, {"found": 1, "saved": 0, "discarded": 1})
         discard = next(iter(rows["scrape_discards"].values()))
-        self.assertEqual(discard["reason"], "no_email_or_invalid_mx")
+        self.assertEqual(discard["reason"], "no_email_found")
+
+    def test_discovery_requires_serpapi_configuration(self):
+        with patch("app.core.scraper.settings.SERP_API_KEY", ""):
+            with self.assertRaisesRegex(ValueError, "SERP_API_KEY"):
+                serp_candidates("insurance adjuster", "Austin", "TX", 30)
+
+    def test_unknown_texas_category_does_not_fall_back_to_construction(self):
+        with patch("app.adapters.public_records.httpx.Client") as client:
+            self.assertEqual(TexasAdapter().search("insurance adjuster", "Austin", 30), [])
+        client.assert_not_called()
+
+    def test_company_website_lookup_rejects_unrelated_result(self):
+        organic = [
+            {"title": "Austin business directory", "link": "https://austinbusinesses.example/acme"},
+            {"title": "Acme Adjusting", "link": "https://acmeadjusting.com"},
+        ]
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), patch("app.core.scraper._serpapi_organic_search", return_value=organic):
+            website, calls = find_company_website("Acme Adjusting", "Austin", "TX")
+        self.assertEqual(website, "https://acmeadjusting.com")
+        self.assertEqual(calls, 1)
 
     # Fix 2: crawler redirect policy + fail-closed robots handling.
     def test_crawler_fails_closed_when_robots_unreachable(self):
@@ -1101,7 +1132,7 @@ class DiscoveryFixTests(unittest.TestCase):
         redirect = Mock(status_code=302, headers={"location": "https://169.254.169.254/latest/meta-data"})
         client = Mock()
         client.get.side_effect = [robots, redirect, redirect, redirect]
-        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)), patch("app.core.scraper.time.sleep"):
+        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)), patch("app.core.scraper.time.sleep"), patch("app.core.scraper.valid_email", return_value=True):
             email, phone = crawl_contact("https://example.com")
         self.assertEqual((email, phone), ("", ""))
         for call in client.get.call_args_list:
@@ -1114,37 +1145,51 @@ class DiscoveryFixTests(unittest.TestCase):
         page.raise_for_status.return_value = None
         client = Mock()
         client.get.side_effect = [robots, redirect, page, page, page]
-        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)), patch("app.core.scraper.time.sleep"):
+        with patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)), patch("app.core.scraper.time.sleep"), patch("app.core.scraper.valid_email", return_value=True):
             email, phone = crawl_contact("https://example.com")
         self.assertEqual(email, "owner@example.com")
         self.assertIn("https://example.com/contact-us", str(client.get.call_args_list))
 
     # Fix 3: SERP failures are loud, not "zero results".
-    def test_serper_search_raises_on_transport_error(self):
+    def test_serpapi_search_raises_sanitized_transport_error(self):
         import app.core.scraper as scraper
-        client = Mock()
-        client.post.side_effect = httpx.ConnectError("boom")
         with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
-             patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
-            with self.assertRaises(httpx.ConnectError):
-                scraper._serper_search("anything")
+             patch("app.core.scraper.urlopen", side_effect=scraper.URLError("boom")):
+            with self.assertRaisesRegex(RuntimeError, "could not be reached") as raised:
+                scraper._serpapi_request({"engine": "google", "q": "anything"})
+        self.assertNotIn("test-key", str(raised.exception))
 
-    def test_serper_search_raises_on_5xx_and_429(self):
+    def test_serpapi_search_raises_sanitized_http_errors(self):
         import app.core.scraper as scraper
-        server_error = Mock(status_code=503)
-        server_error.raise_for_status.side_effect = httpx.HTTPStatusError("503", request=Mock(), response=Mock())
-        client = Mock()
-        client.post.return_value = server_error
         with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
-             patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
-            with self.assertRaises(httpx.HTTPStatusError):
-                scraper._serper_search("anything")
-        quota = Mock(status_code=429)
-        client.post.return_value = quota
+             patch("app.core.scraper.urlopen", side_effect=scraper.HTTPError("https://serpapi.com/search.json", 403, "Forbidden", None, None)):
+            with self.assertRaisesRegex(RuntimeError, "rejected SERP_API_KEY"):
+                scraper._serpapi_request({"engine": "google", "q": "anything"})
         with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
-             patch("app.core.scraper.httpx.Client", return_value=self._client_context(client)):
+             patch("app.core.scraper.urlopen", side_effect=scraper.HTTPError("https://serpapi.com/search.json", 429, "Rate limited", None, None)):
             with self.assertRaisesRegex(RuntimeError, "quota"):
-                scraper._serper_search("anything")
+                scraper._serpapi_request({"engine": "google", "q": "anything"})
+
+    def test_serpapi_maps_results_and_pagination_are_normalized(self):
+        first = {
+            "local_results": [{"title": "Acme Roofing", "website": "https://acme.example", "phone": "(512) 555-0100"}],
+            "serpapi_pagination": {"next": "https://serpapi.com/search.json?start=20"},
+        }
+        second = {
+            "local_results": [{"title": "Bravo Roofing", "website": "https://bravo.example", "phone": "(512) 555-0200"}],
+        }
+        with patch("app.core.scraper.settings.SERP_API_KEY", "test-key"), \
+             patch("app.core.scraper.settings.SERP_PROVIDER", "serpapi"), \
+             patch("app.core.scraper.ADAPTERS", {}), \
+             patch("app.core.scraper._serpapi_request", side_effect=[first, second]) as request:
+            candidates, calls = serp_candidates("roofing contractors", "Austin", "TX", 2)
+        self.assertEqual(calls, 2)
+        self.assertEqual([row["business_name"] for row in candidates], ["Acme Roofing", "Bravo Roofing"])
+        self.assertEqual(candidates[0]["phone"], "(512) 555-0100")
+        self.assertEqual(candidates[0]["source_detail"], "serpapi_google_maps")
+        self.assertEqual(request.call_args_list[0].args[0]["engine"], "google_maps")
+        self.assertEqual(request.call_args_list[0].args[0]["location"], "Austin, TX, United States")
+        self.assertEqual(request.call_args_list[1].args[0]["start"], 20)
 
 
 class WorkerDrainTests(unittest.TestCase):
